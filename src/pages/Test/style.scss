@@ -1,0 +1,205 @@
+// 移动端全局优化
+@media (max-width: 768px) {
+  * {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+  
+  // 允许画布区域选择
+  #board {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+  
+  // 防止页面缩放
+  body {
+    touch-action: manipulation;
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+  }
+}
+
+.test-page {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  background-color: #f5f5f5;
+  
+  // 移动端适配
+  @media (max-width: 768px) {
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+  
+  #board {
+    flex: 1;
+    height: 100vh;
+    position: relative;
+    background-color: white;
+    border: 1px solid #dee2e6;
+    overflow: hidden; // 防止内容溢出
+    
+    // 移动端适配
+    @media (max-width: 768px) {
+      height: calc(100vh - 60px); // 为底部工具栏留出空间
+      border: none;
+      border-top: 1px solid #dee2e6;
+    }
+    
+    .board-controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 10;
+      display: flex;
+      gap: 8px;
+      
+      // 移动端适配
+      @media (max-width: 768px) {
+        top: 5px;
+        right: 5px;
+        gap: 4px;
+      }
+      
+      .mobile-tool-toggle {
+        padding: 8px 12px;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        background-color: white;
+        cursor: pointer;
+        font-size: 16px;
+        transition: all 0.2s;
+        min-width: 44px;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        
+        &:hover {
+          background-color: #f8f9fa;
+        }
+        
+        &:active {
+          background-color: #e9ecef;
+        }
+      }
+      
+      .grid-toggle {
+        padding: 8px 12px;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        background-color: white;
+        cursor: pointer;
+        font-size: 14px;
+        transition: all 0.2s;
+        
+        // 移动端适配
+        @media (max-width: 768px) {
+          padding: 6px 10px;
+          font-size: 12px;
+          border-radius: 6px;
+          min-width: 44px;
+          min-height: 44px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        
+        &:hover {
+          background-color: #f8f9fa;
+        }
+        
+        &.active {
+          background-color: #007bff;
+          color: white;
+          border-color: #007bff;
+        }
+      }
+    }
+    
+    .mobile-tool-panel {
+      position: absolute;
+      top: 60px;
+      left: 0;
+      right: 0;
+      background-color: #f8f9fa;
+      border-bottom: 1px solid #dee2e6;
+      z-index: 9;
+      max-height: 200px;
+      overflow-y: auto;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      
+      .tool-panel {
+        width: 100%;
+        height: auto;
+        padding: 12px;
+        border: none;
+        overflow: visible;
+        
+        .tool-section {
+          margin-bottom: 16px;
+          
+          &:last-child {
+            margin-bottom: 0;
+          }
+          
+          h4 {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 12px;
+          }
+          
+          .tool-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+          }
+          
+          .color-picker {
+            display: block;
+            
+            .color-grid {
+              display: grid;
+              grid-template-columns: repeat(7, 1fr);
+              gap: 4px;
+              margin-bottom: 8px;
+            }
+          }
+          
+          .line-width-picker {
+            display: flex;
+            flex-direction: row;
+            gap: 6px;
+            flex-wrap: wrap;
+          }
+          
+          .action-buttons {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 6px;
+          }
+          
+          .history-info,
+          .shortcuts {
+            display: none;
+          }
+        }
+      }
+    }
+    
+    // 移除全局canvas样式，让CanvasEngine管理canvas样式
+    // canvas {
+    //   display: block;
+    //   background-color: white;
+    //   width: 100%;
+    //   height: 100%;
+    // }
+  }
+} 

@@ -1,0 +1,351 @@
+// 移动端触摸优化
+@media (max-width: 768px) {
+  .tool-panel {
+    // 添加触摸反馈动画
+    .tool-button,
+    .color-button,
+    .line-width-button,
+    button {
+      &:active {
+        transform: scale(0.95);
+        transition: transform 0.1s ease;
+      }
+    }
+    
+    // 优化滚动体验
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; // Firefox
+    -ms-overflow-style: none; // IE/Edge
+    
+    &::-webkit-scrollbar {
+      display: none; // Chrome/Safari
+    }
+  }
+}
+
+.tool-panel {
+  width: 250px;
+  background-color: #f8f9fa;
+  border-right: 1px solid #dee2e6;
+  padding: 20px;
+  overflow-y: auto;
+  height: 100vh;
+
+  // 移动端适配
+  @media (max-width: 768px) {
+    width: 100%;
+    height: 60px;
+    padding: 8px 12px;
+    border-right: none;
+    border-bottom: 1px solid #dee2e6;
+    overflow-y: visible;
+    overflow-x: auto;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .tool-section {
+    margin-bottom: 24px;
+
+    // 移动端适配
+    @media (max-width: 768px) {
+      margin-bottom: 0;
+      flex-shrink: 0;
+      
+      // 在移动端隐藏标题
+      h4 {
+        display: none;
+      }
+    }
+
+    h4 {
+      margin: 0 0 12px 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #495057;
+      border-bottom: 1px solid #dee2e6;
+      padding-bottom: 8px;
+    }
+
+    .tool-buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+
+      // 移动端适配
+      @media (max-width: 768px) {
+        display: flex;
+        gap: 4px;
+        grid-template-columns: none;
+      }
+
+      .tool-button {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 12px 8px;
+        border: 1px solid #dee2e6;
+        border-radius: 6px;
+        background-color: white;
+        cursor: pointer;
+        transition: all 0.2s;
+
+        // 移动端适配
+        @media (max-width: 768px) {
+          padding: 8px;
+          min-width: 44px; // 触摸友好的最小尺寸
+          min-height: 44px;
+          flex-direction: column;
+          justify-content: center;
+        }
+
+        &:hover {
+          background-color: #e9ecef;
+          border-color: #adb5bd;
+        }
+
+        &.active {
+          background-color: #007bff;
+          color: white;
+          border-color: #007bff;
+        }
+
+        .tool-icon {
+          font-size: 20px;
+          margin-bottom: 4px;
+
+          // 移动端适配
+          @media (max-width: 768px) {
+            font-size: 16px;
+            margin-bottom: 2px;
+          }
+        }
+
+        .tool-name {
+          font-size: 12px;
+          font-weight: 500;
+
+          // 移动端适配
+          @media (max-width: 768px) {
+            font-size: 10px;
+          }
+        }
+      }
+    }
+
+    .color-picker {
+      // 移动端适配
+      @media (max-width: 768px) {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .color-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 4px;
+        margin-bottom: 12px;
+
+        // 移动端适配
+        @media (max-width: 768px) {
+          display: flex;
+          gap: 4px;
+          margin-bottom: 0;
+        }
+
+        .color-button {
+          width: 32px;
+          height: 32px;
+          border: 2px solid #dee2e6;
+          border-radius: 4px;
+          cursor: pointer;
+          transition: all 0.2s;
+
+          // 移动端适配
+          @media (max-width: 768px) {
+            width: 28px;
+            height: 28px;
+            min-width: 28px;
+            min-height: 28px;
+          }
+
+          &:hover {
+            transform: scale(1.1);
+          }
+
+          &.active {
+            border-color: #007bff;
+            transform: scale(1.1);
+          }
+        }
+      }
+
+      .custom-color-button {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        background-color: white;
+        cursor: pointer;
+        margin-bottom: 8px;
+
+        // 移动端适配
+        @media (max-width: 768px) {
+          width: auto;
+          padding: 6px 8px;
+          margin-bottom: 0;
+          font-size: 12px;
+        }
+
+        &:hover {
+          background-color: #e9ecef;
+        }
+      }
+
+      .color-input {
+        width: 100%;
+        height: 40px;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        cursor: pointer;
+
+        // 移动端适配
+        @media (max-width: 768px) {
+          width: 32px;
+          height: 32px;
+          padding: 0;
+        }
+      }
+    }
+
+    .line-width-picker {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+
+      // 移动端适配
+      @media (max-width: 768px) {
+        flex-direction: row;
+        gap: 4px;
+      }
+
+      .line-width-button {
+        display: flex;
+        align-items: center;
+        padding: 8px 12px;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        background-color: white;
+        cursor: pointer;
+        transition: all 0.2s;
+
+        // 移动端适配
+        @media (max-width: 768px) {
+          padding: 6px 8px;
+          min-width: 44px;
+          min-height: 44px;
+          justify-content: center;
+        }
+
+        &:hover {
+          background-color: #e9ecef;
+        }
+
+        &.active {
+          background-color: #007bff;
+          color: white;
+          border-color: #007bff;
+        }
+
+        .line-width-preview {
+          width: 40px;
+          background-color: currentColor;
+          border-radius: 2px;
+          margin-right: 8px;
+
+          // 移动端适配
+          @media (max-width: 768px) {
+            width: 24px;
+            margin-right: 0;
+          }
+        }
+      }
+    }
+
+    .action-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+
+      // 移动端适配
+      @media (max-width: 768px) {
+        flex-direction: row;
+        gap: 4px;
+      }
+
+      button {
+        padding: 8px 12px;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        background-color: white;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 14px;
+
+        // 移动端适配
+        @media (max-width: 768px) {
+          padding: 6px 8px;
+          font-size: 12px;
+          min-width: 44px;
+          min-height: 44px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        &:hover:not(:disabled) {
+          background-color: #e9ecef;
+        }
+
+        &:active:not(:disabled) {
+          background-color: #dee2e6;
+        }
+
+        &:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+      }
+    }
+
+    .history-info {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #6c757d;
+      text-align: center;
+
+      // 移动端适配
+      @media (max-width: 768px) {
+        display: none; // 在移动端隐藏历史信息以节省空间
+      }
+    }
+
+    .shortcuts {
+      font-size: 12px;
+      color: #6c757d;
+      line-height: 1.6;
+
+      // 移动端适配
+      @media (max-width: 768px) {
+        display: none; // 在移动端隐藏快捷键信息以节省空间
+      }
+
+      div {
+        padding: 2px 0;
+      }
+    }
+  }
+} 
