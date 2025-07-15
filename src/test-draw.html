@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>绘制功能测试</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        #container {
+            width: 800px;
+            height: 600px;
+            border: 2px solid #333;
+            margin: 20px 0;
+            position: relative;
+        }
+        .controls {
+            margin: 10px 0;
+        }
+        button {
+            margin: 5px;
+            padding: 8px 16px;
+        }
+        .debug {
+            margin-top: 20px;
+            padding: 10px;
+            background: #f0f0f0;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>DrawBoard 绘制功能测试</h1>
+    
+    <div class="controls">
+        <button onclick="testDraw()">测试基础绘制</button>
+        <button onclick="clearCanvas()">清空画布</button>
+        <button onclick="showDebugInfo()">显示调试信息</button>
+    </div>
+    
+    <div id="container"></div>
+    
+    <div class="debug" id="debug-output">
+        控制台输出将显示在这里...
+    </div>
+
+    <script type="module">
+        import { DrawBoard } from './libs/drawBoard/index.js';
+        
+        let drawBoard;
+        const debugOutput = document.getElementById('debug-output');
+        
+        // 劫持console.log来显示调试信息
+        const originalLog = console.log;
+        const originalError = console.error;
+        
+        function addDebugOutput(level, ...args) {
+            const message = args.map(arg => 
+                typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+            ).join(' ');
+            
+            debugOutput.innerHTML += `[${level}] ${message}\n`;
+            debugOutput.scrollTop = debugOutput.scrollHeight;
+        }
+        
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+            addDebugOutput('LOG', ...args);
+        };
+        
+        console.error = function(...args) {
+            originalError.apply(console, args);
+            addDebugOutput('ERROR', ...args);
+        };
+        
+        // 初始化DrawBoard
+        try {
+            console.log('开始初始化DrawBoard...');
+            const container = document.getElementById('container');
+            drawBoard = new DrawBoard(container);
+            console.log('DrawBoard初始化成功!');
+            
+            // 设置为画笔工具
+            drawBoard.setTool('pen');
+            drawBoard.setColor('#ff0000');
+            drawBoard.setLineWidth(3);
+            console.log('工具设置完成');
+            
+        } catch (error) {
+            console.error('DrawBoard初始化失败:', error);
+        }
+        
+        window.testDraw = function() {
+            console.log('开始测试绘制...');
+            if (!drawBoard) {
+                console.error('DrawBoard未初始化');
+                return;
+            }
+            
+            // 模拟绘制事件
+            const canvas = drawBoard.canvasEngine?.getLayer('interaction')?.canvas;
+            if (canvas) {
+                console.log('找到交互层canvas，模拟点击事件');
+                
+                // 模拟鼠标按下
+                const mouseDownEvent = new MouseEvent('mousedown', {
+                    clientX: 100,
+                    clientY: 100,
+                    bubbles: true
+                });
+                canvas.dispatchEvent(mouseDownEvent);
+                
+                // 模拟鼠标移动
+                setTimeout(() => {
+                    const mouseMoveEvent = new MouseEvent('mousemove', {
+                        clientX: 200,
+                        clientY: 150,
+                        bubbles: true
+                    });
+                    canvas.dispatchEvent(mouseMoveEvent);
+                }, 100);
+                
+                // 模拟鼠标抬起
+                setTimeout(() => {
+                    const mouseUpEvent = new MouseEvent('mouseup', {
+                        clientX: 200,
+                        clientY: 150,
+                        bubbles: true
+                    });
+                    canvas.dispatchEvent(mouseUpEvent);
+                }, 200);
+                
+            } else {
+                console.error('未找到交互层canvas');
+            }
+        };
+        
+        window.clearCanvas = function() {
+            if (drawBoard) {
+                drawBoard.clear();
+                console.log('画布已清空');
+            }
+        };
+        
+        window.showDebugInfo = function() {
+            if (drawBoard) {
+                console.log('当前工具:', drawBoard.getCurrentTool());
+                console.log('画板状态:', drawBoard.getState());
+                console.log('历史记录数量:', drawBoard.getHistory().length);
+            }
+        };
+    </script>
+</body>
+</html> 
