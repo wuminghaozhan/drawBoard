@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>连续运笔效果测试</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #f0f0f0;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .canvas-container {
+            position: relative;
+            margin: 20px 0;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        canvas {
+            display: block;
+            cursor: crosshair;
+        }
+        
+        .controls {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        label {
+            font-weight: bold;
+            color: #555;
+        }
+        
+        input[type="range"] {
+            width: 120px;
+        }
+        
+        button {
+            padding: 8px 16px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        button:hover {
+            background: #0056b3;
+        }
+        
+        .info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border-left: 4px solid #2196f3;
+        }
+        
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            font-family: monospace;
+            border-left: 3px solid #28a745;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🖌️ 连续运笔效果测试</h1>
+        
+        <div class="info">
+            <strong>测试说明：</strong>
+            <br>• 此测试验证修复后的运笔效果，应该显示连续的线条而不是虚线
+            <br>• 尝试快速和慢速绘制，观察线条的连续性和粗细变化
+            <br>• 贝塞尔平滑应该使线条更加流畅
+        </div>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="brushSize">笔刷大小:</label>
+                <input type="range" id="brushSize" min="1" max="50" value="8">
+                <span id="brushSizeValue">8</span>px
+            </div>
+            
+            <div class="control-group">
+                <label for="pressureSensitivity">压力敏感度:</label>
+                <input type="range" id="pressureSensitivity" min="0" max="100" value="50">
+                <span id="pressureSensitivityValue">50</span>%
+            </div>
+            
+            <div class="control-group">
+                <label for="velocitySensitivity">速度敏感度:</label>
+                <input type="range" id="velocitySensitivity" min="0" max="100" value="30">
+                <span id="velocitySensitivityValue">30</span>%
+            </div>
+            
+            <div class="control-group">
+                <label>
+                    <input type="checkbox" id="enableBezier" checked>
+                    贝塞尔平滑
+                </label>
+            </div>
+            
+            <button onclick="clearCanvas()">清除画布</button>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="testCanvas" width="800" height="500"></canvas>
+        </div>
+        
+        <div class="status" id="status">
+            准备就绪 - 开始绘制测试连续运笔效果
+        </div>
+    </div>
+
+    <script>
+        class ContinuousStrokeTest {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.isDrawing = false;
+                this.currentStroke = [];
+                this.lastPoint = null;
+                this.lastTimestamp = 0;
+                
+                this.setupEventListeners();
+                this.setupControls();
+                
+                // 设置默认样式
+                this.ctx.lineCap = 'round';
+                this.ctx.lineJoin = 'round';
+                this.ctx.globalCompositeOperation = 'source-over';
+            }
+            
+            setupEventListeners() {
+                // 鼠标事件
+                this.canvas.addEventListener('mousedown', (e) => this.startDrawing(e));
+                this.canvas.addEventListener('mousemove', (e) => this.draw(e));
+                this.canvas.addEventListener('mouseup', () => this.stopDrawing());
+                this.canvas.addEventListener('mouseout', () => this.stopDrawing());
+                
+                // 触摸事件
+                this.canvas.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    this.startDrawing(e.touches[0]);
+                });
+                this.canvas.addEventListener('touchmove', (e) => {
+                    e.preventDefault();
+                    this.draw(e.touches[0]);
+                });
+                this.canvas.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    this.stopDrawing();
+                });
+            }
+            
+            setupControls() {
+                const controls = ['brushSize', 'pressureSensitivity', 'velocitySensitivity'];
+                controls.forEach(id => {
+                    const slider = document.getElementById(id);
+                    const valueSpan = document.getElementById(id + 'Value');
+                    slider.addEventListener('input', () => {
+                        valueSpan.textContent = slider.value;
+                    });
+                });
+            }
+            
+            getEventPoint(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                return {
+                    x: (e.clientX - rect.left) * (this.canvas.width / rect.width),
+                    y: (e.clientY - rect.top) * (this.canvas.height / rect.height),
+                    pressure: e.pressure || 0.5,
+                    timestamp: Date.now()
+                };
+            }
+            
+            startDrawing(e) {
+                this.isDrawing = true;
+                const point = this.getEventPoint(e);
+                this.currentStroke = [point];
+                this.lastPoint = point;
+                this.lastTimestamp = point.timestamp;
+                
+                this.updateStatus(`开始绘制 - 坐标: (${Math.round(point.x)}, ${Math.round(point.y)})`);
+            }
+            
+            draw(e) {
+                if (!this.isDrawing) return;
+                
+                const point = this.getEventPoint(e);
+                this.currentStroke.push(point);
+                
+                // 计算运笔参数
+                this.calculateStrokeParameters();
+                
+                // 绘制连续线条
+                this.drawContinuousStroke();
+                
+                this.lastPoint = point;
+                this.updateStatus(`绘制中 - 点数: ${this.currentStroke.length}, 坐标: (${Math.round(point.x)}, ${Math.round(point.y)})`);
+            }
+            
+            stopDrawing() {
+                if (!this.isDrawing) return;
+                
+                this.isDrawing = false;
+                this.updateStatus(`绘制完成 - 总点数: ${this.currentStroke.length}`);
+            }
+            
+            calculateStrokeParameters() {
+                if (this.currentStroke.length < 2) return;
+                
+                const pressureSensitivity = document.getElementById('pressureSensitivity').value / 100;
+                const velocitySensitivity = document.getElementById('velocitySensitivity').value / 100;
+                const baseSize = parseInt(document.getElementById('brushSize').value);
+                
+                for (let i = 0; i < this.currentStroke.length; i++) {
+                    const point = this.currentStroke[i];
+                    
+                    // 计算距离和速度
+                    if (i > 0) {
+                        const prev = this.currentStroke[i - 1];
+                        const dx = point.x - prev.x;
+                        const dy = point.y - prev.y;
+                        point.distance = Math.sqrt(dx * dx + dy * dy);
+                        
+                        const timeDiff = point.timestamp - prev.timestamp;
+                        point.velocity = timeDiff > 0 ? point.distance / timeDiff : 0;
+                    }
+                    
+                    // 计算动态线宽
+                    const pressureFactor = 0.5 + (point.pressure - 0.5) * pressureSensitivity;
+                    const velocityFactor = point.velocity ? Math.max(0.3, 1 - point.velocity * velocitySensitivity * 0.1) : 1;
+                    
+                    point.dynamicWidth = baseSize * pressureFactor * velocityFactor;
+                }
+            }
+            
+            drawContinuousStroke() {
+                if (this.currentStroke.length < 2) return;
+                
+                const enableBezier = document.getElementById('enableBezier').checked;
+                
+                if (enableBezier && this.currentStroke.length > 3) {
+                    this.drawBezierStroke();
+                } else {
+                    this.drawSimpleStroke();
+                }
+            }
+            
+            drawBezierStroke() {
+                const points = this.getSmoothPoints();
+                if (points.length < 2) return;
+                
+                // 开始连续路径
+                this.ctx.beginPath();
+                this.ctx.moveTo(points[0].x, points[0].y);
+                
+                // 设置起始线宽
+                this.ctx.lineWidth = points[0].dynamicWidth || 5;
+                
+                for (let i = 0; i < points.length - 1; i++) {
+                    const current = points[i];
+                    const next = points[i + 1];
+                    
+                    // 计算线宽变化
+                    const currentWidth = current.dynamicWidth || 5;
+                    const nextWidth = next.dynamicWidth || 5;
+                    const widthDiff = Math.abs(nextWidth - currentWidth);
+                    
+                    if (widthDiff > 2) {
+                        // 如果线宽变化很大，分段绘制
+                        this.ctx.stroke();
+                        this.ctx.lineWidth = nextWidth;
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(next.x, next.y);
+                    } else {
+                        // 绘制贝塞尔曲线或直线
+                        if (current.cp2 && next.cp1) {
+                            this.ctx.bezierCurveTo(
+                                current.cp2.x, current.cp2.y,
+                                next.cp1.x, next.cp1.y,
+                                next.x, next.y
+                            );
+                        } else {
+                            this.ctx.lineTo(next.x, next.y);
+                        }
+                    }
+                }
+                
+                this.ctx.stroke();
+            }
+            
+            drawSimpleStroke() {
+                const points = this.currentStroke;
+                if (points.length < 2) return;
+                
+                this.ctx.beginPath();
+                this.ctx.moveTo(points[0].x, points[0].y);
+                this.ctx.lineWidth = points[0].dynamicWidth || 5;
+                
+                for (let i = 1; i < points.length; i++) {
+                    this.ctx.lineTo(points[i].x, points[i].y);
+                }
+                
+                this.ctx.stroke();
+            }
+            
+            getSmoothPoints() {
+                const points = this.currentStroke;
+                if (points.length < 3) return points;
+                
+                const smoothPoints = [];
+                const smoothingFactor = 0.3;
+                
+                for (let i = 0; i < points.length; i++) {
+                    const point = { ...points[i] };
+                    
+                    if (i > 0 && i < points.length - 1) {
+                        const prev = points[i - 1];
+                        const next = points[i + 1];
+                        
+                        // 计算控制点
+                        const d1 = Math.sqrt(Math.pow(point.x - prev.x, 2) + Math.pow(point.y - prev.y, 2));
+                        const d2 = Math.sqrt(Math.pow(next.x - point.x, 2) + Math.pow(next.y - point.y, 2));
+                        
+                        const fa = smoothingFactor * d1 / (d1 + d2);
+                        const fb = smoothingFactor * d2 / (d1 + d2);
+                        
+                        const p1x = point.x - fa * (next.x - prev.x);
+                        const p1y = point.y - fa * (next.y - prev.y);
+                        const p2x = point.x + fb * (next.x - prev.x);
+                        const p2y = point.y + fb * (next.y - prev.y);
+                        
+                        point.cp1 = { x: p1x, y: p1y };
+                        point.cp2 = { x: p2x, y: p2y };
+                    }
+                    
+                    smoothPoints.push(point);
+                }
+                
+                return smoothPoints;
+            }
+            
+            updateStatus(message) {
+                document.getElementById('status').textContent = message;
+            }
+        }
+        
+        function clearCanvas() {
+            const canvas = document.getElementById('testCanvas');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            document.getElementById('status').textContent = '画布已清除 - 准备开始新的测试';
+        }
+        
+        // 初始化测试
+        window.addEventListener('load', () => {
+            const canvas = document.getElementById('testCanvas');
+            new ContinuousStrokeTest(canvas);
+        });
+    </script>
+</body>
+</html> 

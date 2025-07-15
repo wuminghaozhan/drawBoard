@@ -70,7 +70,9 @@ export const STROKE_PRESETS: Record<StrokePresetType, StrokePreset> = {
       minLineWidth: 0.5,
       maxLineWidth: 8,
       smoothing: 0.1,
-      opacityVariation: false
+      opacityVariation: false,
+      enableBezierSmoothing: false, // 钢笔不需要贝塞尔平滑，保持锐利
+      antiAliasLevel: 1 // 轻度抗锯齿
     },
     tips: [
       '适合书写和精细绘制',
@@ -93,7 +95,9 @@ export const STROKE_PRESETS: Record<StrokePresetType, StrokePreset> = {
       minLineWidth: 2,
       maxLineWidth: 30,
       smoothing: 0.4,
-      opacityVariation: true
+      opacityVariation: true,
+      enableBezierSmoothing: true, // 毛笔启用贝塞尔平滑
+      antiAliasLevel: 3 // 最高抗锯齿级别
     },
     tips: [
       '压力变化非常明显',
@@ -116,7 +120,9 @@ export const STROKE_PRESETS: Record<StrokePresetType, StrokePreset> = {
       minLineWidth: 3,
       maxLineWidth: 15,
       smoothing: 0.0,
-      opacityVariation: true
+      opacityVariation: true,
+      enableBezierSmoothing: false, // 粉笔保持颗粒感，不平滑
+      antiAliasLevel: 0 // 无抗锯齿，保持粗糙质感
     },
     tips: [
       '颗粒感明显',
@@ -139,7 +145,9 @@ export const STROKE_PRESETS: Record<StrokePresetType, StrokePreset> = {
       minLineWidth: 4,
       maxLineWidth: 4,
       smoothing: 0.2,
-      opacityVariation: false
+      opacityVariation: false,
+      enableBezierSmoothing: true, // 马克笔启用平滑
+      antiAliasLevel: 2 // 中等抗锯齿
     },
     tips: [
       '线条粗细均匀',
@@ -162,7 +170,9 @@ export const STROKE_PRESETS: Record<StrokePresetType, StrokePreset> = {
       minLineWidth: 0.5,
       maxLineWidth: 6,
       smoothing: 0.1,
-      opacityVariation: true
+      opacityVariation: true,
+      enableBezierSmoothing: false, // 铅笔保持素描质感
+      antiAliasLevel: 1 // 轻度抗锯齿
     },
     tips: [
       '压力影响线条深浅',
@@ -185,7 +195,9 @@ export const STROKE_PRESETS: Record<StrokePresetType, StrokePreset> = {
       minLineWidth: 1,
       maxLineWidth: 25,
       smoothing: 0.3,
-      opacityVariation: true
+      opacityVariation: true,
+      enableBezierSmoothing: true, // 书法笔启用贝塞尔平滑
+      antiAliasLevel: 2 // 中等抗锯齿
     },
     tips: [
       '笔锋变化明显',
@@ -208,7 +220,9 @@ export const STROKE_PRESETS: Record<StrokePresetType, StrokePreset> = {
       minLineWidth: 2,
       maxLineWidth: 12,
       smoothing: 0.0,
-      opacityVariation: true
+      opacityVariation: true,
+      enableBezierSmoothing: false, // 蜡笔保持粗糙质感
+      antiAliasLevel: 1 // 轻度抗锯齿
     },
     tips: [
       '质感粗糙自然',
@@ -231,7 +245,9 @@ export const STROKE_PRESETS: Record<StrokePresetType, StrokePreset> = {
       minLineWidth: 3,
       maxLineWidth: 20,
       smoothing: 0.5,
-      opacityVariation: true
+      opacityVariation: true,
+      enableBezierSmoothing: true, // 水彩笔启用贝塞尔平滑
+      antiAliasLevel: 3 // 最高抗锯齿级别
     },
     tips: [
       '颜色扩散效果',
@@ -254,7 +270,9 @@ export const STROKE_PRESETS: Record<StrokePresetType, StrokePreset> = {
       minLineWidth: 4,
       maxLineWidth: 35,
       smoothing: 0.2,
-      opacityVariation: false
+      opacityVariation: false,
+      enableBezierSmoothing: false, // 油画笔保持笔触痕迹
+      antiAliasLevel: 1 // 轻度抗锯齿
     },
     tips: [
       '厚重质感',
@@ -266,30 +284,32 @@ export const STROKE_PRESETS: Record<StrokePresetType, StrokePreset> = {
 
   spray: {
     name: '喷漆',
-    description: '喷漆效果，颗粒感强，随机分布',
-    icon: '💨',
+    description: '喷漆效果，边缘模糊，随机散布',
+    icon: '🎨',
     config: {
       enablePressure: true,
       enableVelocity: true,
       enableAngle: false,
-      pressureSensitivity: 0.5,
+      pressureSensitivity: 0.9,
       velocitySensitivity: 1.0,
-      minLineWidth: 2,
-      maxLineWidth: 18,
-      smoothing: 0.0,
-      opacityVariation: true
+      minLineWidth: 8,
+      maxLineWidth: 40,
+      smoothing: 0.6,
+      opacityVariation: true,
+      enableBezierSmoothing: true, // 喷漆启用贝塞尔平滑
+      antiAliasLevel: 3 // 最高抗锯齿级别
     },
     tips: [
-      '颗粒感强烈',
-      '速度影响喷涂范围',
-      '适合涂鸦风格',
-      '随机分布效果'
+      '边缘模糊效果',
+      '适合街头艺术',
+      '压力控制喷射强度',
+      '速度影响覆盖密度'
     ]
   },
 
   custom: {
     name: '自定义',
-    description: '自定义运笔效果',
+    description: '完全自定义的运笔效果配置',
     icon: '⚙️',
     config: {
       enablePressure: true,
@@ -300,13 +320,15 @@ export const STROKE_PRESETS: Record<StrokePresetType, StrokePreset> = {
       minLineWidth: 1,
       maxLineWidth: 20,
       smoothing: 0.3,
-      opacityVariation: true
+      opacityVariation: true,
+      enableBezierSmoothing: true, // 自定义默认启用贝塞尔平滑
+      antiAliasLevel: 2 // 中等抗锯齿
     },
     tips: [
-      '完全自定义参数',
-      '可以保存为新的预设',
+      '可以完全自定义配置',
       '适合特殊需求',
-      '灵活调整各种效果'
+      '支持所有运笔效果',
+      '灵活的参数调整'
     ]
   }
 };

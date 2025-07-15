@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>动态线宽测试</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2em;
+        }
+        
+        .test-info {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+        }
+        
+        .test-info h3 {
+            margin: 0 0 10px 0;
+            font-size: 1.2em;
+        }
+        
+        .canvas-container {
+            position: relative;
+            margin: 25px 0;
+            border: 3px solid #e0e0e0;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #fafafa;
+        }
+        
+        canvas {
+            display: block;
+            cursor: crosshair;
+            background: white;
+        }
+        
+        .controls {
+            margin: 25px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            align-items: center;
+        }
+        
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .control-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        label {
+            font-weight: bold;
+            color: #555;
+            font-size: 14px;
+        }
+        
+        input[type="range"] {
+            flex: 1;
+            height: 6px;
+            border-radius: 3px;
+            background: #ddd;
+            outline: none;
+        }
+        
+        .value-display {
+            min-width: 60px;
+            text-align: center;
+            background: #fff;
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        button {
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            background: #e8f5e8;
+            border-radius: 6px;
+            font-family: monospace;
+            border-left: 4px solid #4caf50;
+            font-size: 13px;
+        }
+        
+        .test-instructions {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        
+        .test-instructions h4 {
+            margin: 0 0 10px 0;
+            color: #856404;
+        }
+        
+        .test-instructions ul {
+            margin: 0;
+            padding-left: 20px;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🖌️ 动态线宽测试</h1>
+        
+        <div class="test-info">
+            <h3>🎯 测试目标</h3>
+            <p>验证修复后的运笔效果：既保持线条连续性，又恢复动态线宽变化功能</p>
+        </div>
+        
+        <div class="test-instructions">
+            <h4>📋 测试说明</h4>
+            <ul>
+                <li><strong>慢速绘制</strong>：应该显示较粗的线条</li>
+                <li><strong>快速绘制</strong>：应该显示较细的线条</li>
+                <li><strong>压力变化</strong>：鼠标按下深度影响线宽（模拟压力）</li>
+                <li><strong>连续性</strong>：线条应该完全连续，无空隙</li>
+                <li><strong>平滑度</strong>：启用贝塞尔平滑时线条应该更流畅</li>
+            </ul>
+        </div>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label>基础线宽</label>
+                <div class="control-row">
+                    <input type="range" id="baseSize" min="2" max="30" value="8">
+                    <div class="value-display" id="baseSizeValue">8</div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <label>最大线宽</label>
+                <div class="control-row">
+                    <input type="range" id="maxWidth" min="5" max="50" value="20">
+                    <div class="value-display" id="maxWidthValue">20</div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <label>压力敏感度</label>
+                <div class="control-row">
+                    <input type="range" id="pressureSensitivity" min="0" max="100" value="80">
+                    <div class="value-display" id="pressureSensitivityValue">80%</div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <label>速度敏感度</label>
+                <div class="control-row">
+                    <input type="range" id="velocitySensitivity" min="0" max="100" value="60">
+                    <div class="value-display" id="velocitySensitivityValue">60%</div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <label>平滑度</label>
+                <div class="control-row">
+                    <input type="range" id="smoothing" min="0" max="100" value="30">
+                    <div class="value-display" id="smoothingValue">30%</div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <label style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="enableBezier" checked>
+                    贝塞尔平滑
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="showDebug">
+                    显示调试信息
+                </label>
+            </div>
+            
+            <button onclick="clearCanvas()">清除画布</button>
+            <button onclick="runAutoTest()">自动测试</button>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="testCanvas" width="900" height="600"></canvas>
+        </div>
+        
+        <div class="status" id="status">
+            准备就绪 - 开始测试动态线宽效果
+        </div>
+    </div>
+
+    <script>
+        class DynamicWidthTest {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.isDrawing = false;
+                this.currentStroke = [];
+                this.lastPoint = null;
+                this.lastTimestamp = 0;
+                this.debugMode = false;
+                
+                this.setupEventListeners();
+                this.setupControls();
+                
+                // 设置默认样式
+                this.ctx.lineCap = 'round';
+                this.ctx.lineJoin = 'round';
+                this.ctx.globalCompositeOperation = 'source-over';
+                
+                this.updateStatus('测试环境已初始化');
+            }
+            
+            setupEventListeners() {
+                // 鼠标事件
+                this.canvas.addEventListener('mousedown', (e) => this.startDrawing(e));
+                this.canvas.addEventListener('mousemove', (e) => this.draw(e));
+                this.canvas.addEventListener('mouseup', () => this.stopDrawing());
+                this.canvas.addEventListener('mouseout', () => this.stopDrawing());
+                
+                // 触摸事件
+                this.canvas.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    this.startDrawing(e.touches[0]);
+                });
+                this.canvas.addEventListener('touchmove', (e) => {
+                    e.preventDefault();
+                    this.draw(e.touches[0]);
+                });
+                this.canvas.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    this.stopDrawing();
+                });
+            }
+            
+            setupControls() {
+                const controls = [
+                    'baseSize', 'maxWidth', 'pressureSensitivity', 
+                    'velocitySensitivity', 'smoothing'
+                ];
+                
+                controls.forEach(id => {
+                    const slider = document.getElementById(id);
+                    const valueSpan = document.getElementById(id + 'Value');
+                    
+                    slider.addEventListener('input', () => {
+                        let value = slider.value;
+                        if (id.includes('Sensitivity') || id === 'smoothing') {
+                            value += '%';
+                        }
+                        valueSpan.textContent = value;
+                    });
+                });
+                
+                document.getElementById('showDebug').addEventListener('change', (e) => {
+                    this.debugMode = e.target.checked;
+                });
+            }
+            
+            getEventPoint(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                const x = (e.clientX - rect.left) * (this.canvas.width / rect.width);
+                const y = (e.clientY - rect.top) * (this.canvas.height / rect.height);
+                
+                // 模拟压力（根据鼠标移动速度）
+                let pressure = 0.5;
+                if (this.lastPoint) {
+                    const dx = x - this.lastPoint.x;
+                    const dy = y - this.lastPoint.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    pressure = Math.max(0.1, Math.min(1.0, 1.0 - distance / 50));
+                }
+                
+                return {
+                    x, y,
+                    pressure: e.pressure || pressure,
+                    timestamp: Date.now()
+                };
+            }
+            
+            startDrawing(e) {
+                this.isDrawing = true;
+                const point = this.getEventPoint(e);
+                this.currentStroke = [point];
+                this.lastPoint = point;
+                this.lastTimestamp = point.timestamp;
+                
+                this.updateStatus(`开始绘制 - 坐标: (${Math.round(point.x)}, ${Math.round(point.y)}), 压力: ${point.pressure.toFixed(2)}`);
+            }
+            
+            draw(e) {
+                if (!this.isDrawing) return;
+                
+                const point = this.getEventPoint(e);
+                this.currentStroke.push(point);
+                
+                // 计算运笔参数
+                this.calculateStrokeParameters();
+                
+                // 绘制动态线宽效果
+                this.drawDynamicStroke();
+                
+                this.lastPoint = point;
+                
+                if (this.debugMode) {
+                    const lastPoint = this.currentStroke[this.currentStroke.length - 1];
+                    this.updateStatus(`绘制中 - 点数: ${this.currentStroke.length}, 线宽: ${lastPoint.dynamicWidth?.toFixed(1)}, 速度: ${lastPoint.velocity?.toFixed(2)}`);
+                }
+            }
+            
+            stopDrawing() {
+                if (!this.isDrawing) return;
+                
+                this.isDrawing = false;
+                const avgWidth = this.currentStroke.reduce((sum, p) => sum + (p.dynamicWidth || 0), 0) / this.currentStroke.length;
+                this.updateStatus(`绘制完成 - 总点数: ${this.currentStroke.length}, 平均线宽: ${avgWidth.toFixed(1)}`);
+            }
+            
+            calculateStrokeParameters() {
+                if (this.currentStroke.length < 2) return;
+                
+                const baseSize = parseInt(document.getElementById('baseSize').value);
+                const maxWidth = parseInt(document.getElementById('maxWidth').value);
+                const pressureSensitivity = document.getElementById('pressureSensitivity').value / 100;
+                const velocitySensitivity = document.getElementById('velocitySensitivity').value / 100;
+                
+                for (let i = 0; i < this.currentStroke.length; i++) {
+                    const point = this.currentStroke[i];
+                    
+                    // 计算距离和速度
+                    if (i > 0) {
+                        const prev = this.currentStroke[i - 1];
+                        const dx = point.x - prev.x;
+                        const dy = point.y - prev.y;
+                        point.distance = Math.sqrt(dx * dx + dy * dy);
+                        
+                        const timeDiff = point.timestamp - prev.timestamp;
+                        point.velocity = timeDiff > 0 ? point.distance / timeDiff : 0;
+                    } else {
+                        point.distance = 0;
+                        point.velocity = 0;
+                    }
+                    
+                    // 计算动态线宽
+                    let width = baseSize;
+                    
+                    // 压力影响（压力大线宽大）
+                    const pressureFactor = 0.5 + (point.pressure - 0.5) * pressureSensitivity;
+                    width *= pressureFactor;
+                    
+                    // 速度影响（速度快线宽小）
+                    const velocityFactor = Math.max(0.3, 1 - point.velocity * velocitySensitivity * 0.02);
+                    width *= velocityFactor;
+                    
+                    point.dynamicWidth = Math.max(1, Math.min(maxWidth, width));
+                }
+            }
+            
+            drawDynamicStroke() {
+                if (this.currentStroke.length < 2) return;
+                
+                const enableBezier = document.getElementById('enableBezier').checked;
+                const smoothing = document.getElementById('smoothing').value / 100;
+                
+                if (enableBezier && this.currentStroke.length > 3) {
+                    this.drawBezierStroke(smoothing);
+                } else {
+                    this.drawSimpleStroke();
+                }
+            }
+            
+            drawBezierStroke(smoothingFactor) {
+                const points = this.getSmoothPoints(smoothingFactor);
+                this.drawVariableWidthPath(points, true);
+            }
+            
+            drawSimpleStroke() {
+                this.drawVariableWidthPath(this.currentStroke, false);
+            }
+            
+            drawVariableWidthPath(points, isSmooth) {
+                if (points.length < 2) return;
+                
+                // 使用分段绘制来实现动态线宽
+                for (let i = 0; i < points.length - 1; i++) {
+                    const current = points[i];
+                    const next = points[i + 1];
+                    
+                    const currentWidth = current.dynamicWidth || 5;
+                    const nextWidth = next.dynamicWidth || 5;
+                    const distance = Math.sqrt(
+                        Math.pow(next.x - current.x, 2) + Math.pow(next.y - current.y, 2)
+                    );
+                    
+                    // 根据线宽变化和距离决定分段数
+                    const widthDiff = Math.abs(nextWidth - currentWidth);
+                    const segments = Math.max(1, Math.min(8, 
+                        Math.ceil(distance / 4) + Math.ceil(widthDiff * 2)
+                    ));
+                    
+                    // 绘制分段
+                    for (let j = 0; j < segments; j++) {
+                        const t1 = j / segments;
+                        const t2 = (j + 1) / segments;
+                        const t = (t1 + t2) / 2;
+                        
+                        // 插值线宽
+                        const segmentWidth = currentWidth + (nextWidth - currentWidth) * t;
+                        
+                        // 插值位置
+                        const startX = current.x + (next.x - current.x) * t1;
+                        const startY = current.y + (next.y - current.y) * t1;
+                        const endX = current.x + (next.x - current.x) * t2;
+                        const endY = current.y + (next.y - current.y) * t2;
+                        
+                        // 绘制段
+                        this.ctx.lineWidth = segmentWidth;
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(startX, startY);
+                        this.ctx.lineTo(endX, endY);
+                        this.ctx.stroke();
+                    }
+                }
+            }
+            
+            getSmoothPoints(smoothingFactor) {
+                const points = this.currentStroke;
+                if (points.length < 3) return points;
+                
+                const smoothPoints = [];
+                
+                for (let i = 0; i < points.length; i++) {
+                    const point = { ...points[i] };
+                    
+                    if (i > 0 && i < points.length - 1) {
+                        const prev = points[i - 1];
+                        const next = points[i + 1];
+                        
+                        // 计算控制点
+                        const d1 = Math.sqrt(Math.pow(point.x - prev.x, 2) + Math.pow(point.y - prev.y, 2));
+                        const d2 = Math.sqrt(Math.pow(next.x - point.x, 2) + Math.pow(next.y - point.y, 2));
+                        
+                        const fa = smoothingFactor * d1 / (d1 + d2);
+                        const fb = smoothingFactor * d2 / (d1 + d2);
+                        
+                        const p1x = point.x - fa * (next.x - prev.x);
+                        const p1y = point.y - fa * (next.y - prev.y);
+                        const p2x = point.x + fb * (next.x - prev.x);
+                        const p2y = point.y + fb * (next.y - prev.y);
+                        
+                        point.cp1 = { x: p1x, y: p1y };
+                        point.cp2 = { x: p2x, y: p2y };
+                    }
+                    
+                    smoothPoints.push(point);
+                }
+                
+                return smoothPoints;
+            }
+            
+            updateStatus(message) {
+                document.getElementById('status').textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            }
+        }
+        
+        function clearCanvas() {
+            const canvas = document.getElementById('testCanvas');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            document.getElementById('status').textContent = '画布已清除 - 准备开始新的测试';
+        }
+        
+        function runAutoTest() {
+            const canvas = document.getElementById('testCanvas');
+            const ctx = canvas.getContext('2d');
+            
+            document.getElementById('status').textContent = '正在运行自动测试...';
+            
+            // 模拟不同速度的绘制
+            const testStrokes = [
+                { name: '慢速粗线', speed: 5, pressure: 0.8, color: '#ff0000' },
+                { name: '快速细线', speed: 20, pressure: 0.3, color: '#00ff00' },
+                { name: '变速线条', speed: 'variable', pressure: 'variable', color: '#0000ff' }
+            ];
+            
+            let currentTest = 0;
+            
+            function runNextTest() {
+                if (currentTest >= testStrokes.length) {
+                    document.getElementById('status').textContent = '自动测试完成 - 检查不同线条的粗细变化';
+                    return;
+                }
+                
+                const test = testStrokes[currentTest];
+                document.getElementById('status').textContent = `正在测试: ${test.name}`;
+                
+                ctx.strokeStyle = test.color;
+                
+                // 模拟绘制轨迹
+                const startX = 50 + currentTest * 280;
+                const startY = 100;
+                const points = [];
+                
+                for (let i = 0; i <= 100; i++) {
+                    const t = i / 100;
+                    const x = startX + t * 200;
+                    const y = startY + Math.sin(t * Math.PI * 4) * 50 + currentTest * 150;
+                    
+                    let pressure, speed;
+                    if (test.pressure === 'variable') {
+                        pressure = 0.3 + 0.4 * Math.sin(t * Math.PI * 2);
+                    } else {
+                        pressure = test.pressure;
+                    }
+                    
+                    if (test.speed === 'variable') {
+                        speed = 5 + 15 * Math.abs(Math.sin(t * Math.PI * 3));
+                    } else {
+                        speed = test.speed;
+                    }
+                    
+                    // 模拟动态线宽计算
+                    const baseSize = 8;
+                    const maxWidth = 20;
+                    const pressureFactor = 0.5 + (pressure - 0.5) * 0.8;
+                    const velocityFactor = Math.max(0.3, 1 - speed * 0.02);
+                    const dynamicWidth = Math.max(1, Math.min(maxWidth, baseSize * pressureFactor * velocityFactor));
+                    
+                    points.push({ x, y, dynamicWidth });
+                }
+                
+                // 绘制测试线条
+                for (let i = 0; i < points.length - 1; i++) {
+                    const current = points[i];
+                    const next = points[i + 1];
+                    
+                    ctx.lineWidth = current.dynamicWidth;
+                    ctx.beginPath();
+                    ctx.moveTo(current.x, current.y);
+                    ctx.lineTo(next.x, next.y);
+                    ctx.stroke();
+                }
+                
+                // 添加标签
+                ctx.fillStyle = test.color;
+                ctx.font = 'bold 14px Arial';
+                ctx.fillText(test.name, startX, startY - 20);
+                
+                currentTest++;
+                setTimeout(runNextTest, 1000);
+            }
+            
+            runNextTest();
+        }
+        
+        // 初始化测试
+        window.addEventListener('load', () => {
+            const canvas = document.getElementById('testCanvas');
+            new DynamicWidthTest(canvas);
+        });
+    </script>
+</body>
+</html> 

@@ -19,6 +19,8 @@ export const DEFAULT_CONFIG: DrawBoardConfig = {
     minLineWidth: 1,
     maxLineWidth: 20,
     smoothing: 0.3,
-    opacityVariation: true
+    opacityVariation: true,
+    enableBezierSmoothing: true, // 默认启用贝塞尔平滑
+    antiAliasLevel: 2 // 中等抗锯齿级别
   }
 }; 
