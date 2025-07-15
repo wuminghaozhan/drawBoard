@@ -49,19 +49,24 @@ export class StateHandler {
   private historyManager: HistoryManager;
   private selectionManager: SelectionManager;
   private performanceManager: PerformanceManager;
-  private drawingHandler: DrawingHandler;
+  private drawingHandler?: DrawingHandler;
 
   constructor(
     toolManager: ToolManager,
     historyManager: HistoryManager,
     selectionManager: SelectionManager,
-    performanceManager: PerformanceManager,
-    drawingHandler: DrawingHandler
+    performanceManager: PerformanceManager
   ) {
     this.toolManager = toolManager;
     this.historyManager = historyManager;
     this.selectionManager = selectionManager;
     this.performanceManager = performanceManager;
+  }
+
+  /**
+   * 设置绘制处理器（延迟注入）
+   */
+  public setDrawingHandler(drawingHandler: DrawingHandler): void {
     this.drawingHandler = drawingHandler;
   }
 
@@ -70,7 +75,12 @@ export class StateHandler {
    */
   public getState(): DrawBoardState {
     const performanceStats = this.performanceManager.getMemoryStats();
-    const drawingState = this.drawingHandler.getDrawingState();
+    const drawingState = this.drawingHandler?.getDrawingState() || {
+      isDrawing: false,
+      isSelecting: false,
+      hasCurrentAction: false,
+      currentToolType: this.toolManager.getCurrentToolType()
+    };
     
     return {
       currentTool: this.toolManager.getCurrentToolType(),
@@ -157,7 +167,12 @@ export class StateHandler {
    * 获取绘制状态
    */
   public getDrawingState() {
-    return this.drawingHandler.getDrawingState();
+    return this.drawingHandler?.getDrawingState() || {
+      isDrawing: false,
+      isSelecting: false,
+      hasCurrentAction: false,
+      currentToolType: this.toolManager.getCurrentToolType()
+    };
   }
 
   /**

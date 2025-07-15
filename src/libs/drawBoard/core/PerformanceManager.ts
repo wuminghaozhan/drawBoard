@@ -75,6 +75,7 @@ export class PerformanceManager {
     cacheMisses: 0,
     totalDrawCalls: 0
   };
+  private memoryMonitoringInterval?: number;
 
   /**
    * 默认性能配置
@@ -307,6 +308,27 @@ export class PerformanceManager {
     }
   }
 
+  /**
+   * 销毁性能管理器，清理资源
+   */
+  public destroy(): void {
+    // 清理定时器
+    if (this.memoryMonitoringInterval) {
+      clearInterval(this.memoryMonitoringInterval);
+      this.memoryMonitoringInterval = undefined;
+    }
+
+    // 清理所有缓存
+    this.clearAllCaches();
+
+    // 重置统计
+    this.stats = {
+      cacheHits: 0,
+      cacheMisses: 0,
+      totalDrawCalls: 0
+    };
+  }
+
   // ============================================
   // 私有方法
   // ============================================
@@ -443,7 +465,12 @@ export class PerformanceManager {
    * 启动内存监控
    */
   private startMemoryMonitoring(): void {
-    setInterval(() => {
+    // 清理可能存在的旧定时器
+    if (this.memoryMonitoringInterval) {
+      clearInterval(this.memoryMonitoringInterval);
+    }
+
+    this.memoryMonitoringInterval = window.setInterval(() => {
       const stats = this.getMemoryStats();
       
       // 自动模式下的智能切换
@@ -451,11 +478,11 @@ export class PerformanceManager {
         if (stats.underMemoryPressure) {
           console.log('检测到内存压力，切换到平衡模式');
           this.setPerformanceMode(PerformanceMode.BALANCED);
-                 } else if (stats.currentCacheMemoryMB < this.config.maxCacheMemoryMB * 0.5) {
-           // 内存充足时切换到高性能模式
-           console.log('内存充足，切换到高性能模式');
-           this.setPerformanceMode(PerformanceMode.HIGH_PERFORMANCE);
-         }
+        } else if (stats.currentCacheMemoryMB < this.config.maxCacheMemoryMB * 0.5) {
+          // 内存充足时切换到高性能模式
+          console.log('内存充足，切换到高性能模式');
+          this.setPerformanceMode(PerformanceMode.HIGH_PERFORMANCE);
+        }
       }
 
       // 定期清理过期缓存

@@ -121,22 +121,29 @@ export class DrawBoard {
    * @param config - 配置选项，包含历史记录大小、快捷键开关、运笔配置等
    */
   constructor(container: HTMLCanvasElement | HTMLDivElement, config: DrawBoardConfig = {}) {
-    // 初始化核心组件
-    this.initializeCoreComponents(container, config);
-    
-    // 初始化处理器
-    this.initializeHandlers();
-    
-    // 绑定事件
-    this.bindEvents();
-    
-    // 设置快捷键
-    if (config.enableShortcuts !== false) {
-      this.setupShortcuts();
-    }
+    try {
+      // 初始化核心组件
+      this.initializeCoreComponents(container, config);
+      
+      // 初始化处理器
+      this.initializeHandlers();
+      
+      // 绑定事件
+      this.bindEvents();
+      
+      // 设置快捷键
+      if (config.enableShortcuts !== false) {
+        this.setupShortcuts();
+      }
 
-    // 设置初始鼠标样式
-    this.updateCursor();
+      // 设置初始鼠标样式
+      this.updateCursor();
+    } catch (error) {
+      console.error('DrawBoard初始化失败:', error);
+      // 清理已初始化的资源
+      this.safeDestroy();
+      throw new Error(`DrawBoard初始化失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   // ============================================
@@ -179,28 +186,30 @@ export class DrawBoard {
   }
 
   private initializeHandlers(): void {
-    // 初始化绘制处理器
+    // 首先初始化状态处理器（不依赖其他处理器）
+    this.stateHandler = new StateHandler(
+      this.toolManager,
+      this.historyManager,
+      this.selectionManager,
+      this.performanceManager
+    );
+
+    // 然后初始化绘制处理器（可以安全地使用stateHandler）
     this.drawingHandler = new DrawingHandler(
       this.canvasEngine,
       this.toolManager,
       this.historyManager,
       this.selectionManager,
       this.performanceManager,
-      () => this.stateHandler?.emitStateChange()
+      () => this.stateHandler.emitStateChange()
     );
+
+    // 最后将drawingHandler设置给stateHandler
+    this.stateHandler.setDrawingHandler(this.drawingHandler);
 
     // 初始化鼠标样式处理器
     const interactionCanvas = this.canvasEngine.getLayer('interaction')?.canvas;
     this.cursorHandler = new CursorHandler(this.container, interactionCanvas);
-
-    // 初始化状态处理器
-    this.stateHandler = new StateHandler(
-      this.toolManager,
-      this.historyManager,
-      this.selectionManager,
-      this.performanceManager,
-      this.drawingHandler
-    );
   }
 
   private bindEvents(): void {
@@ -504,10 +513,22 @@ export class DrawBoard {
   // 生命周期管理
   // ============================================
 
+  /**
+   * 安全的销毁方法，即使部分组件未初始化也能正常执行
+   */
+  private safeDestroy(): void {
+    try {
+      this.shortcutManager?.destroy();
+      this.eventManager?.destroy();
+      this.performanceManager?.destroy();
+      this.stateHandler?.destroy();
+      this.canvasEngine?.destroy();
+    } catch (error) {
+      console.error('销毁资源时出错:', error);
+    }
+  }
+
   public destroy(): void {
-    this.shortcutManager.destroy();
-    this.eventManager.destroy();
-    this.performanceManager.clearAllCaches();
-    this.stateHandler.destroy();
+    this.safeDestroy();
   }
 } 

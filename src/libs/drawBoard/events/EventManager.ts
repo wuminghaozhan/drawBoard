@@ -12,7 +12,6 @@ export type EventHandler = (event: DrawEvent) => void;
 export class EventManager {
   private canvas: HTMLCanvasElement;
   private handlers: Map<string, EventHandler[]> = new Map();
-  private isDrawing: boolean = false;
   private throttle: Throttle;
   
   // 保存事件处理函数的引用，用于解绑
@@ -65,7 +64,6 @@ export class EventManager {
 
   private handleMouseDown(e: MouseEvent): void {
     console.log('Mouse down event triggered');
-    this.isDrawing = true;
     const event: DrawEvent = {
       type: 'mousedown',
       point: this.getCanvasPoint(e.clientX, e.clientY),
@@ -76,7 +74,6 @@ export class EventManager {
   }
 
   private handleMouseMove(e: MouseEvent): void {
-    if (!this.isDrawing) return;
     
     // 使用节流优化性能
     this.throttle.throttle(() => {
@@ -94,9 +91,6 @@ export class EventManager {
   }
 
   private handleMouseUp(e: MouseEvent): void {
-    if (!this.isDrawing) return;
-    
-    this.isDrawing = false;
     const event: DrawEvent = {
       type: 'mouseup',
       point: this.getCanvasPoint(e.clientX, e.clientY),
@@ -108,7 +102,6 @@ export class EventManager {
   private handleTouchStart(e: TouchEvent): void {
     e.preventDefault();
     const touch = e.touches[0];
-    this.isDrawing = true;
     const event: DrawEvent = {
       type: 'touchstart',
       point: this.getCanvasPoint(touch.clientX, touch.clientY),
@@ -119,7 +112,6 @@ export class EventManager {
 
   private handleTouchMove(e: TouchEvent): void {
     e.preventDefault();
-    if (!this.isDrawing) return;
     
     // 使用节流优化性能
     this.throttle.throttle(() => {
@@ -135,9 +127,6 @@ export class EventManager {
 
   private handleTouchEnd(e: TouchEvent): void {
     e.preventDefault();
-    if (!this.isDrawing) return;
-    
-    this.isDrawing = false;
     const touch = e.changedTouches[0];
     const event: DrawEvent = {
       type: 'touchend',
