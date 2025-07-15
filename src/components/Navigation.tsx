@@ -8,6 +8,7 @@ const Navigation: React.FC = () => {
     { path: '/test', label: '基础画板', icon: '🎨' },
     { path: '/stroke', label: '运笔效果', icon: '✏️' },
     { path: '/preset', label: '笔触预设', icon: '🖌️' },
+    { path: '/performance', label: '性能优化', icon: '⚡' },
     { path: '/protocol', label: '协议解析', icon: '📋' },
     { path: '/edb', label: 'EDB解析', icon: '📁' }
   ];

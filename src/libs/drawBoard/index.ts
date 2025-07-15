@@ -58,9 +58,15 @@ export type { ToolType } from './tools/ToolManager';
 
 /** 
  * 绘制动作接口
- * 定义了单次绘制操作的数据结构
+ * 定义单次绘制操作的数据结构，包含点坐标、上下文信息等
  */
 export type { DrawAction } from './tools/DrawTool';
+
+/** 
+ * 性能模式枚举
+ * 定义画板的性能优化策略
+ */
+export { PerformanceMode } from './tools/DrawTool';
 
 /** 
  * 运笔配置接口
