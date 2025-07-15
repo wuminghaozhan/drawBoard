@@ -5,6 +5,7 @@ import EDBDemo from '../pages/EDBDemo';
 import StrokeDemo from '../pages/StrokeDemo';
 import PresetDemo from '../pages/PresetDemo';
 import PerformanceDemo from '../pages/PerformanceDemo';
+import CursorDemo from '../pages/CursorDemo';
 
 const AppRoutes = () => {
   return (
@@ -15,6 +16,7 @@ const AppRoutes = () => {
       <Route path="/stroke" element={<StrokeDemo />} />
       <Route path="/preset" element={<PresetDemo />} />
       <Route path="/performance" element={<PerformanceDemo />} />
+      <Route path="/cursor" element={<CursorDemo />} />
       <Route path="/" element={<Navigate to="/test" replace />} />
     </Routes>
   );

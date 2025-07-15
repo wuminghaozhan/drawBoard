@@ -345,7 +345,7 @@ export class PerformanceManager {
   /**
    * 智能判断是否缓存（AUTO和BALANCED模式）
    */
-  private shouldCacheIntelligent(action: DrawAction, complexity: number): boolean {
+  private shouldCacheIntelligent(_action: DrawAction, complexity: number): boolean {
     const memoryStats = this.getMemoryStats();
     
     // 内存压力下降低阈值

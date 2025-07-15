@@ -74,7 +74,6 @@ export interface StrokeConfig {
  */
 export class PenTool extends DrawTool {
   private strokeConfig: StrokeConfig;
-  private lastPoint: StrokePoint | null = null;
   private lastTimestamp: number = 0;
 
   constructor() {

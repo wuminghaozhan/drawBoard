@@ -6,31 +6,66 @@ import type { ToolManager, ToolType } from '../tools/ToolManager';
 import type { CanvasEngine } from '../core/CanvasEngine';
 import type { HistoryManager } from '../history/HistoryManager';
 import type { SelectionManager } from '../core/SelectionManager';
+import type { PerformanceManager } from '../core/PerformanceManager';
 
 /**
  * 绘制处理器 - 负责处理绘制相关的逻辑
+ * 
+ * 职责：
+ * - 处理绘制事件（开始、移动、结束）
+ * - 管理当前绘制动作
+ * - 处理重绘逻辑
+ * - 处理特殊工具逻辑（文字、选择）
+ * - 管理绘制状态
  */
 export class DrawingHandler {
+  // ============================================
+  // 状态管理
+  // ============================================
   private currentAction: DrawAction | null = null;
   private isDrawing: boolean = false;
   private isSelecting: boolean = false;
   private needsRedraw: boolean = false;
 
-  constructor(
-    private canvasEngine: CanvasEngine,
-    private toolManager: ToolManager,
-    private historyManager: HistoryManager,
-    private selectionManager: SelectionManager,
-    private onStateChange?: () => void
-  ) {}
+  // 依赖的管理器
+  private canvasEngine: CanvasEngine;
+  private toolManager: ToolManager;
+  private historyManager: HistoryManager;
+  private selectionManager: SelectionManager;
+  private performanceManager: PerformanceManager;
+  private onStateChange?: () => void;
 
-  // 开始绘制
+  constructor(
+    canvasEngine: CanvasEngine,
+    toolManager: ToolManager,
+    historyManager: HistoryManager,
+    selectionManager: SelectionManager,
+    performanceManager: PerformanceManager,
+    onStateChange?: () => void
+  ) {
+    this.canvasEngine = canvasEngine;
+    this.toolManager = toolManager;
+    this.historyManager = historyManager;
+    this.selectionManager = selectionManager;
+    this.performanceManager = performanceManager;
+    this.onStateChange = onStateChange;
+  }
+
+  // ============================================
+  // 公共接口 - 绘制事件处理
+  // ============================================
+
+  /**
+   * 处理绘制开始事件
+   */
   public handleDrawStart(event: DrawEvent): void {
     this.isDrawing = true;
     this.startAction(event.point);
   }
 
-  // 绘制移动
+  /**
+   * 处理绘制移动事件
+   */
   public handleDrawMove(event: DrawEvent): void {
     if (!this.isDrawing) return;
     
@@ -43,7 +78,9 @@ export class DrawingHandler {
     this.scheduleRedraw();
   }
 
-  // 结束绘制
+  /**
+   * 处理绘制结束事件
+   */
   public handleDrawEnd(): void {
     if (this.isDrawing && this.currentAction) {
       this.finishAction();
@@ -51,7 +88,59 @@ export class DrawingHandler {
     this.isDrawing = false;
   }
 
-  // 开始动作
+  // ============================================
+  // 公共接口 - 状态管理
+  // ============================================
+
+  /**
+   * 获取绘制状态
+   */
+  public getDrawingState(): {
+    isDrawing: boolean;
+    isSelecting: boolean;
+    hasCurrentAction: boolean;
+    currentToolType: ToolType;
+  } {
+    return {
+      isDrawing: this.isDrawing,
+      isSelecting: this.isSelecting,
+      hasCurrentAction: this.currentAction !== null,
+      currentToolType: this.toolManager.getCurrentToolType()
+    };
+  }
+
+  /**
+   * 清除当前动作和交互层
+   */
+  public clearCurrentAction(): void {
+    this.currentAction = null;
+    this.canvasEngine.clear('interaction');
+  }
+
+  /**
+   * 强制重绘
+   */
+  public forceRedraw(): void {
+    this.needsRedraw = true;
+    this.performRedraw();
+  }
+
+  /**
+   * 调度重绘
+   */
+  public scheduleRedraw(): void {
+    if (!this.needsRedraw) {
+      this.needsRedraw = true;
+      requestAnimationFrame(() => {
+        this.performRedraw();
+      });
+    }
+  }
+
+  // ============================================
+  // 内部方法 - 动作管理
+  // ============================================
+
   private startAction(point: { x: number; y: number }): void {
     const currentTool = this.toolManager.getCurrentTool();
     if (!currentTool) {
@@ -64,31 +153,35 @@ export class DrawingHandler {
     
     // 选择工具特殊处理
     if (toolType === 'select') {
-      this.isSelecting = true;
-      this.selectionManager.clearSelection();
-      this.performRedraw();
+      this.startSelection(point);
+      return;
     }
     
-    // 文字工具需要特殊处理
+    // 文字工具特殊处理
     if (toolType === 'text') {
       this.handleTextInput(point);
       return;
     }
     
-    // 创建动作，添加时间戳
+    // 创建普通绘制动作
+    this.createDrawAction(point, toolType);
+  }
+
+  private startSelection(point: { x: number; y: number }): void {
+    this.isSelecting = true;
+    this.selectionManager.clearSelection();
+    this.performRedraw();
+    
     const timestamp = Date.now();
     this.currentAction = {
       id: timestamp.toString(),
-      type: toolType,
+      type: 'select',
       points: [{ ...point, timestamp }],
       context: this.canvasEngine.getContext(),
       timestamp
     };
-    
-    console.log('创建动作:', this.currentAction);
   }
 
-  // 处理文字输入
   private handleTextInput(point: { x: number; y: number }): void {
     const text = prompt('请输入文字：', '文字');
     if (text !== null) {
@@ -104,65 +197,90 @@ export class DrawingHandler {
         textAlign: 'left' as CanvasTextAlign,
         textBaseline: 'top' as CanvasTextBaseline
       } as TextAction;
+      
       this.finishAction();
     }
   }
 
-  // 更新动作
+  private createDrawAction(point: { x: number; y: number }, toolType: ToolType): void {
+    const timestamp = Date.now();
+    this.currentAction = {
+      id: timestamp.toString(),
+      type: toolType,
+      points: [{ ...point, timestamp }],
+      context: this.canvasEngine.getContext(),
+      timestamp
+    };
+    
+    console.log('创建动作:', this.currentAction);
+  }
+
   private updateAction(point: { x: number; y: number }): void {
-    if (this.currentAction) {
-      const toolType = this.toolManager.getCurrentToolType();
-      
-      if (toolType === 'text') {
-        return;
-      } else if (toolType === 'select') {
-        if (this.currentAction.points.length === 1) {
-          this.currentAction.points.push({ ...point, timestamp: Date.now() });
-        } else {
-          this.currentAction.points[this.currentAction.points.length - 1] = { ...point, timestamp: Date.now() };
-        }
-      } else {
-        this.currentAction.points.push({ ...point, timestamp: Date.now() });
-      }
-      
-      this.updateInteractionLayer();
+    if (!this.currentAction) return;
+    
+    const toolType = this.toolManager.getCurrentToolType();
+    
+    if (toolType === 'text') {
+      return; // 文字工具不收集移动点
+    } else if (toolType === 'select') {
+      this.updateSelectionAction(point);
+    } else {
+      // 其他工具正常收集点
+      this.currentAction.points.push({ ...point, timestamp: Date.now() });
+    }
+    
+    // 实时更新交互层显示
+    this.updateInteractionLayer();
+  }
+
+  private updateSelectionAction(point: { x: number; y: number }): void {
+    if (!this.currentAction) return;
+    
+    // 选择工具需要至少两个点
+    if (this.currentAction.points.length === 1) {
+      this.currentAction.points.push({ ...point, timestamp: Date.now() });
+    } else {
+      // 更新最后一个点
+      this.currentAction.points[this.currentAction.points.length - 1] = { ...point, timestamp: Date.now() };
     }
   }
 
-  // 更新交互层
   private updateInteractionLayer(): void {
     if (this.currentAction) {
+      // 清除交互层
       this.canvasEngine.clear('interaction');
+      // 绘制当前操作到交互层
       this.drawAction(this.currentAction, 'interaction');
     }
   }
 
-  // 完成动作
   private finishAction(): void {
-    if (this.currentAction) {
-      const toolType = this.toolManager.getCurrentToolType();
-      
-      if (toolType === 'select' && this.isSelecting) {
-        this.handleSelectionFinish();
-        return;
-      }
-      
-      console.log('=== 完成绘制动作 ===', this.currentAction);
-      this.historyManager.addAction(this.currentAction);
-      this.currentAction = null;
-      
-      this.canvasEngine.clear('interaction');
-      
-      console.log('=== 强制重绘 ===');
-      this.needsRedraw = true;
-      this.performRedraw();
-      
-      this.onStateChange?.();
+    if (!this.currentAction) return;
+    
+    const toolType = this.toolManager.getCurrentToolType();
+    
+    // 选择工具特殊处理
+    if (toolType === 'select' && this.isSelecting) {
+      this.finishSelection();
+      return;
     }
+    
+    console.log('=== 完成绘制动作 ===', this.currentAction);
+    
+    // 添加到历史记录
+    this.historyManager.addAction(this.currentAction);
+    this.currentAction = null;
+    
+    // 清除交互层并重绘
+    this.canvasEngine.clear('interaction');
+    this.needsRedraw = true;
+    this.performRedraw();
+    
+    // 触发状态更新事件
+    this.onStateChange?.();
   }
 
-  // 处理选择完成
-  private handleSelectionFinish(): void {
+  private finishSelection(): void {
     if (!this.currentAction || this.currentAction.points.length < 2) {
       this.isSelecting = false;
       this.currentAction = null;
@@ -170,6 +288,7 @@ export class DrawingHandler {
       return;
     }
 
+    // 计算选择框
     const start = this.currentAction.points[0];
     const end = this.currentAction.points[this.currentAction.points.length - 1];
     const selectionBox: SelectionBox = {
@@ -179,58 +298,83 @@ export class DrawingHandler {
       height: Math.abs(end.y - start.y)
     };
 
+    // 检测选择
     const history = this.historyManager.getHistory();
     const selectedIds = this.selectionManager.detectSelection(selectionBox, history);
     
     console.log('选择检测结果:', selectedIds.length, '个动作被选中');
     
+    // 更新选择状态
     this.currentAction.selected = selectedIds.length > 0;
     this.currentAction.selectedActions = selectedIds;
     this.currentAction.selectionBox = selectionBox;
     
+    // 设置选择框到选择管理器
     this.selectionManager.setSelectionBox(selectionBox);
     
     this.isSelecting = false;
     this.currentAction = null;
     
+    // 重绘显示选择结果
     this.performRedraw();
   }
 
-  // 调度重绘
-  private scheduleRedraw(): void {
-    if (!this.needsRedraw) {
-      this.needsRedraw = true;
-      requestAnimationFrame(() => {
-        this.performRedraw();
-      });
-    }
-  }
+  // ============================================
+  // 内部方法 - 重绘逻辑
+  // ============================================
 
-  // 执行重绘
-  public performRedraw(): void {
+  private performRedraw(): void {
     if (!this.needsRedraw) return;
+    
     console.log('=== 执行重绘 ===');
     
+    // 清理层
     this.canvasEngine.clear('interaction');
     this.canvasEngine.clear('draw');
     
-    const history = this.historyManager.getHistory();
-    console.log('=== 重绘历史记录 ===', history.length, '个动作');
-    history.forEach(action => {
-      this.drawAction(action, 'draw');
-    });
+    // 重绘历史记录
+    this.redrawHistory();
     
+    // 绘制当前操作到交互层
     if (this.currentAction) {
       console.log('=== 绘制当前操作到交互层 ===');
       this.drawAction(this.currentAction, 'interaction');
     }
     
+    // 绘制选择手柄
     this.drawSelectionHandles();
     
     this.needsRedraw = false;
   }
 
-  // 绘制选择手柄
+  private redrawHistory(): void {
+    const history = this.historyManager.getHistory();
+    console.log('=== 重绘历史记录 ===', history.length, '个动作');
+    
+    const drawCtx = this.canvasEngine.getDrawLayer();
+    const canvas = drawCtx.canvas;
+    
+    history.forEach(action => {
+      // 尝试使用预渲染缓存
+      if (this.performanceManager.shouldUseCache(action)) {
+        console.log('使用缓存绘制:', action.id);
+        this.performanceManager.drawFromCache(drawCtx, action);
+      } else {
+        console.log('实时绘制:', action.id);
+        this.drawAction(action, 'draw');
+        
+        // 绘制完成后，检查是否应该创建缓存
+        if (this.performanceManager.shouldCache(action)) {
+          console.log('创建缓存:', action.id);
+          const cache = this.performanceManager.createCache(action, canvas);
+          if (cache) {
+            action.preRenderedCache = cache;
+          }
+        }
+      }
+    });
+  }
+
   private drawSelectionHandles(): void {
     if (!this.selectionManager.hasSelection()) return;
     
@@ -238,7 +382,10 @@ export class DrawingHandler {
     this.selectionManager.drawHandles(ctx);
   }
 
-  // 绘制动作
+  // ============================================
+  // 内部方法 - 绘制动作
+  // ============================================
+
   private drawAction(action: DrawAction, layerName: string = 'draw'): void {
     try {
       let ctx: CanvasRenderingContext2D;
@@ -269,29 +416,5 @@ export class DrawingHandler {
     } catch (error) {
       console.error('绘制动作失败:', error);
     }
-  }
-
-  // 获取状态
-  public getState() {
-    return {
-      isDrawing: this.isDrawing,
-      isSelecting: this.isSelecting,
-      hasCurrentAction: !!this.currentAction,
-      needsRedraw: this.needsRedraw
-    };
-  }
-
-  // 强制重绘
-  public forceRedraw(): void {
-    this.needsRedraw = true;
-    this.performRedraw();
-  }
-
-  // 清理
-  public cleanup(): void {
-    this.currentAction = null;
-    this.isDrawing = false;
-    this.isSelecting = false;
-    this.needsRedraw = false;
   }
 } 

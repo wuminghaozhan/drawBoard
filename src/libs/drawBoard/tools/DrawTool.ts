@@ -11,12 +11,14 @@ import type { SelectionBox } from '../core/SelectionManager';
  * - LOW_MEMORY: 低内存模式，优先节省内存，使用实时绘制
  * - BALANCED: 平衡模式，智能混合使用两种策略
  */
-export enum PerformanceMode {
-  AUTO = 'auto',
-  HIGH_PERFORMANCE = 'high_performance', 
-  LOW_MEMORY = 'low_memory',
-  BALANCED = 'balanced'
-}
+export const PerformanceMode = {
+  AUTO: 'auto',
+  HIGH_PERFORMANCE: 'high_performance', 
+  LOW_MEMORY: 'low_memory',
+  BALANCED: 'balanced'
+} as const;
+
+export type PerformanceMode = typeof PerformanceMode[keyof typeof PerformanceMode];
 
 /**
  * 预渲染缓存数据接口
