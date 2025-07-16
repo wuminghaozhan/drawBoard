@@ -1,17 +1,20 @@
 import React, { useState } from 'react';
+import type { StrokeConfig } from '../libs/drawBoard/tools/stroke/StrokeTypes';
 import { getAllStrokePresets, getPresetsByCategory, type StrokePresetType } from '../libs/drawBoard/tools/StrokePresets';
-import type { StrokeConfig } from '../libs/drawBoard/tools/PenTool';
+import './StrokePresetSelector.scss';
 
 interface StrokePresetSelectorProps {
-  drawBoard: any; // DrawBoard实例
-  onPresetChange?: (presetType: StrokePresetType, config: StrokeConfig) => void;
+  drawBoard?: any; // DrawBoard实例，可选
+  onPresetChange?: (presetType: StrokePresetType, config?: StrokeConfig) => void;
   visible?: boolean;
+  onClose?: () => void;
 }
 
 export const StrokePresetSelector: React.FC<StrokePresetSelectorProps> = ({
   drawBoard,
   onPresetChange,
-  visible = true
+  visible = true,
+  onClose
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<'all' | 'writing' | 'art' | 'drawing'>('all');
   const [searchKeyword, setSearchKeyword] = useState('');
@@ -64,25 +67,13 @@ export const StrokePresetSelector: React.FC<StrokePresetSelectorProps> = ({
   if (!visible) return null;
 
   return (
-    <div className="stroke-preset-selector" style={{
-      position: 'absolute',
-      top: '10px',
-      left: '10px',
-      background: 'rgba(255, 255, 255, 0.95)',
-      backdropFilter: 'blur(10px)',
-      border: '1px solid #ccc',
-      borderRadius: '8px',
-      padding: '15px',
-      minWidth: '320px',
-      maxWidth: '400px',
-      maxHeight: '500px',
-      overflow: 'hidden',
-      boxShadow: '0 2px 10px rgba(0, 0, 0, 0.1)',
-      zIndex: 1000
-    }}>
-      <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#333' }}>
-        笔触预设选择
-      </h3>
+    <div className={`stroke-preset-selector ${visible ? 'visible' : 'hidden'}`}>
+      <div className="preset-header">
+        <h3>🎨 笔触预设</h3>
+        {onClose && (
+          <button onClick={onClose} className="close-btn">✕</button>
+        )}
+      </div>
 
       {/* 搜索框 */}
       <div style={{ marginBottom: '15px' }}>

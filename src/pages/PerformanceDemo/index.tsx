@@ -1,8 +1,8 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { DrawBoard } from '../../libs/drawBoard';
 import type { ToolType } from '../../libs/drawBoard';
-import { PerformanceMode } from '../../libs/drawBoard';
-import './style.css';
+import { PerformanceMode } from '../../libs/drawBoard/core/PerformanceManager';
+import './style.scss';
 
 interface PerformanceStats {
   currentCacheMemoryMB: number;
@@ -86,7 +86,7 @@ const PerformanceDemo: React.FC = () => {
 
   const handleForceRealTimeToggle = (enabled: boolean) => {
     setIsForceRealTime(enabled);
-    drawBoardRef.current?.setForceRealTimeRender(enabled);
+    drawBoardRef.current?.setForceRealTimeRender && drawBoardRef.current.setForceRealTimeRender(enabled);
     updateStats();
   };
 

@@ -1,0 +1,365 @@
+.selection-demo {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  overflow: hidden;
+
+  .demo-header {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    padding: 20px;
+    text-align: center;
+    color: white;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+
+    h1 {
+      margin: 0 0 10px 0;
+      font-size: 28px;
+      font-weight: 600;
+      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    p {
+      margin: 0;
+      font-size: 16px;
+      opacity: 0.9;
+    }
+  }
+
+  .demo-container {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    min-height: 0; // 重要：允许flex子项收缩
+
+    .toolbar {
+      width: 280px;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-right: 1px solid rgba(0, 0, 0, 0.1);
+      padding: 0;
+      overflow-y: auto;
+
+      .tool-panel {
+        width: 100%;
+        height: auto;
+        border: none;
+        background: transparent;
+        padding: 20px;
+      }
+    }
+
+    .canvas-container {
+      flex: 1;
+      background: #f8f9fa;
+      position: relative;
+      overflow: hidden;
+      min-height: 0; // 重要：允许flex子项收缩
+      display: flex; // 确保内部元素能正确填充
+
+      .draw-board {
+        flex: 1; // 使用flex布局
+        position: relative; // 相对定位
+        background: white;
+        border-radius: 0;
+        box-shadow: none;
+        min-height: 400px; // 确保最小高度
+        
+        // 确保选择功能样式生效
+        canvas {
+          display: block;
+          background: transparent;
+        }
+        
+        // 确保鼠标事件正常
+        * {
+          pointer-events: auto;
+        }
+      }
+    }
+
+    .info-panel {
+      width: 320px;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-left: 1px solid rgba(0, 0, 0, 0.1);
+      padding: 20px;
+      overflow-y: auto;
+
+      h3 {
+        margin: 0 0 20px 0;
+        font-size: 20px;
+        color: #333;
+        border-bottom: 3px solid #667eea;
+        padding-bottom: 8px;
+      }
+
+      .feature-section {
+        margin-bottom: 25px;
+        padding: 16px;
+        background: linear-gradient(135deg, #f8f9ff 0%, #fff5f8 100%);
+        border-radius: 8px;
+        border: 1px solid #e3f2fd;
+
+        h4 {
+          margin: 0 0 12px 0;
+          font-size: 16px;
+          color: #667eea;
+          font-weight: 600;
+        }
+
+        ul {
+          margin: 0;
+          padding-left: 20px;
+          
+          li {
+            margin-bottom: 6px;
+            font-size: 14px;
+            color: #555;
+            line-height: 1.4;
+          }
+        }
+      }
+
+      .status-section {
+        margin-bottom: 25px;
+        padding: 16px;
+        background: linear-gradient(135deg, #e8f5e8 0%, #f0f8ff 100%);
+        border-radius: 8px;
+        border: 1px solid #c8e6c9;
+
+        h4 {
+          margin: 0 0 12px 0;
+          font-size: 16px;
+          color: #2e7d32;
+          font-weight: 600;
+        }
+
+        .status-info {
+          .status-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+            font-size: 14px;
+
+            &:last-child {
+              border-bottom: none;
+            }
+
+            span:first-child {
+              color: #666;
+              font-weight: 500;
+            }
+
+            .tool-indicator {
+              padding: 4px 8px;
+              border-radius: 4px;
+              font-weight: 600;
+              
+              &.pen { background-color: #e3f2fd; color: #1976d2; }
+              &.select { background-color: #fff3e0; color: #f57c00; }
+              &.rect { background-color: #e8f5e8; color: #388e3c; }
+              &.circle { background-color: #fce4ec; color: #c2185b; }
+              &.text { background-color: #f3e5f5; color: #7b1fa2; }
+              &.eraser { background-color: #ffebee; color: #d32f2f; }
+            }
+
+            .has-selection {
+              color: #2e7d32;
+              font-weight: 600;
+              background-color: #c8e6c9;
+              padding: 4px 8px;
+              border-radius: 4px;
+            }
+
+            .no-selection {
+              color: #757575;
+            }
+          }
+        }
+      }
+
+      .usage-tips {
+        margin-bottom: 25px;
+        padding: 16px;
+        background: linear-gradient(135deg, #fff8e1 0%, #f1f8e9 100%);
+        border-radius: 8px;
+        border: 1px solid #ffcc02;
+
+        h4 {
+          margin: 0 0 15px 0;
+          font-size: 16px;
+          color: #f57c00;
+          font-weight: 600;
+        }
+
+        .tip-item {
+          margin-bottom: 15px;
+          
+          &:last-child {
+            margin-bottom: 0;
+          }
+
+          strong {
+            display: block;
+            margin-bottom: 4px;
+            color: #e65100;
+            font-size: 14px;
+          }
+
+          p {
+            margin: 0;
+            font-size: 13px;
+            color: #666;
+            line-height: 1.4;
+            padding-left: 16px;
+          }
+        }
+      }
+
+      .demo-actions {
+        padding: 16px;
+        background: linear-gradient(135deg, #f3e5f5 0%, #e8eaf6 100%);
+        border-radius: 8px;
+        border: 1px solid #ce93d8;
+
+        h4 {
+          margin: 0 0 15px 0;
+          font-size: 16px;
+          color: #7b1fa2;
+          font-weight: 600;
+        }
+
+        .demo-button {
+          display: block;
+          width: 100%;
+          padding: 10px 16px;
+          margin-bottom: 8px;
+          border: 1px solid #9c27b0;
+          border-radius: 6px;
+          background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+          color: #7b1fa2;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          font-size: 14px;
+          font-weight: 500;
+
+          &:last-child {
+            margin-bottom: 0;
+          }
+
+          &:hover {
+            background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%);
+            border-color: #7b1fa2;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 6px rgba(123, 31, 162, 0.2);
+          }
+
+          &.clear {
+            border-color: #d32f2f;
+            color: #d32f2f;
+
+            &:hover {
+              background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+              border-color: #b71c1c;
+            }
+          }
+
+          &.active {
+            background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%);
+            border-color: #2e7d32;
+            color: #2e7d32;
+            font-weight: 600;
+          }
+        }
+      }
+    }
+  }
+}
+
+// 响应式设计
+@media (max-width: 1200px) {
+  .selection-demo {
+    .demo-container {
+      .toolbar {
+        width: 240px;
+      }
+
+      .info-panel {
+        width: 280px;
+      }
+    }
+  }
+}
+
+@media (max-width: 768px) {
+  .selection-demo {
+    .demo-header {
+      padding: 15px;
+
+      h1 {
+        font-size: 24px;
+      }
+
+      p {
+        font-size: 14px;
+      }
+    }
+
+    .demo-container {
+      flex-direction: column;
+
+      .toolbar {
+        width: 100%;
+        height: auto;
+        max-height: 200px;
+        border-right: none;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+
+        .tool-panel {
+          padding: 15px;
+        }
+      }
+
+      .canvas-container {
+        flex: 1;
+        min-height: 300px;
+
+        .draw-board {
+          min-height: 300px;
+        }
+      }
+
+      .info-panel {
+        width: 100%;
+        height: auto;
+        max-height: 300px;
+        border-left: none;
+        border-top: 1px solid rgba(0, 0, 0, 0.1);
+        padding: 15px;
+
+        .feature-section,
+        .status-section,
+        .usage-tips,
+        .demo-actions {
+          margin-bottom: 15px;
+          padding: 12px;
+
+          h4 {
+            font-size: 14px;
+          }
+
+          ul li,
+          .tip-item p,
+          .demo-button {
+            font-size: 12px;
+          }
+        }
+      }
+    }
+  }
+} 

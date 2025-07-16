@@ -1,23 +1,24 @@
 /**
- * 日志级别枚举
+ * 日志级别定义
  */
-export enum LogLevel {
-  DEBUG = 0,
-  INFO = 1,
-  WARN = 2,
-  ERROR = 3,
-  OFF = 4
-}
+export const LogLevel = {
+  DEBUG: 0,
+  INFO: 1, 
+  WARN: 2,
+  ERROR: 3
+} as const;
+
+export type LogLevel = typeof LogLevel[keyof typeof LogLevel];
 
 /**
- * 日志管理器 - 用于控制调试日志的输出
- * 
- * 支持按环境和级别控制日志输出，避免生产环境的性能损耗
+ * 日志管理器
+ * 支持分级日志和环境检测
  */
 export class Logger {
   private static instance: Logger;
-  private currentLevel: LogLevel = LogLevel.INFO;
-  private isDevelopment: boolean = process.env.NODE_ENV === 'development';
+  private currentLevel: LogLevel = LogLevel.DEBUG;
+  private isDevelopment: boolean = typeof window !== 'undefined' && 
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
   private constructor() {
     // 生产环境默认关闭调试日志

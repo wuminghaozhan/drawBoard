@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import type { StrokeConfig } from '../libs/drawBoard/tools/PenTool';
+import type { StrokeConfig } from '../libs/drawBoard/tools/stroke/StrokeTypes';
 
 interface StrokeControlPanelProps {
   drawBoard: any; // DrawBoard实例
@@ -16,6 +16,8 @@ export const StrokeControlPanel: React.FC<StrokeControlPanelProps> = ({
     enablePressure: true,
     enableVelocity: true,
     enableAngle: true,
+    enableBezierSmoothing: true,
+    antiAliasLevel: 2,
     pressureSensitivity: 0.8,
     velocitySensitivity: 0.6,
     minLineWidth: 1,

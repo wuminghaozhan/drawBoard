@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { ToolType } from '../../libs/drawBoard';
+import type { ToolType } from '@/libs/drawBoard';
 import './style.scss';
 
 interface ToolPanelProps {
@@ -23,13 +23,26 @@ interface ToolPanelProps {
   onCopy?: () => void;
 }
 
-const tools = [
-  { type: 'pen' as ToolType, name: '画笔', icon: '✏️' },
-  { type: 'rect' as ToolType, name: '矩形', icon: '⬜' },
-  { type: 'circle' as ToolType, name: '圆形', icon: '⭕' },
-  { type: 'text' as ToolType, name: '文字', icon: 'T' },
-  { type: 'eraser' as ToolType, name: '橡皮擦', icon: '🧽' },
-  { type: 'select' as ToolType, name: '选择', icon: '👆' }
+// 优化后的工具分组配置
+const toolGroups = [
+  {
+    name: '绘制工具',
+    id: 'drawing',
+    tools: [
+      { type: 'pen' as ToolType, name: '画笔', icon: '🖊️', hotkey: 'B' },
+      { type: 'rect' as ToolType, name: '矩形', icon: '⬜', hotkey: 'R' },
+      { type: 'circle' as ToolType, name: '圆形', icon: '⭕', hotkey: 'C' },
+    ]
+  },
+  {
+    name: '编辑工具', 
+    id: 'editing',
+    tools: [
+      { type: 'select' as ToolType, name: '选择', icon: '🎯', hotkey: 'S' },
+      { type: 'text' as ToolType, name: '文字', icon: '📝', hotkey: 'T' },
+      { type: 'eraser' as ToolType, name: '橡皮擦', icon: '🧽', hotkey: 'E' },
+    ]
+  }
 ];
 
 const colors = [
@@ -57,29 +70,31 @@ const ToolPanel: React.FC<ToolPanelProps> = ({
   onClearSelection,
   onDeleteSelection,
   onCopySelection,
-  onSave,
-  onCopy
+  onSave
 }) => {
   const [showColorPicker, setShowColorPicker] = useState(false);
 
   return (
     <div className="tool-panel">
-      <div className="tool-section">
-        <h4>工具</h4>
-        <div className="tool-buttons">
-          {tools.map(tool => (
-            <button
-              key={tool.type}
-              className={`tool-button ${currentTool === tool.type ? 'active' : ''}`}
-              onClick={() => onToolChange(tool.type)}
-              title={`${tool.name} (${getShortcut(tool.type)})`}
-            >
-              <span className="tool-icon">{tool.icon}</span>
-              <span className="tool-name">{tool.name}</span>
-            </button>
-          ))}
+      {/* 工具分组区域 */}
+      {toolGroups.map(group => (
+        <div key={group.id} className="tool-section">
+          <h4>{group.name}</h4>
+          <div className="tool-buttons">
+            {group.tools.map(tool => (
+              <button
+                key={tool.type}
+                className={`tool-button ${currentTool === tool.type ? 'active' : ''}`}
+                onClick={() => onToolChange(tool.type)}
+                title={`${tool.name} (${tool.hotkey})`}
+              >
+                <span className="tool-icon">{tool.icon}</span>
+                <span className="tool-name">{tool.name}</span>
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      ))}
 
       <div className="tool-section">
         <h4>颜色</h4>
@@ -138,7 +153,7 @@ const ToolPanel: React.FC<ToolPanelProps> = ({
             onClick={onUndo} 
             disabled={!canUndo}
             title="撤销 (Z)"
-            className={!canUndo ? 'disabled' : ''}
+            className={`action-button ${!canUndo ? 'disabled' : ''}`}
           >
             ↩️ 撤销
           </button>
@@ -146,76 +161,83 @@ const ToolPanel: React.FC<ToolPanelProps> = ({
             onClick={onRedo} 
             disabled={!canRedo}
             title="重做 (Y)"
-            className={!canRedo ? 'disabled' : ''}
+            className={`action-button ${!canRedo ? 'disabled' : ''}`}
           >
             ↪️ 重做
           </button>
-          <button onClick={onClear} title="清空画板">
+          <button onClick={onClear} title="清空画板" className="action-button">
             🗑️ 清空
           </button>
-          {hasSelection && onClearSelection && (
-            <button onClick={onClearSelection} title="取消选择 (Esc)">
-              ❌ 取消选择
-            </button>
-          )}
-          {hasSelection && onDeleteSelection && (
-            <button onClick={onDeleteSelection} title="删除选中内容 (Delete)">
-              🗑️ 删除选中
-            </button>
-          )}
-          {hasSelection && onCopySelection && (
-            <button onClick={onCopySelection} title="复制选中内容">
-              📋 复制选中
-            </button>
-          )}
           {onSave && (
-            <button onClick={onSave} title="保存图片">
+            <button onClick={onSave} title="保存图片" className="action-button">
               💾 保存
             </button>
           )}
-          {onCopy && (
-            <button onClick={onCopy} title="复制到剪贴板">
-              📋 复制
-            </button>
-          )}
         </div>
-        {historyCount > 0 && (
-          <div className="history-info">
-            历史记录: {historyCount} 步
-          </div>
-        )}
       </div>
 
+      {/* 选择工具专用操作区域 */}
+      {hasSelection && (
+        <div className="tool-section selection-section">
+          <h4>选择操作</h4>
+          <div className="selection-buttons">
+            {onCopySelection && (
+              <button 
+                onClick={onCopySelection} 
+                title="复制选中内容 (Ctrl+C)"
+                className="selection-button"
+              >
+                📋 复制
+              </button>
+            )}
+            {onDeleteSelection && (
+              <button 
+                onClick={onDeleteSelection} 
+                title="删除选中内容 (Delete)"
+                className="selection-button delete"
+              >
+                🗑️ 删除
+              </button>
+            )}
+            {onClearSelection && (
+              <button 
+                onClick={onClearSelection} 
+                title="取消选择 (Esc)"
+                className="selection-button"
+              >
+                ❌ 取消
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 状态信息 */}
       <div className="tool-section">
+        <div className="status-info">
+          <div className="history-info">
+            <small>历史记录: {historyCount}</small>
+          </div>
+          {hasSelection && (
+            <div className="selection-info">
+              <small>✓ 已选择内容</small>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 快捷键提示 */}
+      <div className="tool-section shortcuts-section">
         <h4>快捷键</h4>
         <div className="shortcuts">
-          <div>B - 画笔</div>
-          <div>R - 矩形</div>
-          <div>C - 圆形</div>
-          <div>T - 文字</div>
-          <div>E - 橡皮擦</div>
-          <div>S - 选择</div>
-          <div>Z - 撤销</div>
-          <div>Y - 重做</div>
-          <div>Delete - 删除选中</div>
-          <div>Esc - 取消选择</div>
-          <div>💾 保存 - 点击保存按钮</div>
+          <div>B - 画笔 | R - 矩形 | C - 圆形</div>
+          <div>S - 选择 | T - 文字 | E - 橡皮擦</div>
+          <div>Z - 撤销 | Y - 重做</div>
+          <div>Esc - 取消选择 | Del - 删除</div>
         </div>
       </div>
     </div>
   );
-};
-
-const getShortcut = (tool: ToolType): string => {
-  const shortcuts: Record<ToolType, string> = {
-    pen: 'B',
-    rect: 'R',
-    circle: 'C',
-    text: 'T',
-    eraser: 'E',
-    select: 'S'
-  };
-  return shortcuts[tool];
 };
 
 export default ToolPanel; 

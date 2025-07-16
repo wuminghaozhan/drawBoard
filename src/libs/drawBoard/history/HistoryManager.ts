@@ -196,6 +196,11 @@ export class HistoryManager {
     return [...this.history];
   }
 
+  public getAllActions(): DrawAction[] {
+    // 返回历史记录的副本，用于绘制
+    return [...this.history];
+  }
+
   public getHistoryCount(): number {
     return this.history.length;
   }

@@ -3,7 +3,7 @@ import { DrawBoard } from '../../libs/drawBoard';
 import type { ToolType } from '../../libs/drawBoard';
 import { StrokeControlPanel } from '../../components/StrokeControlPanel';
 import { StrokePresetSelector } from '../../components/StrokePresetSelector';
-import type { StrokeConfig } from '../../libs/drawBoard/tools/PenTool';
+import type { StrokeConfig } from '../../libs/drawBoard/tools/stroke/StrokeTypes';
 import type { StrokePresetType } from '../../libs/drawBoard/tools/StrokePresets';
 import './style.scss';
 
@@ -213,8 +213,13 @@ const StrokeDemo: React.FC = () => {
             {/* 预设选择器 */}
             <StrokePresetSelector
               drawBoard={drawBoardRef.current}
+              onPresetChange={(presetType, config) => {
+                setCurrentPreset(presetType);
+                if (config) {
+                  handleStrokeConfigChange(config);
+                }
+              }}
               visible={showPresetSelector}
-              onPresetChange={handlePresetChange}
             />
           </div>
         </div>

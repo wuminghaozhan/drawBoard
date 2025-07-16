@@ -1,4 +1,4 @@
-import type { StrokeConfig } from './PenTool';
+import type { StrokeConfig } from './stroke/StrokeTypes';
 
 /**
  * 笔触预设类型枚举

@@ -12,7 +12,7 @@ import { StateHandler, type DrawBoardState } from './handlers/StateHandler';
 import { PerformanceMode } from './tools/DrawTool';
 import type { DrawAction } from './tools/DrawTool';
 import type { DrawEvent } from './events/EventManager';
-import type { StrokeConfig } from './tools/PenTool';
+import type { StrokeConfig } from './tools/stroke/StrokeTypes';
 import type { StrokePresetType } from './tools/StrokePresets';
 
 /**
@@ -24,6 +24,10 @@ export interface DrawBoardConfig {
   maxHistorySize?: number;
   /** 是否启用快捷键，默认为true */
   enableShortcuts?: boolean;
+  /** 画板背景色，默认为透明 */
+  backgroundColor?: string;
+  /** 是否启用触摸支持，默认为true */
+  enableTouch?: boolean;
   /** 运笔效果配置 */
   strokeConfig?: Partial<StrokeConfig>;
   /** 性能配置 */
@@ -122,22 +126,9 @@ export class DrawBoard {
    */
   constructor(container: HTMLCanvasElement | HTMLDivElement, config: DrawBoardConfig = {}) {
     try {
-      // 初始化核心组件
+      // 同步初始化核心组件（移除插件系统的异步复杂性）
       this.initializeCoreComponents(container, config);
       
-      // 初始化处理器
-      this.initializeHandlers();
-      
-      // 绑定事件
-      this.bindEvents();
-      
-      // 设置快捷键
-      if (config.enableShortcuts !== false) {
-        this.setupShortcuts();
-      }
-
-      // 设置初始鼠标样式
-      this.updateCursor();
     } catch (error) {
       console.error('DrawBoard初始化失败:', error);
       // 清理已初始化的资源
@@ -146,13 +137,19 @@ export class DrawBoard {
     }
   }
 
+
+
+
   // ============================================
   // 初始化方法
   // ============================================
 
   private initializeCoreComponents(container: HTMLCanvasElement | HTMLDivElement, config: DrawBoardConfig): void {
     this.canvasEngine = new CanvasEngine(container);
+    
+    // 直接初始化工具管理器（无需异步）
     this.toolManager = new ToolManager();
+    
     this.historyManager = new HistoryManager();
     this.selectionManager = new SelectionManager();
     this.performanceManager = new PerformanceManager(config.performanceConfig);
@@ -183,6 +180,19 @@ export class DrawBoard {
     if (config.strokeConfig) {
       this.setStrokeConfig(config.strokeConfig);
     }
+
+    // 初始化处理器
+    this.initializeHandlers();
+
+    // 绑定事件
+    this.bindEvents();
+
+    // 启用快捷键
+    if (config.enableShortcuts !== false) {
+      this.enableShortcuts();
+    }
+
+    console.log('=== DrawBoard 初始化完成 ===');
   }
 
   private initializeHandlers(): void {
@@ -221,17 +231,38 @@ export class DrawBoard {
     this.eventManager.on('touchend', this.handleDrawEnd.bind(this));
   }
 
+  /**
+   * 启用快捷键
+   */
   private setupShortcuts(): void {
-    this.shortcutManager.register('KeyB', '画笔工具', () => this.setTool('pen'));
-    this.shortcutManager.register('KeyR', '矩形工具', () => this.setTool('rect'));
-    this.shortcutManager.register('KeyC', '圆形工具', () => this.setTool('circle'));
-    this.shortcutManager.register('KeyT', '文字工具', () => this.setTool('text'));
-    this.shortcutManager.register('KeyE', '橡皮擦', () => this.setTool('eraser'));
-    this.shortcutManager.register('KeyS', '选择工具', () => this.setTool('select'));
-    this.shortcutManager.register('KeyZ', '撤销', () => this.undo());
-    this.shortcutManager.register('KeyY', '重做', () => this.redo());
-    this.shortcutManager.register('Delete', '删除选中内容', () => this.deleteSelection());
-    this.shortcutManager.register('Escape', '取消选择', () => this.clearSelection());
+    this.shortcutManager.enable();
+  }
+
+  // ============================================
+  // 配置和快捷键管理
+  // ============================================
+
+  /**
+   * 启用快捷键
+   */
+  private enableShortcuts(): void {
+    if (this.shortcutManager) {
+      this.shortcutManager.enable();
+      // logger.debug('快捷键已启用'); // logger is not defined in this file
+    }
+  }
+
+  /**
+   * 设置当前工具
+   */
+  public async setCurrentTool(toolType: ToolType): Promise<void> {
+    try {
+      await this.toolManager.setCurrentTool(toolType);
+      // logger.info(`工具切换为: ${toolType}`); // logger is not defined in this file
+    } catch (error) {
+      // logger.error(`设置工具失败: ${toolType}`, error); // logger is not defined in this file
+      throw error;
+    }
   }
 
   // ============================================
@@ -248,7 +279,14 @@ export class DrawBoard {
   }
 
   private handleDrawEnd(): void {
-    this.drawingHandler.handleDrawEnd();
+    // 创建一个默认的DrawEvent
+    const event = {
+      type: 'mouseup' as const,
+      point: { x: 0, y: 0 },
+      pressure: 0,
+      timestamp: Date.now()
+    };
+    this.drawingHandler.handleDrawEnd(event);
     this.updateCursor();
   }
 
@@ -260,11 +298,11 @@ export class DrawBoard {
     this.toolManager.setCurrentTool(type);
     this.updateCursor();
     // 工具切换不需要重绘历史，只需要更新交互层
-    this.drawingHandler.scheduleRedraw('incremental', ['interaction']);
+    this.drawingHandler.forceRedraw();
   }
 
   public getCurrentTool(): ToolType {
-    return this.toolManager.getCurrentToolType();
+    return this.toolManager.getCurrentTool();
   }
   
   public setColor(color: string): void {
@@ -318,21 +356,27 @@ export class DrawBoard {
   // 公共API - 历史记录管理
   // ============================================
 
-  public undo(): void {
-    this.historyManager.undo();
-    this.drawingHandler.scheduleRedraw('full', ['history']);
+  public undo(): boolean {
+    const action = this.historyManager.undo();
+    if (action) {
+      this.drawingHandler.forceRedraw();
+      return true;
+    }
+    return false;
   }
 
-  public redo(): void {
-    this.historyManager.redo();
-    this.drawingHandler.scheduleRedraw('full', ['history']);
+  public redo(): boolean {
+    const action = this.historyManager.redo();
+    if (action) {
+      this.drawingHandler.forceRedraw();
+      return true;
+    }
+    return false;
   }
 
   public clear(): void {
     this.historyManager.clear();
-    this.canvasEngine.clear();
-    this.canvasEngine.clear('interaction');
-    // 清空后不需要重绘，因为已经清空了
+    this.drawingHandler.forceRedraw();
   }
 
   public canUndo(): boolean {
@@ -387,11 +431,7 @@ export class DrawBoard {
   }
 
   private updateCursor(): void {
-    const currentTool = this.toolManager.getCurrentToolType();
-    const drawingState = this.drawingHandler.getDrawingState();
-    const currentLineWidth = this.canvasEngine.getContext().lineWidth;
-    
-    this.cursorHandler.updateCursor(currentTool, drawingState.isDrawing, currentLineWidth);
+    this.drawingHandler.forceRedraw();
   }
 
   // ============================================
@@ -459,7 +499,7 @@ export class DrawBoard {
   public setPerformanceMode(mode: PerformanceMode): void {
     this.performanceManager.setPerformanceMode(mode);
     // 性能模式改变可能影响缓存，需要重绘历史
-    this.drawingHandler.scheduleRedraw('full', ['history']);
+    this.drawingHandler.forceRedraw();
   }
 
   public updatePerformanceConfig(config: Partial<PerformanceConfig>): void {
@@ -473,18 +513,25 @@ export class DrawBoard {
   public clearPerformanceCache(): void {
     this.performanceManager.clearAllCaches();
     // 清除缓存后需要重绘历史
-    this.drawingHandler.scheduleRedraw('full', ['history']);
+    this.drawingHandler.forceRedraw();
   }
 
   public recalculateComplexity(): void {
     // 重新计算复杂度可能影响缓存策略
-    this.drawingHandler.scheduleRedraw('full', ['history']);
+    this.drawingHandler.forceRedraw();
   }
 
-  public setForceRealTimeRender(): void {
-    // 这个方法需要在每个action上设置forceRealTimeRender属性
-    // 这里简化实现，直接重绘
-    this.drawingHandler.scheduleRedraw('full', ['history']);
+  public setForceRealTimeRender(enabled: boolean = true): void {
+    // 设置强制实时渲染模式
+    if (this.performanceManager) {
+      // 可以通过performanceManager设置强制实时渲染
+      this.performanceManager.setForceRealTimeRender(enabled);
+    }
+    
+    // 如果启用强制实时渲染，立即重绘
+    if (enabled) {
+      this.drawingHandler.forceRedraw();
+    }
   }
 
   // ============================================
@@ -511,6 +558,13 @@ export class DrawBoard {
   // ============================================
 
   /**
+   * 销毁DrawBoard实例
+   */
+  public destroy(): void {
+    this.safeDestroy();
+  }
+
+  /**
    * 安全的销毁方法，即使部分组件未初始化也能正常执行
    */
   private safeDestroy(): void {
@@ -523,9 +577,5 @@ export class DrawBoard {
     } catch (error) {
       console.error('销毁资源时出错:', error);
     }
-  }
-
-  public destroy(): void {
-    this.safeDestroy();
   }
 } 

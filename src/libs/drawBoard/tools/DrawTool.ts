@@ -77,8 +77,8 @@ export interface DrawAction {
 }
 
 export abstract class DrawTool {
-  protected name: string;
-  protected type: string;
+  public name: string;
+  public type: string;
 
   constructor(name: string, type: string) {
     this.name = name;

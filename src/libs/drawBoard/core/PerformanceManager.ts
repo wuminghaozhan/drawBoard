@@ -1,8 +1,12 @@
 import type { DrawAction, PreRenderedCache } from '../tools/DrawTool';
 import { PerformanceMode } from '../tools/DrawTool';
+import { logger } from '../utils/Logger';
+
+// 重新导出PerformanceMode供外部使用
+export { PerformanceMode } from '../tools/DrawTool';
 
 /**
- * 性能配置接口
+ * 性能管理配置
  */
 export interface PerformanceConfig {
   /** 性能模式 */
@@ -17,6 +21,10 @@ export interface PerformanceConfig {
   enableMemoryMonitoring: boolean;
   /** 内存使用率超过此值时自动降级 */
   memoryPressureThreshold: number;
+  /** 是否启用缓存 */
+  enableCaching: boolean;
+  /** 是否启用批处理 */
+  enableBatching: boolean;
 }
 
 /**
@@ -86,7 +94,9 @@ export class PerformanceManager {
     maxCacheItems: 500,    // 最多500个缓存项
     complexityThreshold: 30, // 复杂度超过30才缓存
     enableMemoryMonitoring: true,
-    memoryPressureThreshold: 0.8 // 80%内存使用率
+    memoryPressureThreshold: 0.8, // 80%内存使用率
+    enableCaching: true,
+    enableBatching: true
   };
 
   constructor(config: Partial<PerformanceConfig> = {}) {
@@ -510,6 +520,23 @@ export class PerformanceManager {
 
     if (expiredIds.length > 0) {
       console.log(`清理了 ${expiredIds.length} 个过期缓存`);
+    }
+  }
+
+  /**
+   * 设置强制实时渲染模式
+   */
+  public setForceRealTimeRender(enabled: boolean): void {
+    // 更新配置
+    this.config.enableCaching = !enabled;
+    this.config.enableBatching = !enabled;
+    
+    if (enabled) {
+      // 清空所有缓存，强制实时渲染
+      this.clearAllCaches();
+      console.log('启用强制实时渲染模式');
+    } else {
+      console.log('禁用强制实时渲染模式');
     }
   }
 } 

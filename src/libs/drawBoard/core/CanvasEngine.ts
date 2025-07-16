@@ -255,6 +255,8 @@ export class CanvasEngine {
     return this.layers.get('draw')!.ctx;
   }
 
+
+
   public setLayerVisible(name: string, visible: boolean): void {
     const layer = this.layers.get(name);
     if (layer) {

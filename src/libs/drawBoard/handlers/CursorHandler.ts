@@ -85,6 +85,8 @@ export class CursorHandler {
       // 几何图形绘制中 - 使用十字光标
       'rect': 'crosshair',
       'circle': 'crosshair',
+      'line': 'crosshair',
+      'polygon': 'crosshair',
       
       // 文字工具绘制中
       'text': 'text'
@@ -108,15 +110,15 @@ export class CursorHandler {
       'eraser': this.getEraserCursor(lineWidth),
       
       // 选择工具 - 使用鼠标指针图标
-      'select': 'url("data:image/svg+xml;charset=utf8,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'20\' height=\'20\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23000\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3E%3Cpath d=\'m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3z\'/%3E%3Cpath d=\'m13 13 6 6\'/%3E%3C/svg%3E") 3 3, pointer',
+      'select': 'default',
       
-      // 矩形工具 - 使用矩形图标
-      'rect': 'url("data:image/svg+xml;charset=utf8,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'20\' height=\'20\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23000\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3E%3Crect width=\'18\' height=\'18\' x=\'3\' y=\'3\' rx=\'2\'/%3E%3C/svg%3E") 10 10, crosshair',
+      // 几何图形工具 - 使用十字光标
+      'rect': 'crosshair',
+      'circle': 'crosshair',
+      'line': 'crosshair',
+      'polygon': 'crosshair',
       
-      // 圆形工具 - 使用圆形图标
-      'circle': 'url("data:image/svg+xml;charset=utf8,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'20\' height=\'20\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23000\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3E%3Ccircle cx=\'12\' cy=\'12\' r=\'10\'/%3E%3C/svg%3E") 10 10, crosshair',
-      
-      // 文字工具 - 使用系统文字光标
+      // 文字工具 - 使用文本光标
       'text': 'text'
     };
     
