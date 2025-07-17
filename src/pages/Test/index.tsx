@@ -1,843 +1,1599 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { DrawBoard } from '@/libs/drawBoard';
 import type { ToolType } from '@/libs/drawBoard';
-import { LayerManager, type Layer } from '@/libs/drawBoard/core/LayerManager';
-import ToolPanel from '@/components/ToolPanel';
-import { StrokeControlPanel } from '@/components/StrokeControlPanel';
-import { StrokePresetSelector } from '@/components/StrokePresetSelector';
 import './style.scss';
 
-// 优化：将接口定义提取到组件外部
-interface PerformanceData {
-  fps: number;
-  memoryUsage: number;
-  renderTime: number;
-  actionCount: number;
-}
-
-interface LayerStats {
-  totalLayers: number;
-  visibleLayers: number;
-  lockedLayers: number;
-  totalActions: number;
-}
-
 const Test: React.FC = () => {
-  console.log('=== Test component rendering ===');
-  
+  const [activeTab, setActiveTab] = useState('canvas');
+  const [drawData, setDrawData] = useState({
+    color: '#000000',
+    lineWidth: 2,
+    tool: 'pen' as ToolType
+  });
   const containerRef = useRef<HTMLDivElement>(null);
   const drawBoardRef = useRef<DrawBoard | null>(null);
-  const layerManagerRef = useRef<LayerManager | null>(null);
-  const initializationRef = useRef<boolean>(false);
-  
-  // 基础状态 - 合并相关状态
-  const [toolState, setToolState] = useState({
-    currentTool: 'pen' as ToolType,
-    currentColor: '#000000',
-    currentLineWidth: 2,
-    showGrid: false,
-  });
-  
-  const [boardState, setBoardState] = useState({
-    canUndo: false,
-    canRedo: false,
-    historyCount: 0,
-    hasSelection: false,
-  });
+  const mutationObserverRef = useRef<MutationObserver | null>(null);
+  const initCountRef = useRef(0);
+  const monitorIntervalRef = useRef<number | null>(null);
 
-  // 面板显示状态 - 合并为对象
-  const [panelStates, setPanelStates] = useState({
-    showStroke: false,
-    showPreset: false,
-    showLayer: false,
-    showGeometry: false,
-    showPerformance: false,
-    showInfo: true,
-  });
-  
-  // 移动端状态
-  const [isMobile, setIsMobile] = useState(false);
-  const [showToolPanel, setShowToolPanel] = useState(false);
-
-  // 图层状态 - 合并为对象
-  const [layerState, setLayerState] = useState({
-    layers: [] as Layer[],
-    activeLayerId: '',
-    stats: { totalLayers: 0, visibleLayers: 0, lockedLayers: 0, totalActions: 0 } as LayerStats,
-  });
-
-  // 几何工具状态 - 合并为对象
-  const [geometryState, setGeometryState] = useState({
-    lineType: 'line' as 'line' | 'arrow' | 'dashed',
-    arrowStyle: 'end' as 'none' | 'start' | 'end' | 'both',
-    polygonType: 'triangle' as 'triangle' | 'square' | 'pentagon' | 'hexagon' | 'star' | 'custom',
-    polygonSides: 5,
-    fillMode: 'stroke' as 'stroke' | 'fill' | 'both',
-  });
-
-  // 性能监控状态
-  const [performanceData, setPerformanceData] = useState<PerformanceData>({
-    fps: 0,
-    memoryUsage: 0,
-    renderTime: 0,
-    actionCount: 0
-  });
-
-  // 优化：使用 useCallback 来避免不必要的重新创建
-  const updateState = useCallback(() => {
-    if (drawBoardRef.current) {
-      const state = drawBoardRef.current.getState();
-      setBoardState({
-        canUndo: state.canUndo,
-        canRedo: state.canRedo,
-        historyCount: state.historyCount,
-        hasSelection: drawBoardRef.current.hasSelection(),
-      });
-    }
-  }, []);
-
-  const updateLayerState = useCallback(() => {
-    if (layerManagerRef.current) {
-      const allLayers = layerManagerRef.current.getAllLayers();
-      const activeLayer = layerManagerRef.current.getActiveLayer();
-      const stats = layerManagerRef.current.getLayerStats();
-      
-      setLayerState({
-        layers: allLayers,
-        activeLayerId: activeLayer?.id || '',
-        stats,
-      });
-    }
-  }, []);
-
-  // 优化：使用 useCallback 和 useMemo 来优化性能监控
-  const updatePerformanceData = useCallback(() => {
-    if (drawBoardRef.current) {
-      const state = drawBoardRef.current.getState();
-      const memoryInfo = (performance as any).memory;
-      
-      setPerformanceData({
-        fps: Math.round(60), // 模拟FPS
-        memoryUsage: memoryInfo ? Math.round(memoryInfo.usedJSHeapSize / 1024 / 1024) : 0,
-        renderTime: Math.round(Math.random() * 5),
-        actionCount: state.historyCount
-      });
-    }
-  }, []);
-
-  // 检测移动端 - 优化
+  // 检测React严格模式
   useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth <= 768);
-    
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    
-    return () => window.removeEventListener('resize', checkMobile);
+    initCountRef.current += 1;
+    console.log(`🔄 useEffect called ${initCountRef.current} times (Strict Mode detection)`);
   }, []);
 
-  // 优化：改进初始化逻辑
-  useEffect(() => {
-    console.log('=== Test useEffect triggered ===');
-    
-    // 防止重复初始化
-    if (initializationRef.current || !containerRef.current || drawBoardRef.current) {
-      return;
+  // 监控容器变化
+  const startContainerMonitoring = (container: HTMLDivElement) => {
+    // 停止之前的监控
+    if (mutationObserverRef.current) {
+      mutationObserverRef.current.disconnect();
     }
+
+    mutationObserverRef.current = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'childList') {
+          console.log('🔍 Container children changed:', {
+            addedNodes: mutation.addedNodes.length,
+            removedNodes: mutation.removedNodes.length,
+            totalChildren: container.childElementCount,
+            canvasCount: container.querySelectorAll('canvas').length,
+            removedCanvases: Array.from(mutation.removedNodes).filter(node => 
+              node.nodeType === Node.ELEMENT_NODE && (node as Element).tagName === 'CANVAS'
+            ).length
+          });
+          
+          if (mutation.removedNodes.length > 0) {
+            console.warn('⚠️ Nodes removed from container!', Array.from(mutation.removedNodes).map(node => ({
+              nodeType: node.nodeType,
+              nodeName: node.nodeName,
+              textContent: node.textContent?.substring(0, 50)
+            })));
+          }
+        }
+      });
+    });
+
+    mutationObserverRef.current.observe(container, {
+      childList: true,
+      subtree: true
+    });
+
+    console.log('📡 Started monitoring container changes');
+  };
+
+  // 开始自动监控canvas状态
+  const startAutoMonitoring = () => {
+    // 清除之前的监控
+    if (monitorIntervalRef.current) {
+      clearInterval(monitorIntervalRef.current);
+    }
+
+    monitorIntervalRef.current = setInterval(() => {
+      const container = containerRef.current;
+      if (container && drawBoardRef.current) {
+        const canvasCount = container.querySelectorAll('canvas').length;
+        if (canvasCount === 0) {
+          console.warn('🚨 Auto-monitor detected missing canvas! Attempting to fix...');
+          checkCanvasStatus(); // 这会尝试修复问题
+        }
+      }
+    }, 2000); // 每2秒检查一次
+
+    console.log('🔄 Started auto-monitoring canvas status');
+  };
+
+  // 停止自动监控
+  const stopAutoMonitoring = () => {
+    if (monitorIntervalRef.current) {
+      clearInterval(monitorIntervalRef.current);
+      monitorIntervalRef.current = null;
+      console.log('⏹️ Stopped auto-monitoring');
+    }
+  };
+
+  // 初始化DrawBoard
+  useEffect(() => {
+    console.log('🔄 useEffect called, initCount:', initCountRef.current);
     
-    initializationRef.current = true;
-    
-    const initializeDrawBoard = async () => {
-      const container = containerRef.current!;
+    const initDrawBoard = () => {
+      console.log('🚀 initDrawBoard function called');
       
-      console.log('=== 开始初始化画板 ===');
-      console.log('容器尺寸:', {
+      const container = containerRef.current;
+      if (!container) {
+        console.log('Container element not found');
+        return;
+      }
+
+      // 检查容器尺寸
+      const containerRect = container.getBoundingClientRect();
+      console.log('Container info:', {
         offsetWidth: container.offsetWidth,
         offsetHeight: container.offsetHeight,
         clientWidth: container.clientWidth,
-        clientHeight: container.clientHeight
-      });
-      
-      // 确保容器有正确的尺寸
-      if (container.offsetWidth === 0 || container.offsetHeight === 0) {
-        console.warn('容器尺寸为0，等待容器准备就绪...');
-        
-        // 使用 requestAnimationFrame 等待容器准备就绪
-        await new Promise<void>((resolve) => {
-          const checkSize = () => {
-            if (container.offsetWidth > 0 && container.offsetHeight > 0) {
-              resolve();
-            } else {
-              requestAnimationFrame(checkSize);
-            }
-          };
-          checkSize();
-        });
-      }
-      
-      try {
-        // 优化：使用更精简的配置
-        drawBoardRef.current = new DrawBoard(container, {
-          maxHistorySize: 100,
-          enableShortcuts: true,
-          performanceConfig: {
-            maxCacheMemoryMB: 100,
-            complexityThreshold: 20,
-            enableMemoryMonitoring: true,
-          }
-        });
-
-        // 初始化图层管理器
-        layerManagerRef.current = new LayerManager({
-          maxLayers: 20,
-          defaultLayerName: '图层'
-        });
-
-        console.log('=== DrawBoard创建成功 ===');
-        
-        // 验证canvas创建
-        const canvases = container.querySelectorAll('canvas');
-        console.log('找到的canvas元素数量:', canvases.length);
-        
-        if (canvases.length === 0) {
-          throw new Error('Canvas未成功创建');
+        clientHeight: container.clientHeight,
+        getBoundingClientRect: containerRect,
+        computedStyle: {
+          width: getComputedStyle(container).width,
+          height: getComputedStyle(container).height,
+          display: getComputedStyle(container).display,
+          position: getComputedStyle(container).position
         }
+      });
+
+      // 等待容器渲染完成
+      if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+        console.log('Container not ready, retrying...');
+        setTimeout(initDrawBoard, 100);
+        return;
+      }
+
+      // 检查容器内是否已有内容
+      console.log('Container children before DrawBoard init:', {
+        childElementCount: container.childElementCount,
+        innerHTML: container.innerHTML.substring(0, 200)
+      });
+
+      // 开始监控容器变化
+      startContainerMonitoring(container);
+
+      try {
+        // 🔍 检查重复初始化
+        console.log('🔄 Attempting DrawBoard initialization #' + (initCountRef.current));
+        console.log('Existing DrawBoard instance:', !!drawBoardRef.current);
+        console.log('Container canvas count before init:', container.querySelectorAll('canvas').length);
         
-        // 初始化状态
-        updateState();
-        updateLayerState();
+        console.log('Initializing DrawBoard with container:', {
+          width: container.offsetWidth,
+          height: container.offsetHeight
+        });
+
+        // 使用单例模式创建DrawBoard实例（自动处理重复实例）
+        drawBoardRef.current = DrawBoard.getInstance(container, {
+          maxHistorySize: 100,
+          enableShortcuts: true
+        });
+
+        console.log('DrawBoard initialized successfully');
         
-        // 启动性能监控
-        const performanceInterval = setInterval(updatePerformanceData, 2000);
+        // 立即检查容器内容
+        console.log('Container children after DrawBoard init:', {
+          childElementCount: container.childElementCount,
+          innerHTML: container.innerHTML.substring(0, 300)
+        });
         
-        // 清理函数
-        return () => {
-          clearInterval(performanceInterval);
-        };
+        // 立即初始化默认工具
+        drawBoardRef.current.initializeDefaultTools().then(() => {
+          console.log('Default tools loaded');
+          
+          // 再次检查容器内容
+          console.log('Container children after tools loaded:', {
+            childElementCount: container.childElementCount,
+            canvasCount: container.querySelectorAll('canvas').length
+          });
+          
+          // 设置初始工具和颜色
+          drawBoardRef.current!.setTool(drawData.tool);
+          drawBoardRef.current!.setColor(drawData.color);
+          drawBoardRef.current!.setLineWidth(drawData.lineWidth);
+          
+          console.log('Initial tool settings applied');
+          
+          // 启动自动监控
+          startAutoMonitoring();
+          
+          // 添加绘制事件监听器进行调试
+          const interactionCanvas = container.querySelector('canvas[style*="pointer-events: auto"]');
+          if (interactionCanvas) {
+            console.log('Found interaction canvas, adding debug listeners');
+            
+            interactionCanvas.addEventListener('mousedown', (e) => {
+              const mouseEvent = e as MouseEvent;
+              console.log('🖱️ Mouse down on interaction canvas:', {
+                x: mouseEvent.offsetX,
+                y: mouseEvent.offsetY,
+                currentTool: drawBoardRef.current?.getCurrentTool()
+              });
+            });
+            
+            interactionCanvas.addEventListener('mousemove', (e) => {
+              const mouseEvent = e as MouseEvent;
+              if (mouseEvent.buttons === 1) { // 只在拖拽时记录
+                console.log('🖱️ Mouse drag:', {
+                  x: mouseEvent.offsetX,
+                  y: mouseEvent.offsetY
+                });
+              }
+            });
+            
+            interactionCanvas.addEventListener('mouseup', (e) => {
+              const mouseEvent = e as MouseEvent;
+              console.log('🖱️ Mouse up:', {
+                x: mouseEvent.offsetX,
+                y: mouseEvent.offsetY
+              });
+            });
+          } else {
+            console.warn('⚠️ No interaction canvas found with pointer-events: auto');
+            console.log('Available canvases:', Array.from(container.querySelectorAll('canvas')).map(c => c.style.cssText));
+          }
+          
+        }).catch(error => {
+          console.error('Failed to initialize default tools:', error);
+        });
         
+        // 检查canvas是否被创建
+        setTimeout(() => {
+          const canvases = container.querySelectorAll('canvas');
+          console.log('Canvas elements found:', canvases.length);
+          canvases.forEach((canvas, index) => {
+            console.log(`Canvas ${index}:`, {
+              width: canvas.width,
+              height: canvas.height,
+              style: canvas.style.cssText,
+              zIndex: canvas.style.zIndex
+            });
+          });
+        }, 100);
+
       } catch (error) {
-        console.error('=== DrawBoard创建失败 ===', error);
-        initializationRef.current = false;
+        console.error('DrawBoard initialization failed:', error);
       }
     };
-    
-    // 延迟执行以确保DOM完全渲染
-    const timeoutId = setTimeout(initializeDrawBoard, 50);
-    
+
+    // 延迟初始化
+    console.log('📅 Scheduling DrawBoard initialization with 50ms delay');
+    setTimeout(initDrawBoard, 50);
+
+    // 清理函数
     return () => {
-      clearTimeout(timeoutId);
-      console.log('=== useEffect cleanup ===');
+      console.log('🧹 Cleaning up DrawBoard and monitors');
+      
+      // 停止自动监控
+      stopAutoMonitoring();
+      
+      // 停止容器监控
+      if (mutationObserverRef.current) {
+        mutationObserverRef.current.disconnect();
+        mutationObserverRef.current = null;
+        console.log('📡 Stopped container monitoring');
+      }
+      
       if (drawBoardRef.current) {
-        drawBoardRef.current.destroy();
+        console.log('🗑️ Destroying DrawBoard instance');
+        const container = containerRef.current;
+        if (container) {
+          DrawBoard.destroyInstance(container);
+        } else {
+          // 备用方案：如果容器引用丢失，直接调用实例的destroy
+          drawBoardRef.current.destroy();
+        }
         drawBoardRef.current = null;
       }
-      if (layerManagerRef.current) {
-        layerManagerRef.current.destroy();
-        layerManagerRef.current = null;
-      }
-      initializationRef.current = false;
     };
-  }, [updateState, updateLayerState, updatePerformanceData]);
-
-  // 优化：合并工具事件处理
-  const handleToolChange = useCallback((tool: ToolType) => {
-    setToolState(prev => ({ ...prev, currentTool: tool }));
-    drawBoardRef.current?.setTool(tool);
-    updateState();
-  }, [updateState]);
-
-  const handleColorChange = useCallback((color: string) => {
-    setToolState(prev => ({ ...prev, currentColor: color }));
-    drawBoardRef.current?.setColor(color);
   }, []);
 
-  const handleLineWidthChange = useCallback((width: number) => {
-    setToolState(prev => ({ ...prev, currentLineWidth: width }));
-    drawBoardRef.current?.setLineWidth(width);
-  }, []);
-
-  // 优化：合并历史操作
-  const historyHandlers = useMemo(() => ({
-    undo: () => {
-      drawBoardRef.current?.undo();
-      updateState();
-      updateLayerState();
-    },
-    redo: () => {
-      drawBoardRef.current?.redo();
-      updateState();
-      updateLayerState();
-    },
-    clear: () => {
-      drawBoardRef.current?.clear();
-      updateState();
-      updateLayerState();
-    },
-  }), [updateState, updateLayerState]);
-
-  // 优化：合并选择操作
-  const selectionHandlers = useMemo(() => ({
-    clearSelection: () => {
-      drawBoardRef.current?.clearSelection();
-      updateState();
-    },
-    deleteSelection: () => {
-      drawBoardRef.current?.deleteSelection();
-      updateState();
-    },
-    copySelection: () => {
-      const copiedActions = drawBoardRef.current?.copySelection();
-      if (copiedActions && copiedActions.length > 0) {
-        alert(`已复制 ${copiedActions.length} 个绘制对象`);
-      }
-    },
-  }), [updateState]);
-
-  // 监听窗口大小变化
+  // 更新工具设置
   useEffect(() => {
-    const handleResize = () => {
-      drawBoardRef.current?.resize();
-    };
+    if (drawBoardRef.current) {
+      // 使用异步方式设置工具，确保工具实例已加载
+      drawBoardRef.current.setToolAsync(drawData.tool).then(() => {
+        console.log(`Tool changed to: ${drawData.tool}`);
+      }).catch(error => {
+        console.error(`Failed to change tool to ${drawData.tool}:`, error);
+        // 如果异步失败，尝试同步方式（向后兼容）
+        drawBoardRef.current!.setTool(drawData.tool);
+      });
+      
+      // 颜色和线宽可以立即设置
+      drawBoardRef.current.setColor(drawData.color);
+      drawBoardRef.current.setLineWidth(drawData.lineWidth);
+    }
+  }, [drawData]);
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+  // 清空画布
+  const clearCanvas = () => {
+    if (drawBoardRef.current) {
+      drawBoardRef.current.clear();
+      console.log('DrawBoard cleared');
+    }
+  };
 
-  // 优化：合并其他处理函数
-  const otherHandlers = useMemo(() => ({
-    save: () => drawBoardRef.current?.saveAsImage('测试画板'),
-    copy: async () => {
-      const success = await drawBoardRef.current?.copyToClipboard();
-      alert(success ? '已复制到剪贴板！' : '复制失败，请重试');
-    },
-    toggleGrid: () => {
-      const newShowGrid = !toolState.showGrid;
-      setToolState(prev => ({ ...prev, showGrid: newShowGrid }));
-      drawBoardRef.current?.showGrid(newShowGrid);
-    },
-  }), [toolState.showGrid]);
+  // 重新初始化
+  const reinitDrawBoard = () => {
+    const container = containerRef.current;
+    if (!container) return;
 
-  // 图层管理处理函数 - 优化
-  const layerHandlers = useMemo(() => ({
-    create: () => {
-      if (layerManagerRef.current) {
-        try {
-          const newLayer = layerManagerRef.current.createLayer();
-          layerManagerRef.current.setActiveLayer(newLayer.id);
-          updateLayerState();
-        } catch (error) {
-          alert(`创建图层失败: ${error}`);
+    // 销毁旧实例
+    if (drawBoardRef.current) {
+      drawBoardRef.current.destroy();
+    }
+
+    // 创建新实例
+    try {
+      drawBoardRef.current = DrawBoard.getInstance(container, {
+        maxHistorySize: 100,
+        enableShortcuts: true
+      });
+      
+      console.log('DrawBoard reinitialized');
+      
+      // 重新初始化默认工具
+      drawBoardRef.current.initializeDefaultTools().then(() => {
+        console.log('Default tools reloaded');
+        
+        // 恢复设置
+        drawBoardRef.current!.setTool(drawData.tool);
+        drawBoardRef.current!.setColor(drawData.color);
+        drawBoardRef.current!.setLineWidth(drawData.lineWidth);
+        
+        console.log('Settings restored after reinit');
+      }).catch(error => {
+        console.error('Failed to initialize tools after reinit:', error);
+      });
+      
+    } catch (error) {
+      console.error('DrawBoard reinitialization failed:', error);
+    }
+  };
+
+  // 检查canvas状态
+  const checkCanvasStatus = () => {
+    const container = containerRef.current;
+    if (!container) {
+      console.log('No container found');
+      return;
+    }
+
+    const canvases = container.querySelectorAll('canvas');
+    console.log('=== Canvas Status Check ===');
+    console.log('Container:', {
+      offsetWidth: container.offsetWidth,
+      offsetHeight: container.offsetHeight,
+      children: container.children.length
+    });
+    console.log('Canvas count:', canvases.length);
+    
+    // 🔍 检查容器引用一致性
+    if (drawBoardRef.current) {
+      const canvasEngine = (drawBoardRef.current as any).canvasEngine;
+      if (canvasEngine && canvasEngine.container) {
+        const engineContainer = canvasEngine.container;
+        const isSameContainer = container === engineContainer;
+        
+        console.log('🔍 Container Reference Check:', {
+          testPageContainer: {
+            offsetWidth: container.offsetWidth,
+            offsetHeight: container.offsetHeight,
+            tagName: container.tagName,
+            id: container.id || 'no-id',
+            className: container.className
+          },
+          canvasEngineContainer: {
+            offsetWidth: engineContainer.offsetWidth,
+            offsetHeight: engineContainer.offsetHeight,
+            tagName: engineContainer.tagName,
+            id: engineContainer.id || 'no-id',
+            className: engineContainer.className
+          },
+          areSameElement: isSameContainer
+        });
+        
+        if (!isSameContainer) {
+          console.error('🚨 CRITICAL: Test page and CanvasEngine have different container references!');
+          console.log('📍 Test page container:', container);
+          console.log('📍 CanvasEngine container:', engineContainer);
+        } else {
+          console.log('✅ Container references are consistent');
         }
       }
-    },
-    delete: (layerId: string) => {
-      if (layerManagerRef.current?.deleteLayer(layerId)) {
-        updateLayerState();
+    }
+    
+    canvases.forEach((canvas, index) => {
+      console.log(`Canvas ${index}:`, {
+        width: canvas.width,
+        height: canvas.height,
+        offsetWidth: canvas.offsetWidth,
+        offsetHeight: canvas.offsetHeight,
+        style: canvas.style.cssText,
+        zIndex: canvas.style.zIndex,
+        visible: canvas.offsetParent !== null
+      });
+    });
+
+    console.log('DrawBoard instance:', drawBoardRef.current);
+    
+    // 如果canvas数量为0且DrawBoard实例存在，尝试修复
+    if (canvases.length === 0 && drawBoardRef.current) {
+      console.warn('⚠️ Canvas missing but DrawBoard exists! Attempting to fix...');
+      
+      // 尝试重新调用resize来重新创建canvas
+      try {
+        drawBoardRef.current.resize();
+        console.log('✅ Called DrawBoard.resize() to recreate canvas');
+        
+        // 检查是否修复成功
+        setTimeout(() => {
+          const newCanvases = container.querySelectorAll('canvas');
+          console.log(`🔍 After resize: found ${newCanvases.length} canvases`);
+        }, 100);
+      } catch (error) {
+        console.error('❌ Failed to resize DrawBoard:', error);
+        console.log('🔄 Will try full reinit...');
+        reinitDrawBoard();
+      }
+    }
+  };
+
+  // 检查CanvasEngine内部状态
+  const checkCanvasEngineStatus = () => {
+    const container = containerRef.current;
+    if (!container || !drawBoardRef.current) {
+      console.log('No container or DrawBoard found');
+      return;
+    }
+
+    console.log('=== CanvasEngine Internal Status ===');
+    
+    // 检查容器状态
+    console.log('Test page container:', {
+      offsetWidth: container.offsetWidth,
+      offsetHeight: container.offsetHeight,
+      children: container.children.length,
+      canvases: container.querySelectorAll('canvas').length
+    });
+
+    // 尝试获取CanvasEngine内部信息
+    try {
+      interface DrawBoardInternal {
+        canvasEngine?: {
+          container: HTMLElement;
+          layers: Map<string, unknown>;
+          createLayers?: () => void;
+        };
+      }
+      const canvasEngine = (drawBoardRef.current as unknown as DrawBoardInternal).canvasEngine;
+      if (canvasEngine) {
+        const internalContainer = canvasEngine.container;
+        console.log('CanvasEngine internal container:', {
+          offsetWidth: internalContainer?.offsetWidth || 'undefined',
+          offsetHeight: internalContainer?.offsetHeight || 'undefined',
+          children: internalContainer?.children?.length || 'undefined',
+          canvases: internalContainer?.querySelectorAll('canvas')?.length || 'undefined',
+          isConnected: internalContainer?.isConnected || 'undefined',
+          parentNode: (internalContainer?.parentNode as Element)?.tagName || 'undefined'
+        });
+        
+        // 检查layers
+        const layers = canvasEngine.layers;
+        console.log('CanvasEngine layers:', {
+          size: layers?.size || 'undefined',
+          keys: layers ? Array.from(layers.keys()) : 'undefined'
+        });
+        
+        // 手动强制重建layers
+        console.log('🔧 Attempting manual CanvasEngine fix...');
+        
+        // 确保容器引用正确
+        if (internalContainer !== container) {
+          console.warn('⚠️ Container mismatch! Fixing...');
+          canvasEngine.container = container;
+        }
+        
+        // 强制重新创建layers
+        if (canvasEngine.createLayers) {
+          canvasEngine.createLayers();
+        } else {
+          console.log('🔄 Creating layers manually...');
+          
+          // 手动创建layers
+          const layerNames = ['background', 'draw', 'interaction'];
+          const zIndexes = [0, 1, 2];
+          
+          layerNames.forEach((name, index) => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            if (ctx) {
+              canvas.style.position = 'absolute';
+              canvas.style.top = '0';
+              canvas.style.left = '0';
+              canvas.style.width = '100%';
+              canvas.style.height = '100%';
+              canvas.style.pointerEvents = name === 'interaction' ? 'auto' : 'none';
+              canvas.style.zIndex = zIndexes[index].toString();
+              canvas.style.backgroundColor = 'transparent';
+              
+              canvas.width = container.offsetWidth;
+              canvas.height = container.offsetHeight;
+              
+              container.appendChild(canvas);
+              
+              console.log(`✅ Manually created ${name} layer`);
+            }
+          });
+        }
+        
+        // 重新调用resize
+        drawBoardRef.current.resize();
+        
       } else {
-        alert('无法删除图层');
+        console.error('❌ CanvasEngine not found in DrawBoard instance');
       }
-    },
-    select: (layerId: string) => {
-      if (layerManagerRef.current?.setActiveLayer(layerId)) {
-        updateLayerState();
-      }
-    },
-    toggleVisibility: (layerId: string) => {
-      if (layerManagerRef.current) {
-        const layer = layerManagerRef.current.getLayer(layerId);
-        if (layer) {
-          layerManagerRef.current.setLayerVisible(layerId, !layer.visible);
-          updateLayerState();
-        }
-      }
-    },
-    toggleLock: (layerId: string) => {
-      if (layerManagerRef.current) {
-        const layer = layerManagerRef.current.getLayer(layerId);
-        if (layer) {
-          layerManagerRef.current.setLayerLocked(layerId, !layer.locked);
-          updateLayerState();
-        }
-      }
-    },
-    changeOpacity: (layerId: string, opacity: number) => {
-      layerManagerRef.current?.setLayerOpacity(layerId, opacity / 100);
-      updateLayerState();
-    },
-    rename: (layerId: string) => {
-      const layer = layerManagerRef.current?.getLayer(layerId);
-      if (layer) {
-        const newName = prompt('请输入新的图层名称:', layer.name);
-        if (newName && layerManagerRef.current) {
-          layerManagerRef.current.renameLayer(layerId, newName);
-          updateLayerState();
-        }
-      }
-    },
-  }), [updateLayerState]);
+    } catch (error) {
+      console.error('❌ Error checking CanvasEngine status:', error);
+    }
+  };
 
-  // 面板切换处理 - 优化
-  const togglePanel = useCallback((panelName: keyof typeof panelStates) => {
-    setPanelStates(prev => ({
-      ...prev,
-      [panelName]: !prev[panelName]
-    }));
-  }, []);
+  // 测试直接绘制到canvas
+  const testDirectDraw = () => {
+    const container = containerRef.current;
+    if (!container) return;
 
-  // 导入导出处理 - 优化
-  const dataHandlers = useMemo(() => ({
-    export: () => {
-      if (layerManagerRef.current && drawBoardRef.current) {
-        const exportData = {
-          layers: layerManagerRef.current.exportLayers(),
-          settings: {
-            ...toolState,
-            timestamp: Date.now()
-          }
+    const canvases = container.querySelectorAll('canvas');
+    console.log('=== 测试直接绘制 ===');
+    console.log('找到canvas数量:', canvases.length);
+    
+    canvases.forEach((canvas, index) => {
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        console.log(`在Canvas ${index} 上绘制测试图形`);
+        
+        // 清除之前的测试内容
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 绘制测试图形
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(50 + index * 60, 50, 20, 0, 2 * Math.PI);
+        ctx.stroke();
+        
+        // 绘制文字标识
+        ctx.fillStyle = '#000000';
+        ctx.font = '12px Arial';
+        ctx.fillText(`Canvas ${index}`, 30 + index * 60, 90);
+      }
+    });
+  };
+
+  // 测试绘制流程
+  const testDrawingFlow = () => {
+    const container = containerRef.current;
+    if (!container || !drawBoardRef.current) {
+      console.log('No container or DrawBoard found');
+      return;
+    }
+
+    console.log('=== Testing Drawing Flow ===');
+    
+    // 1. 检查当前工具
+    const currentTool = drawBoardRef.current.getCurrentTool();
+    console.log('Current tool:', currentTool);
+    
+    // 2. 检查工具实例
+    try {
+      const toolManager = (drawBoardRef.current as unknown as { toolManager?: { getCurrentToolInstance: () => any } }).toolManager;
+      if (toolManager) {
+        const toolInstance = toolManager.getCurrentToolInstance();
+        console.log('Tool instance:', {
+          exists: !!toolInstance,
+          name: toolInstance?.name,
+          type: toolInstance?.type,
+          drawMethod: typeof toolInstance?.draw
+        });
+        
+        // 3. 手动测试工具绘制
+        if (toolInstance && toolInstance.draw) {
+          console.log('🎨 Testing manual draw...');
+          
+          const canvases = container.querySelectorAll('canvas');
+          canvases.forEach((canvas, index) => {
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              // 创建测试绘制动作
+              const testAction = {
+                id: 'test-' + Date.now(),
+                type: currentTool,
+                points: [
+                  { x: 100, y: 100 },
+                  { x: 150, y: 150 }
+                ],
+                context: {
+                  strokeStyle: '#ff0000',
+                  lineWidth: 3,
+                  fillStyle: '#ff0000'
+                },
+                timestamp: Date.now()
+              };
+              
+              console.log(`Testing draw on canvas ${index}:`, testAction);
+              
+              try {
+                toolInstance.draw(ctx, testAction);
+                console.log(`✅ Draw completed on canvas ${index}`);
+              } catch (error) {
+                console.error(`❌ Draw failed on canvas ${index}:`, error);
+              }
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error checking tool instance:', error);
+    }
+    
+    // 4. 检查历史记录
+    try {
+      const historyManager = (drawBoardRef.current as unknown as { historyManager?: any }).historyManager;
+      if (historyManager) {
+        const actions = historyManager.getAllActions?.() || [];
+        console.log('History actions:', {
+          count: actions.length,
+          lastAction: actions[actions.length - 1]
+        });
+      }
+    } catch (error) {
+      console.error('Error checking history:', error);
+    }
+    
+    // 5. 模拟绘制事件
+    console.log('🖱️ Simulating draw events...');
+    const interactionCanvas = container.querySelector('canvas[style*="pointer-events: auto"]');
+    if (interactionCanvas) {
+      // 模拟鼠标按下
+      const mouseDownEvent = new MouseEvent('mousedown', {
+        clientX: interactionCanvas.getBoundingClientRect().left + 200,
+        clientY: interactionCanvas.getBoundingClientRect().top + 200,
+        button: 0,
+        buttons: 1
+      });
+      
+      // 模拟鼠标移动
+      const mouseMoveEvent = new MouseEvent('mousemove', {
+        clientX: interactionCanvas.getBoundingClientRect().left + 250,
+        clientY: interactionCanvas.getBoundingClientRect().top + 250,
+        button: 0,
+        buttons: 1
+      });
+      
+      // 模拟鼠标释放
+      const mouseUpEvent = new MouseEvent('mouseup', {
+        clientX: interactionCanvas.getBoundingClientRect().left + 250,
+        clientY: interactionCanvas.getBoundingClientRect().top + 250,
+        button: 0,
+        buttons: 0
+      });
+      
+      console.log('Dispatching simulated mouse events...');
+      interactionCanvas.dispatchEvent(mouseDownEvent);
+      setTimeout(() => {
+        interactionCanvas.dispatchEvent(mouseMoveEvent);
+        setTimeout(() => {
+          interactionCanvas.dispatchEvent(mouseUpEvent);
+          console.log('✅ Simulated draw events completed');
+        }, 50);
+      }, 50);
+    } else {
+      console.error('❌ No interaction canvas found');
+    }
+  };
+
+  // 检查DrawingHandler状态
+  const checkDrawingHandlerStatus = () => {
+    const container = containerRef.current;
+    if (!container || !drawBoardRef.current) {
+      console.log('No container or DrawBoard found');
+      return;
+    }
+
+    console.log('=== DrawingHandler Status ===');
+    
+    try {
+      const drawingHandler = (drawBoardRef.current as unknown as { drawingHandler?: any }).drawingHandler;
+      if (drawingHandler) {
+        console.log('DrawingHandler exists:', !!drawingHandler);
+        
+        // 检查是否有getIsDrawing方法
+        console.log('DrawingHandler methods:', {
+          getIsDrawing: typeof drawingHandler.getIsDrawing,
+          handleDrawStart: typeof drawingHandler.handleDrawStart,
+          handleDrawMove: typeof drawingHandler.handleDrawMove,
+          handleDrawEnd: typeof drawingHandler.handleDrawEnd,
+          forceRedraw: typeof drawingHandler.forceRedraw
+        });
+        
+        // 检查内部状态
+        if (drawingHandler.getIsDrawing) {
+          console.log('Is currently drawing:', drawingHandler.getIsDrawing());
+        }
+        
+        // 获取所有属性（调试用）
+        const props = Object.getOwnPropertyNames(drawingHandler);
+        console.log('DrawingHandler properties:', props);
+        
+      } else {
+        console.error('❌ DrawingHandler not found');
+      }
+      
+      // 检查事件管理器
+      const eventManager = (drawBoardRef.current as unknown as { eventManager?: any }).eventManager;
+      if (eventManager) {
+        console.log('EventManager exists:', !!eventManager);
+        console.log('EventManager handlers:', eventManager.handlers?.size || 'undefined');
+      } else {
+        console.error('❌ EventManager not found');
+      }
+      
+    } catch (error) {
+      console.error('Error checking DrawingHandler:', error);
+    }
+  };
+
+  // 手动触发绘制流程
+  const manualDrawFlow = () => {
+    const container = containerRef.current;
+    if (!container || !drawBoardRef.current) {
+      console.log('No container or DrawBoard found');
+      return;
+    }
+
+    console.log('=== Manual Draw Flow ===');
+    
+    try {
+      const drawingHandler = (drawBoardRef.current as unknown as { drawingHandler?: any }).drawingHandler;
+      if (drawingHandler) {
+        
+        // 手动创建绘制事件
+        const startEvent = {
+          type: 'mousedown' as const,
+          point: { x: 300, y: 300 },
+          timestamp: Date.now()
         };
         
-        const dataStr = JSON.stringify(exportData, null, 2);
-        const dataBlob = new Blob([dataStr], { type: 'application/json' });
-        const url = URL.createObjectURL(dataBlob);
+        const moveEvent = {
+          type: 'mousemove' as const,
+          point: { x: 350, y: 350 },
+          timestamp: Date.now()
+        };
         
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `drawboard-export-${new Date().toISOString().slice(0, 10)}.json`;
-        link.click();
+        const endEvent = {
+          type: 'mouseup' as const,
+          point: { x: 350, y: 350 },
+          timestamp: Date.now()
+        };
         
-        URL.revokeObjectURL(url);
+        console.log('📝 Manually calling DrawingHandler methods...');
+        
+        // 手动调用绘制处理器方法
+        console.log('Calling handleDrawStart...');
+        drawingHandler.handleDrawStart(startEvent);
+        
+        console.log('Calling handleDrawMove...');
+        drawingHandler.handleDrawMove(moveEvent);
+        
+        console.log('Calling handleDrawEnd...');
+        drawingHandler.handleDrawEnd(endEvent);
+        
+        console.log('✅ Manual draw flow completed');
+        
+        // 检查历史记录是否更新
+        setTimeout(() => {
+          const historyManager = (drawBoardRef.current as unknown as { historyManager?: any }).historyManager;
+          if (historyManager) {
+            const actions = historyManager.getAllActions?.() || [];
+            console.log('History after manual draw:', {
+              count: actions.length,
+              lastAction: actions[actions.length - 1]
+            });
+          }
+        }, 100);
+        
+      } else {
+        console.error('❌ DrawingHandler not found');
       }
-    },
-    import: (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      if (!file) return;
+      
+    } catch (error) {
+      console.error('Error in manual draw flow:', error);
+    }
+  };
 
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const data = JSON.parse(e.target?.result as string);
-          
-          if (layerManagerRef.current && data.layers) {
-            layerManagerRef.current.importLayers(data.layers);
-            updateLayerState();
-          }
-          
-          if (data.settings) {
-            setToolState(prev => ({
-              ...prev,
-              ...data.settings
-            }));
-          }
-          
-          alert('数据导入成功！');
-        } catch (error) {
-          alert('导入失败：文件格式错误');
+  // 调试事件传递链
+  const debugEventChain = () => {
+    const container = containerRef.current;
+    if (!container || !drawBoardRef.current) {
+      console.log('No container or DrawBoard found');
+      return;
+    }
+
+    console.log('=== Event Chain Debug ===');
+    
+    try {
+      // 1. 检查DrawBoard的事件处理方法
+      const drawBoard = drawBoardRef.current as unknown as {
+        handleDrawStart?: any;
+        handleDrawMove?: any; 
+        handleDrawEnd?: any;
+        eventManager?: any;
+      };
+      
+      console.log('DrawBoard event handlers:', {
+        handleDrawStart: typeof drawBoard.handleDrawStart,
+        handleDrawMove: typeof drawBoard.handleDrawMove,
+        handleDrawEnd: typeof drawBoard.handleDrawEnd
+      });
+      
+      // 2. 检查EventManager的事件绑定
+      const eventManager = drawBoard.eventManager;
+      if (eventManager && eventManager.handlers) {
+        console.log('EventManager registered events:', Array.from(eventManager.handlers.keys()));
+        
+        // 检查每个事件的处理器数量
+        eventManager.handlers.forEach((handlers: any[], eventType: string) => {
+          console.log(`Event "${eventType}" has ${handlers.length} handlers`);
+        });
+      }
+      
+      // 3. 临时替换DrawBoard的事件处理方法来追踪调用
+      const originalHandleDrawStart = drawBoard.handleDrawStart;
+      const originalHandleDrawMove = drawBoard.handleDrawMove;
+      const originalHandleDrawEnd = drawBoard.handleDrawEnd;
+      
+      drawBoard.handleDrawStart = function(event: any) {
+        console.log('🎯 DrawBoard.handleDrawStart called with:', event);
+        if (originalHandleDrawStart) {
+          return originalHandleDrawStart.call(this, event);
         }
       };
       
-      reader.readAsText(file);
-      event.target.value = '';
-    },
-  }), [toolState, updateLayerState]);
+      drawBoard.handleDrawMove = function(event: any) {
+        console.log('🎯 DrawBoard.handleDrawMove called with:', event);
+        if (originalHandleDrawMove) {
+          return originalHandleDrawMove.call(this, event);
+        }
+      };
+      
+      drawBoard.handleDrawEnd = function(event: any) {
+        console.log('🎯 DrawBoard.handleDrawEnd called with:', event);
+        if (originalHandleDrawEnd) {
+          return originalHandleDrawEnd.call(this, event);
+        }
+      };
+      
+      console.log('✅ Event handlers patched for debugging');
+      console.log('👆 Now try drawing on the canvas and watch for 🎯 messages');
+      
+      // 5秒后恢复原始处理器
+      setTimeout(() => {
+        drawBoard.handleDrawStart = originalHandleDrawStart;
+        drawBoard.handleDrawMove = originalHandleDrawMove;
+        drawBoard.handleDrawEnd = originalHandleDrawEnd;
+        console.log('🔄 Original event handlers restored');
+      }, 5000);
+      
+    } catch (error) {
+      console.error('Error debugging event chain:', error);
+    }
+  };
 
-  console.log('Test component rendering JSX...');
-  
-  return (
-    <div className="test-page">
-      {/* 功能说明面板 - 优化后的版本 */}
-      <div className={`feature-info ${panelStates.showInfo ? 'expanded' : 'collapsed'}`}>
-        <div className="info-toggle" onClick={() => togglePanel('showInfo')}>
-          <h3>🧪 DrawBoard 完整功能测试 {panelStates.showInfo ? '📖' : '📄'}</h3>
-          <button className="toggle-btn">
-            {panelStates.showInfo ? '收起' : '展开'}
-          </button>
+  // 测试EventManager直接触发
+  const testEventManagerDirect = () => {
+    const container = containerRef.current;
+    if (!container || !drawBoardRef.current) {
+      console.log('No container or DrawBoard found');
+      return;
+    }
+
+    console.log('=== Testing EventManager Direct ===');
+    
+    try {
+      const eventManager = (drawBoardRef.current as unknown as { eventManager?: any }).eventManager;
+      if (eventManager && eventManager.emit) {
+        
+        // 创建测试事件
+        const testEvent = {
+          type: 'mousedown' as const,
+          point: { x: 400, y: 400 },
+          timestamp: Date.now()
+        };
+        
+        console.log('📡 Directly calling eventManager.emit...');
+        console.log('Test event:', testEvent);
+        
+        // 直接调用EventManager的emit方法
+        eventManager.emit('mousedown', testEvent);
+        
+        // 测试完整序列
+        setTimeout(() => {
+          const moveEvent = { ...testEvent, type: 'mousemove' as const, point: { x: 450, y: 450 } };
+          eventManager.emit('mousemove', moveEvent);
+          
+          setTimeout(() => {
+            const endEvent = { ...testEvent, type: 'mouseup' as const, point: { x: 450, y: 450 } };
+            eventManager.emit('mouseup', endEvent);
+            
+            // 检查历史记录
+            setTimeout(() => {
+              const historyManager = (drawBoardRef.current as unknown as { historyManager?: any }).historyManager;
+              if (historyManager) {
+                const actions = historyManager.getAllActions?.() || [];
+                console.log('History after EventManager direct call:', {
+                  count: actions.length,
+                  lastAction: actions[actions.length - 1]
+                });
+              }
+            }, 100);
+          }, 50);
+        }, 50);
+        
+      } else {
+        console.error('❌ EventManager.emit not found');
+      }
+      
+    } catch (error) {
+      console.error('Error testing EventManager direct:', error);
+    }
+  };
+
+  // 检查EventManager的canvas绑定
+  const checkEventManagerBinding = () => {
+    const container = containerRef.current;
+    if (!container || !drawBoardRef.current) {
+      console.log('No container or DrawBoard found');
+      return;
+    }
+
+    console.log('=== EventManager Canvas Binding ===');
+    
+    try {
+      const eventManager = (drawBoardRef.current as unknown as { eventManager?: any }).eventManager;
+      if (eventManager) {
+        console.log('EventManager exists:', !!eventManager);
+        
+        // 获取EventManager绑定的canvas
+        const boundCanvas = eventManager.canvas;
+        console.log('EventManager bound canvas:', {
+          exists: !!boundCanvas,
+          width: boundCanvas?.width || 'undefined',
+          height: boundCanvas?.height || 'undefined',
+          style: boundCanvas?.style?.cssText || 'undefined',
+          id: boundCanvas?.id || 'undefined',
+          className: boundCanvas?.className || 'undefined'
+        });
+        
+        // 获取容器中的所有canvas
+        const allCanvases = Array.from(container.querySelectorAll('canvas'));
+        console.log(`Container has ${allCanvases.length} canvas elements:`);
+        
+        allCanvases.forEach((canvas, index) => {
+          const isEventManagerCanvas = canvas === boundCanvas;
+          const hasPointerEvents = canvas.style.pointerEvents === 'auto';
+          
+          console.log(`Canvas ${index}:`, {
+            isEventManagerCanvas,
+            hasPointerEvents,
+            width: canvas.width,
+            height: canvas.height,
+            style: canvas.style.cssText.substring(0, 100) + '...',
+            zIndex: canvas.style.zIndex,
+            isConnected: canvas.isConnected
+          });
+          
+          if (isEventManagerCanvas) {
+            console.log(`🎯 EventManager is bound to Canvas ${index}`);
+          }
+          if (hasPointerEvents) {
+            console.log(`👆 Canvas ${index} has pointer-events: auto`);
+          }
+        });
+        
+        // 检查是否是同一个canvas
+        const interactionCanvas = container.querySelector('canvas[style*="pointer-events: auto"]');
+        if (boundCanvas && interactionCanvas) {
+          const isSameCanvas = boundCanvas === interactionCanvas;
+          console.log('Canvas binding match:', {
+            eventManagerCanvas: !!boundCanvas,
+            interactionCanvas: !!interactionCanvas,
+            areSame: isSameCanvas
+          });
+          
+          if (!isSameCanvas) {
+            console.warn('⚠️ PROBLEM FOUND: EventManager bound to wrong canvas!');
+            console.log('🔧 Attempting to fix canvas binding...');
+            
+            // 尝试修复：重新绑定EventManager到正确的canvas
+            try {
+              // 解绑旧的事件监听器
+              if (eventManager.boundHandlers) {
+                boundCanvas?.removeEventListener('mousedown', eventManager.boundHandlers.mouseDown);
+                boundCanvas?.removeEventListener('mousemove', eventManager.boundHandlers.mouseMove);
+                boundCanvas?.removeEventListener('mouseup', eventManager.boundHandlers.mouseUp);
+                boundCanvas?.removeEventListener('touchstart', eventManager.boundHandlers.touchStart);
+                boundCanvas?.removeEventListener('touchmove', eventManager.boundHandlers.touchMove);
+                boundCanvas?.removeEventListener('touchend', eventManager.boundHandlers.touchEnd);
+                console.log('🗑️ Removed old event listeners');
+              }
+              
+              // 更新EventManager的canvas引用
+              eventManager.canvas = interactionCanvas;
+              
+              // 重新绑定事件监听器
+              if (eventManager.boundHandlers) {
+                interactionCanvas.addEventListener('mousedown', eventManager.boundHandlers.mouseDown);
+                interactionCanvas.addEventListener('mousemove', eventManager.boundHandlers.mouseMove);
+                interactionCanvas.addEventListener('mouseup', eventManager.boundHandlers.mouseUp);
+                interactionCanvas.addEventListener('touchstart', eventManager.boundHandlers.touchStart, { passive: false });
+                interactionCanvas.addEventListener('touchmove', eventManager.boundHandlers.touchMove, { passive: false });
+                interactionCanvas.addEventListener('touchend', eventManager.boundHandlers.touchEnd, { passive: false });
+                console.log('✅ Rebound event listeners to correct canvas');
+              }
+              
+            } catch (error) {
+              console.error('❌ Failed to rebind EventManager:', error);
+            }
+          } else {
+            console.log('✅ EventManager correctly bound to interaction canvas');
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error checking EventManager binding:', error);
+    }
+  };
+
+  // 测试EventManager的DOM事件监听器
+  const testEventManagerListeners = () => {
+    const container = containerRef.current;
+    if (!container || !drawBoardRef.current) {
+      console.log('No container or DrawBoard found');
+      return;
+    }
+
+    console.log('=== Testing EventManager DOM Listeners ===');
+    
+    try {
+      const eventManager = (drawBoardRef.current as unknown as { eventManager?: any }).eventManager;
+      if (eventManager && eventManager.canvas) {
+        const canvas = eventManager.canvas;
+        
+        console.log('EventManager canvas:', canvas);
+        
+        // 临时替换EventManager的处理函数来观察是否被调用
+        const originalHandlers = {
+          mouseDown: eventManager.boundHandlers?.mouseDown,
+          mouseMove: eventManager.boundHandlers?.mouseMove,
+          mouseUp: eventManager.boundHandlers?.mouseUp
+        };
+        
+        if (eventManager.boundHandlers) {
+          // 包装EventManager的处理函数
+          eventManager.boundHandlers.mouseDown = function(e: MouseEvent) {
+            console.log('🔥 EventManager.mouseDown triggered!', {
+              offsetX: e.offsetX,
+              offsetY: e.offsetY,
+              target: e.target,
+              currentTarget: e.currentTarget
+            });
+            if (originalHandlers.mouseDown) {
+              return originalHandlers.mouseDown.call(this, e);
+            }
+          };
+          
+          eventManager.boundHandlers.mouseMove = function(e: MouseEvent) {
+            console.log('🔥 EventManager.mouseMove triggered!', {
+              offsetX: e.offsetX,
+              offsetY: e.offsetY,
+              buttons: e.buttons
+            });
+            if (originalHandlers.mouseMove) {
+              return originalHandlers.mouseMove.call(this, e);
+            }
+          };
+          
+          eventManager.boundHandlers.mouseUp = function(e: MouseEvent) {
+            console.log('🔥 EventManager.mouseUp triggered!', {
+              offsetX: e.offsetX,
+              offsetY: e.offsetY
+            });
+            if (originalHandlers.mouseUp) {
+              return originalHandlers.mouseUp.call(this, e);
+            }
+          };
+          
+          console.log('✅ EventManager handlers patched for debugging');
+          console.log('👆 Now try drawing on the canvas and watch for 🔥 messages');
+          
+          // 5秒后恢复
+          setTimeout(() => {
+            if (eventManager.boundHandlers) {
+              eventManager.boundHandlers.mouseDown = originalHandlers.mouseDown;
+              eventManager.boundHandlers.mouseMove = originalHandlers.mouseMove;
+              eventManager.boundHandlers.mouseUp = originalHandlers.mouseUp;
+            }
+            console.log('🔄 EventManager handlers restored');
+          }, 5000);
+          
+        } else {
+          console.error('❌ EventManager.boundHandlers not found');
+          
+          // 尝试手动检查监听器
+          console.log('🔍 Checking manually attached listeners...');
+          
+          // 测试是否有监听器
+          const testHandler = (e: MouseEvent) => {
+            console.log('🧪 Manual test handler triggered:', {
+              type: e.type,
+              offsetX: e.offsetX,
+              offsetY: e.offsetY
+            });
+          };
+          
+          // 临时添加测试监听器
+          canvas.addEventListener('mousedown', testHandler);
+          canvas.addEventListener('mousemove', testHandler);
+          canvas.addEventListener('mouseup', testHandler);
+          
+          console.log('✅ Manual test handlers added');
+          console.log('👆 Try drawing to see if ANY listeners work');
+          
+          // 5秒后移除
+          setTimeout(() => {
+            canvas.removeEventListener('mousedown', testHandler);
+            canvas.removeEventListener('mousemove', testHandler); 
+            canvas.removeEventListener('mouseup', testHandler);
+            console.log('🔄 Manual test handlers removed');
+          }, 5000);
+        }
+        
+        // 检查canvas的事件监听器（如果支持）
+        if ((canvas as any).getEventListeners) {
+          console.log('Canvas event listeners:', (canvas as any).getEventListeners());
+        }
+        
+        // 检查是否有其他代码在干扰
+        console.log('Canvas properties:', {
+          style: canvas.style.cssText,
+          parentElement: canvas.parentElement?.tagName,
+          isConnected: canvas.isConnected,
+          tabIndex: canvas.tabIndex
+        });
+        
+      } else {
+        console.error('❌ EventManager or canvas not found');
+      }
+      
+    } catch (error) {
+      console.error('Error testing EventManager listeners:', error);
+    }
+  };
+
+  // 检查DOM事件监听器冲突
+  const checkEventListenerConflicts = () => {
+    const container = containerRef.current;
+    if (!container || !drawBoardRef.current) {
+      console.log('No container or DrawBoard found');
+      return;
+    }
+
+    console.log('=== Checking Event Listener Conflicts ===');
+    
+    try {
+      const eventManager = (drawBoardRef.current as unknown as { eventManager?: any }).eventManager;
+      const interactionCanvas = container.querySelector('canvas[style*="pointer-events: auto"]');
+      
+      if (eventManager && interactionCanvas) {
+        console.log('Found EventManager and interaction canvas');
+        
+        // 临时移除测试页面的事件监听器
+        const testPageListeners: any[] = [];
+        
+        // 获取当前绑定的所有监听器的引用（如果可以的话）
+        console.log('🧹 Temporarily removing test page listeners...');
+        
+        // 创建一个完全新的监听器来测试
+        let eventTriggered = false;
+        const cleanTestListener = (e: MouseEvent) => {
+          console.log('🎯 CLEAN test listener triggered:', {
+            type: e.type,
+            offsetX: e.offsetX,
+            offsetY: e.offsetY,
+            timestamp: Date.now()
+          });
+          eventTriggered = true;
+        };
+        
+        // 添加新的干净监听器
+        interactionCanvas.addEventListener('mousedown', cleanTestListener);
+        
+        console.log('✅ Clean test listener added');
+        console.log('👆 Click on the canvas to test if DOM events work at all');
+        
+        // 检查EventManager的绑定情况
+        setTimeout(() => {
+          if (eventTriggered) {
+            console.log('✅ DOM events are working - problem is with EventManager binding');
+            
+            // 重新检查EventManager的绑定
+            console.log('🔧 Re-checking EventManager binding...');
+            const boundCanvas = eventManager.canvas;
+            const isSameCanvas = boundCanvas === interactionCanvas;
+            
+            console.log('Canvas comparison:', {
+              eventManagerCanvas: boundCanvas,
+              interactionCanvas: interactionCanvas,
+              areSame: isSameCanvas,
+              boundCanvasExists: !!boundCanvas,
+              boundCanvasConnected: boundCanvas?.isConnected,
+              boundCanvasParent: boundCanvas?.parentElement?.tagName
+            });
+            
+            if (!isSameCanvas) {
+              console.log('🔴 FOUND THE PROBLEM: EventManager bound to wrong canvas!');
+              console.log('🔧 Fixing EventManager canvas binding...');
+              
+              // 强制重新绑定EventManager
+              try {
+                // 销毁旧的EventManager
+                if (eventManager.destroy) {
+                  eventManager.destroy();
+                }
+                
+                // 创建新的EventManager并绑定到正确的canvas
+                const EventManagerClass = eventManager.constructor;
+                const newEventManager = new EventManagerClass(interactionCanvas as HTMLCanvasElement);
+                
+                // 替换DrawBoard中的EventManager引用
+                (drawBoardRef.current as any).eventManager = newEventManager;
+                
+                // 重新绑定DrawBoard的事件处理器
+                const drawBoard = drawBoardRef.current as any;
+                if (drawBoard.bindEvents) {
+                  drawBoard.bindEvents();
+                }
+                
+                console.log('✅ EventManager rebound to correct canvas');
+                
+              } catch (error) {
+                console.error('❌ Failed to rebind EventManager:', error);
+              }
+            }
+            
+          } else {
+            console.log('❌ DOM events not working - deeper canvas problem');
+          }
+          
+          // 清理测试监听器
+          interactionCanvas.removeEventListener('mousedown', cleanTestListener);
+          console.log('🧹 Clean test listener removed');
+          
+        }, 3000);
+        
+      } else {
+        console.error('❌ EventManager or interaction canvas not found');
+      }
+      
+    } catch (error) {
+      console.error('Error checking event listener conflicts:', error);
+    }
+  };
+
+  // 完全重建EventManager绑定
+  const rebuildEventManagerBinding = () => {
+    const container = containerRef.current;
+    if (!container || !drawBoardRef.current) {
+      console.log('No container or DrawBoard found');
+      return;
+    }
+
+    console.log('=== Rebuilding EventManager Binding ===');
+    
+    try {
+      const drawBoard = drawBoardRef.current as any;
+      const interactionCanvas = container.querySelector('canvas[style*="pointer-events: auto"]');
+      
+      if (!interactionCanvas) {
+        console.error('❌ No interaction canvas found');
+        return;
+      }
+      
+      console.log('🗑️ Destroying old EventManager...');
+      
+      // 销毁旧的EventManager
+      if (drawBoard.eventManager && drawBoard.eventManager.destroy) {
+        drawBoard.eventManager.destroy();
+      }
+      
+      console.log('🔧 Creating new EventManager...');
+      
+      // 动态导入EventManager类
+      import('@/libs/drawBoard/events/EventManager').then(({ EventManager }) => {
+        
+        // 创建新的EventManager实例
+        const newEventManager = new EventManager(interactionCanvas as HTMLCanvasElement);
+        
+        // 替换DrawBoard中的EventManager
+        drawBoard.eventManager = newEventManager;
+        
+        console.log('✅ New EventManager created');
+        
+        // 重新绑定DrawBoard的事件处理器
+        console.log('🔗 Rebinding DrawBoard event handlers...');
+        
+        const handleDrawStart = drawBoard.handleDrawStart?.bind(drawBoard);
+        const handleDrawMove = drawBoard.handleDrawMove?.bind(drawBoard);
+        const handleDrawEnd = drawBoard.handleDrawEnd?.bind(drawBoard);
+        
+        if (handleDrawStart && handleDrawMove && handleDrawEnd) {
+          newEventManager.on('mousedown', handleDrawStart);
+          newEventManager.on('mousemove', handleDrawMove);
+          newEventManager.on('mouseup', handleDrawEnd);
+          newEventManager.on('touchstart', handleDrawStart);
+          newEventManager.on('touchmove', handleDrawMove);
+          newEventManager.on('touchend', handleDrawEnd);
+          
+          console.log('✅ Event handlers rebound to new EventManager');
+          console.log('👆 Try drawing now - it should work!');
+          
+        } else {
+          console.error('❌ DrawBoard event handlers not found');
+        }
+        
+      }).catch(error => {
+        console.error('❌ Failed to import EventManager:', error);
+      });
+      
+    } catch (error) {
+      console.error('Error rebuilding EventManager binding:', error);
+    }
+  };
+
+  // 测试功能组件
+  const TestFeatures = () => (
+    <div className="test-features">
+      <div className="feature-section">
+        <h3>🎨 绘图测试 (DrawBoard + Div)</h3>
+        <div className="canvas-controls">
+          <div className="control-group">
+            <label>颜色:</label>
+            <input
+              type="color"
+              value={drawData.color}
+              onChange={(e) => setDrawData(prev => ({ ...prev, color: e.target.value }))}
+            />
+          </div>
+          <div className="control-group">
+            <label>画笔大小:</label>
+            <input
+              type="range"
+              min="1"
+              max="20"
+              value={drawData.lineWidth}
+              onChange={(e) => setDrawData(prev => ({ ...prev, lineWidth: parseInt(e.target.value) }))}
+            />
+            <span>{drawData.lineWidth}px</span>
+          </div>
+          <div className="control-group">
+            <label>工具:</label>
+            <select
+              value={drawData.tool}
+              onChange={(e) => setDrawData(prev => ({ ...prev, tool: e.target.value as ToolType }))}
+            >
+              <option value="pen">画笔</option>
+              <option value="eraser">橡皮擦</option>
+              <option value="rect">矩形</option>
+              <option value="circle">圆形</option>
+              <option value="line">直线</option>
+            </select>
+          </div>
+          <button onClick={clearCanvas} className="clear-btn">清空画布</button>
+          <button onClick={reinitDrawBoard} className="reinit-btn">重新初始化</button>
+          <button onClick={checkCanvasStatus} className="debug-btn">检查Canvas状态</button>
+          <button onClick={testDirectDraw} className="debug-btn">测试直接绘制</button>
+          <button onClick={testDrawingFlow} className="debug-btn">测试绘制流程</button>
+          <button onClick={checkCanvasEngineStatus} className="debug-btn">检查引擎状态</button>
+          <button onClick={checkDrawingHandlerStatus} className="debug-btn">检查DrawingHandler状态</button>
+          <button onClick={manualDrawFlow} className="debug-btn">手动触发绘制流程</button>
+          <button onClick={debugEventChain} className="debug-btn">调试事件传递链</button>
+          <button onClick={testEventManagerDirect} className="debug-btn">测试EventManager直接触发</button>
+          <button onClick={checkEventManagerBinding} className="debug-btn">检查EventManager绑定</button>
+          <button onClick={testEventManagerListeners} className="debug-btn">测试EventManager DOM监听器</button>
+          <button onClick={checkEventListenerConflicts} className="debug-btn">检查DOM事件监听器冲突</button>
+          <button onClick={rebuildEventManagerBinding} className="debug-btn">完全重建EventManager绑定</button>
+          <button onClick={stopAutoMonitoring} className="debug-btn emergency-stop">🚨 停止自动监控</button>
         </div>
         
-        {panelStates.showInfo && (
-          <div className="info-content">
-            <p>这里集成了所有绘图功能，可以体验完整的专业绘图体验</p>
-            
-            <div className="feature-list">
-              <div className="feature-category">
-                <h4>🎨 绘图工具</h4>
-                <ul>
-                  <li>✏️ 画笔工具 - 支持压感和运笔效果</li>
-                  <li>🔲 矩形工具 - 绘制矩形</li>
-                  <li>⭕ 圆形工具 - 绘制圆形</li>
-                  <li>📏 直线工具 - 支持箭头和虚线</li>
-                  <li>🔷 多边形工具 - 三角形到多边形</li>
-                  <li>📝 文字工具 - 添加文字</li>
-                  <li>🧽 橡皮擦 - 擦除内容</li>
-                  <li>🎯 选择工具 - 选择和变换</li>
-                </ul>
-              </div>
-              
-              <div className="feature-category">
-                <h4>⚡ 高级功能</h4>
-                <ul>
-                  <li>📚 图层管理 - 多图层支持</li>
-                  <li>🎨 笔触预设 - 钢笔、毛笔等</li>
-                  <li>✏️ 运笔效果 - 压感、速度控制</li>
-                  <li>🔷 几何设置 - 箭头、填充模式</li>
-                  <li>⚡ 性能监控 - 实时性能数据</li>
-                  <li>💾 导入导出 - 保存和加载数据</li>
-                </ul>
-              </div>
-              
-              <div className="feature-category">
-                <h4>🔧 快捷键</h4>
-                <ul>
-                  <li>P - 画笔工具</li>
-                  <li>R - 矩形工具</li>
-                  <li>C - 圆形工具</li>
-                  <li>L - 直线工具</li>
-                  <li>S - 选择工具</li>
-                  <li>E - 橡皮擦</li>
-                  <li>Ctrl+Z - 撤销</li>
-                  <li>Ctrl+Y - 重做</li>
-                </ul>
-              </div>
-            </div>
+        <div className="canvas-container">
+          {/* DrawBoard容器 - 使用div */}
+          <div
+            ref={containerRef}
+            className="drawing-container"
+          />
+          
+          {/* 调试信息 */}
+          <div className="canvas-debug">
+            <div>绘图方式: 🎨 DrawBoard + Div</div>
+            <div>DrawBoard状态: {drawBoardRef.current ? '✅ 已初始化' : '❌ 未初始化'}</div>
+            <div>容器尺寸: {containerRef.current ? `${containerRef.current.offsetWidth}x${containerRef.current.offsetHeight}` : '未知'}</div>
+            <div>Canvas数量: {containerRef.current ? containerRef.current.querySelectorAll('canvas').length : 0}</div>
+            <div>当前工具: {drawData.tool}</div>
+            <div>颜色: <span style={{color: drawData.color}}>●</span> {drawData.color}</div>
+            <div>画笔大小: {drawData.lineWidth}px</div>
           </div>
-        )}
+        </div>
       </div>
 
-      <div className="main-content">
-        {/* 桌面端工具栏 */}
-        {!isMobile && (
-          <ToolPanel
-            currentTool={toolState.currentTool}
-            currentColor={toolState.currentColor}
-            currentLineWidth={toolState.currentLineWidth}
-            canUndo={boardState.canUndo}
-            canRedo={boardState.canRedo}
-            historyCount={boardState.historyCount}
-            hasSelection={boardState.hasSelection}
-            onToolChange={handleToolChange}
-            onColorChange={handleColorChange}
-            onLineWidthChange={handleLineWidthChange}
-            onUndo={historyHandlers.undo}
-            onRedo={historyHandlers.redo}
-            onClear={historyHandlers.clear}
-            onClearSelection={selectionHandlers.clearSelection}
-            onDeleteSelection={selectionHandlers.deleteSelection}
-            onCopySelection={selectionHandlers.copySelection}
-            onSave={otherHandlers.save}
-            onCopy={otherHandlers.copy}
-          />
-        )}
-        
-        <div className="board-container">
-          <div className="board-controls">
-            <button 
-              onClick={() => togglePanel('showInfo')}
-              className={`info-toggle-btn ${panelStates.showInfo ? 'active' : ''}`}
-              title="切换功能说明"
-            >
-              📖 {!isMobile && '说明'}
-            </button>
+      <div className="feature-section">
+        <h3>🧪 其他测试功能</h3>
+        <div className="test-buttons">
+          <button onClick={() => alert('弹窗测试成功!')}>弹窗测试</button>
+          <button onClick={() => console.log('控制台测试')}>控制台测试</button>
+          <button onClick={() => window.open('https://www.google.com', '_blank')}>打开链接测试</button>
+        </div>
+      </div>
 
-            {isMobile && (
-              <button 
-                onClick={() => setShowToolPanel(!showToolPanel)}
-                className="mobile-tool-toggle"
-                title="切换工具栏"
-              >
-                {showToolPanel ? '✕' : '⚙️'}
-              </button>
-            )}
-            
-            <button 
-              onClick={otherHandlers.toggleGrid}
-              className={`grid-toggle ${toolState.showGrid ? 'active' : ''}`}
-              title="显示/隐藏网格"
-            >
-              {toolState.showGrid ? '🔲' : '⬜'} {!isMobile && '网格'}
-            </button>
-            
-            <button 
-              onClick={() => togglePanel('showStroke')}
-              className={`stroke-toggle ${panelStates.showStroke ? 'active' : ''}`}
-              title="运笔效果控制"
-            >
-              ✏️ {!isMobile && '运笔'}
-            </button>
-
-            <button 
-              onClick={() => togglePanel('showPreset')}
-              className={`preset-toggle ${panelStates.showPreset ? 'active' : ''}`}
-              title="笔触预设"
-            >
-              🎨 {!isMobile && '预设'}
-            </button>
-
-            <button 
-              onClick={() => togglePanel('showLayer')}
-              className={`layer-toggle ${panelStates.showLayer ? 'active' : ''}`}
-              title="图层管理"
-            >
-              📚 {!isMobile && '图层'}
-            </button>
-
-            <button 
-              onClick={() => togglePanel('showGeometry')}
-              className={`geometry-toggle ${panelStates.showGeometry ? 'active' : ''}`}
-              title="几何工具设置"
-            >
-              🔷 {!isMobile && '几何'}
-            </button>
-
-            <button 
-              onClick={() => togglePanel('showPerformance')}
-              className={`performance-toggle ${panelStates.showPerformance ? 'active' : ''}`}
-              title="性能监控"
-            >
-              ⚡ {!isMobile && '性能'}
-            </button>
-
-            <button 
-              onClick={dataHandlers.export}
-              className="export-btn"
-              title="导出数据"
-            >
-              💾 {!isMobile && '导出'}
-            </button>
-
-            <label className="import-btn" title="导入数据">
-              📁 {!isMobile && '导入'}
-              <input 
-                type="file" 
-                accept=".json" 
-                onChange={dataHandlers.import}
-                style={{ display: 'none' }}
-              />
-            </label>
+      <div className="feature-section">
+        <h3>📊 系统信息</h3>
+        <div className="system-info">
+          <div className="info-item">
+            <span>用户代理:</span>
+            <span>{navigator.userAgent}</span>
           </div>
-          
-          {/* 移动端工具栏 */}
-          {isMobile && showToolPanel && (
-            <div className="mobile-tool-panel">
-              <ToolPanel
-                currentTool={toolState.currentTool}
-                currentColor={toolState.currentColor}
-                currentLineWidth={toolState.currentLineWidth}
-                canUndo={boardState.canUndo}
-                canRedo={boardState.canRedo}
-                historyCount={boardState.historyCount}
-                hasSelection={boardState.hasSelection}
-                onToolChange={handleToolChange}
-                onColorChange={handleColorChange}
-                onLineWidthChange={handleLineWidthChange}
-                onUndo={historyHandlers.undo}
-                onRedo={historyHandlers.redo}
-                onClear={historyHandlers.clear}
-                onClearSelection={selectionHandlers.clearSelection}
-                onDeleteSelection={selectionHandlers.deleteSelection}
-                onCopySelection={selectionHandlers.copySelection}
-                onSave={otherHandlers.save}
-                onCopy={otherHandlers.copy}
-              />
-            </div>
-          )}
-          
-          {/* 画板容器 - 优化后的单一版本 */}
-          <div 
-            ref={containerRef}
-            className="draw-board"
-            style={{ 
-              position: 'absolute',
-              top: '60px',
-              left: '10px',
-              right: '10px',
-              bottom: '10px',
-              backgroundColor: 'white',
-              border: '1px solid #ddd',
-              borderRadius: '4px',
-            }}
-          />
-          
-          {/* 调试信息面板 - 优化 */}
-          <div className="debug-panel">
-            <div>状态: {drawBoardRef.current ? '✅ 已创建' : '❌ 未创建'}</div>
-            <div>容器: {containerRef.current ? `${containerRef.current.offsetWidth}x${containerRef.current.offsetHeight}` : '未知'}</div>
-            <div>Canvas: {containerRef.current ? containerRef.current.querySelectorAll('canvas').length : 0}</div>
-            <div>内存: {performanceData.memoryUsage}MB</div>
+          <div className="info-item">
+            <span>屏幕分辨率:</span>
+            <span>{window.screen.width} x {window.screen.height}</span>
           </div>
-          
-          {/* 功能面板 */}
-          <StrokeControlPanel
-            drawBoard={drawBoardRef.current}
-            visible={panelStates.showStroke}
-            onConfigChange={(config) => console.log('运笔配置:', config)}
-          />
+          <div className="info-item">
+            <span>窗口尺寸:</span>
+            <span>{window.innerWidth} x {window.innerHeight}</span>
+          </div>
+          <div className="info-item">
+            <span>时间戳:</span>
+            <span>{new Date().toLocaleString()}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
-          <StrokePresetSelector
-            onPresetChange={(preset) => console.log('预设:', preset)}
-            visible={panelStates.showPreset}
-            onClose={() => togglePanel('showPreset')}
-          />
+  // API测试组件
+  const ApiTests = () => {
+    const [apiResult, setApiResult] = useState<string>('');
+    const [loading, setLoading] = useState(false);
 
-          {/* 图层管理面板 - 简化版本 */}
-          {panelStates.showLayer && (
-            <div className="layer-panel">
-              <div className="panel-header">
-                <h3>📚 图层管理</h3>
-                <button onClick={() => togglePanel('showLayer')}>✕</button>
-              </div>
-              
-              <div className="layer-stats">
-                <div className="stat-item">总计: {layerState.stats.totalLayers}</div>
-                <div className="stat-item">可见: {layerState.stats.visibleLayers}</div>
-                <div className="stat-item">锁定: {layerState.stats.lockedLayers}</div>
-                <div className="stat-item">操作: {layerState.stats.totalActions}</div>
-              </div>
+    const testFetch = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch('https://jsonplaceholder.typicode.com/posts/1');
+        const data = await response.json();
+        setApiResult(JSON.stringify(data, null, 2));
+      } catch (error) {
+        setApiResult(`错误: ${error}`);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-              <div className="layer-actions">
-                <button onClick={layerHandlers.create} className="btn btn-primary">
-                  ➕ 新建图层
-                </button>
-              </div>
-
-              <div className="layer-list">
-                {layerState.layers.map((layer) => (
-                  <div 
-                    key={layer.id}
-                    className={`layer-item ${layer.id === layerState.activeLayerId ? 'active' : ''} ${layer.locked ? 'locked' : ''}`}
-                    onClick={() => layerHandlers.select(layer.id)}
-                  >
-                    <div className="layer-info">
-                      <div className="layer-name" onDoubleClick={() => layerHandlers.rename(layer.id)}>
-                        {layer.name}
-                        {layer.locked && <span className="lock-icon">🔒</span>}
-                      </div>
-                      <div className="layer-meta">
-                        {layer.actions.length} 个操作 | {Math.round(layer.opacity * 100)}%
-                      </div>
-                    </div>
-                    
-                    <div className="layer-controls">
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          layerHandlers.toggleVisibility(layer.id);
-                        }}
-                        className={`visibility-btn ${layer.visible ? 'visible' : 'hidden'}`}
-                      >
-                        {layer.visible ? '👁️' : '🚫'}
-                      </button>
-                      
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          layerHandlers.toggleLock(layer.id);
-                        }}
-                        className={`lock-btn ${layer.locked ? 'locked' : 'unlocked'}`}
-                      >
-                        {layer.locked ? '🔒' : '🔓'}
-                      </button>
-                      
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          layerHandlers.delete(layer.id);
-                        }}
-                        className="delete-btn"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                    
-                    <div className="opacity-control">
-                      <input 
-                        type="range" 
-                        min="0" 
-                        max="100" 
-                        value={Math.round(layer.opacity * 100)}
-                        onChange={(e) => layerHandlers.changeOpacity(layer.id, parseInt(e.target.value))}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 几何工具面板 - 简化版本 */}
-          {panelStates.showGeometry && (toolState.currentTool === 'line' || toolState.currentTool === 'polygon') && (
-            <div className="geometry-panel">
-              <div className="panel-header">
-                <h3>🔷 几何工具设置</h3>
-                <button onClick={() => togglePanel('showGeometry')}>✕</button>
-              </div>
-              
-              {toolState.currentTool === 'line' && (
-                <div className="line-settings">
-                  <div className="setting-group">
-                    <label>线条类型:</label>
-                    <select 
-                      value={geometryState.lineType} 
-                      onChange={(e) => setGeometryState(prev => ({ 
-                        ...prev, 
-                        lineType: e.target.value as any 
-                      }))}
-                    >
-                      <option value="line">直线</option>
-                      <option value="arrow">箭头</option>
-                      <option value="dashed">虚线</option>
-                    </select>
-                  </div>
-                </div>
-              )}
-              
-              {toolState.currentTool === 'polygon' && (
-                <div className="polygon-settings">
-                  <div className="setting-group">
-                    <label>多边形类型:</label>
-                    <select 
-                      value={geometryState.polygonType} 
-                      onChange={(e) => setGeometryState(prev => ({ 
-                        ...prev, 
-                        polygonType: e.target.value as any 
-                      }))}
-                    >
-                      <option value="triangle">三角形</option>
-                      <option value="square">正方形</option>
-                      <option value="pentagon">五边形</option>
-                      <option value="hexagon">六边形</option>
-                      <option value="star">五角星</option>
-                      <option value="custom">自定义</option>
-                    </select>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* 性能监控面板 - 简化版本 */}
-          {panelStates.showPerformance && (
-            <div className="performance-panel">
-              <div className="panel-header">
-                <h3>⚡ 性能监控</h3>
-                <button onClick={() => togglePanel('showPerformance')}>✕</button>
-              </div>
-              
-              <div className="performance-stats">
-                <div className="stat-item">
-                  <span className="stat-label">FPS:</span>
-                  <span className="stat-value">{performanceData.fps}</span>
-                </div>
-                <div className="stat-item">
-                  <span className="stat-label">内存 (MB):</span>
-                  <span className="stat-value">{performanceData.memoryUsage}</span>
-                </div>
-                <div className="stat-item">
-                  <span className="stat-label">操作数量:</span>
-                  <span className="stat-value">{performanceData.actionCount}</span>
-                </div>
-              </div>
-            </div>
+    return (
+      <div className="api-tests">
+        <div className="feature-section">
+          <h3>🌐 API测试</h3>
+          <button onClick={testFetch} disabled={loading} className="api-btn">
+            {loading ? '测试中...' : '测试API请求'}
+          </button>
+          {apiResult && (
+            <pre className="api-result">{apiResult}</pre>
           )}
         </div>
+
+        <div className="feature-section">
+          <h3>💾 本地存储测试</h3>
+          <div className="storage-controls">
+            <button onClick={() => {
+              localStorage.setItem('test', 'Hello World');
+              alert('数据已保存到localStorage');
+            }}>
+              保存到localStorage
+            </button>
+            <button onClick={() => {
+              const data = localStorage.getItem('test');
+              alert(`从localStorage读取: ${data}`);
+            }}>
+              从localStorage读取
+            </button>
+            <button onClick={() => {
+              localStorage.removeItem('test');
+              alert('已清除localStorage数据');
+            }}>
+              清除localStorage
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 组件测试
+  const ComponentTests = () => (
+    <div className="component-tests">
+      <div className="feature-section">
+        <h3>🧩 组件测试</h3>
+        <div className="component-grid">
+          <div className="test-card">
+            <h4>按钮组件</h4>
+            <button className="primary-btn">主要按钮</button>
+            <button className="secondary-btn">次要按钮</button>
+            <button className="danger-btn">危险按钮</button>
+          </div>
+
+          <div className="test-card">
+            <h4>输入组件</h4>
+            <input type="text" placeholder="文本输入" />
+            <input type="number" placeholder="数字输入" />
+            <textarea placeholder="多行文本"></textarea>
+          </div>
+
+          <div className="test-card">
+            <h4>选择组件</h4>
+            <select>
+              <option>选项1</option>
+              <option>选项2</option>
+              <option>选项3</option>
+            </select>
+            <div className="checkbox-group">
+              <label>
+                <input type="checkbox" />
+                复选框1
+              </label>
+              <label>
+                <input type="checkbox" />
+                复选框2
+              </label>
+            </div>
+          </div>
+
+          <div className="test-card">
+            <h4>进度组件</h4>
+            <progress value="32" max="100">32%</progress>
+            <div className="progress-bar">
+              <div className="progress-fill" style={{ width: '65%' }}></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="test-page">
+      <div className="test-header">
+        <h1>🧪 测试页面</h1>
+        <p>这是一个功能完整的测试页面，使用DrawBoard + div容器进行绘图</p>
+      </div>
+
+      <div className="test-tabs">
+        <button 
+          className={activeTab === 'canvas' ? 'active' : ''}
+          onClick={() => setActiveTab('canvas')}
+        >
+          🎨 绘图测试
+        </button>
+        <button 
+          className={activeTab === 'api' ? 'active' : ''}
+          onClick={() => setActiveTab('api')}
+        >
+          🌐 API测试
+        </button>
+        <button 
+          className={activeTab === 'component' ? 'active' : ''}
+          onClick={() => setActiveTab('component')}
+        >
+          🧩 组件测试
+        </button>
+      </div>
+
+      <div className="test-content">
+        {activeTab === 'canvas' && <TestFeatures />}
+        {activeTab === 'api' && <ApiTests />}
+        {activeTab === 'component' && <ComponentTests />}
       </div>
     </div>
   );

@@ -75,6 +75,45 @@ export interface DrawBoardConfig {
  */
 export class DrawBoard {
   // ============================================
+  // 静态单例管理
+  // ============================================
+  
+  /** 容器到DrawBoard实例的映射，确保每个容器只有一个实例 */
+  private static instances: WeakMap<HTMLElement, DrawBoard> = new WeakMap();
+  
+  /**
+   * 获取或创建DrawBoard实例（单例模式）
+   */
+  public static getInstance(container: HTMLCanvasElement | HTMLDivElement, config?: Partial<DrawBoardConfig>): DrawBoard {
+    const existingInstance = DrawBoard.instances.get(container);
+    
+    if (existingInstance) {
+      console.log('✅ Returning existing DrawBoard instance for container');
+      return existingInstance;
+    }
+    
+    console.log('🔧 Creating new DrawBoard instance for container');
+    const newInstance = new DrawBoard(container, config);
+    DrawBoard.instances.set(container, newInstance);
+    
+    return newInstance;
+  }
+  
+  /**
+   * 销毁指定容器的DrawBoard实例
+   */
+  public static destroyInstance(container: HTMLElement): boolean {
+    const instance = DrawBoard.instances.get(container);
+    if (instance) {
+      instance.destroy();
+      DrawBoard.instances.delete(container);
+      console.log('✅ DrawBoard instance destroyed and removed from registry');
+      return true;
+    }
+    return false;
+  }
+
+  // ============================================
   // 核心管理器实例
   // ============================================
   
@@ -256,13 +295,7 @@ export class DrawBoard {
    * 设置当前工具
    */
   public async setCurrentTool(toolType: ToolType): Promise<void> {
-    try {
-      await this.toolManager.setCurrentTool(toolType);
-      // logger.info(`工具切换为: ${toolType}`); // logger is not defined in this file
-    } catch (error) {
-      // logger.error(`设置工具失败: ${toolType}`, error); // logger is not defined in this file
-      throw error;
-    }
+    await this.toolManager.setCurrentTool(toolType);
   }
 
   // ============================================
@@ -295,10 +328,33 @@ export class DrawBoard {
   // ============================================
   
   public setTool(type: ToolType): void {
-    this.toolManager.setCurrentTool(type);
+    // 异步加载工具，但不阻塞调用
+    this.toolManager.setCurrentTool(type).then(() => {
+      this.updateCursor();
+      // 🔧 工具切换只需要更新鼠标样式，不需要重绘历史记录
+      console.log('✅ Tool switched to:', type);
+    }).catch(error => {
+      console.error('Failed to set tool:', type, error);
+    });
+  }
+
+  /**
+   * 异步设置工具（推荐使用）
+   */
+  public async setToolAsync(type: ToolType): Promise<void> {
+    await this.toolManager.setCurrentTool(type);
     this.updateCursor();
-    // 工具切换不需要重绘历史，只需要更新交互层
-    this.drawingHandler.forceRedraw();
+    // 🔧 工具切换只需要更新鼠标样式，不需要重绘历史记录
+    console.log('✅ Tool switched to:', type, '(async)');
+  }
+
+  /**
+   * 初始化默认工具（同步初始化常用工具）
+   */
+  public async initializeDefaultTools(): Promise<void> {
+    // 预加载常用工具
+    await this.toolManager.setCurrentTool('pen');
+    console.log('默认工具初始化完成');
   }
 
   public getCurrentTool(): ToolType {
@@ -431,7 +487,11 @@ export class DrawBoard {
   }
 
   private updateCursor(): void {
-    this.drawingHandler.forceRedraw();
+    const currentTool = this.toolManager.getCurrentTool();
+    const lineWidth = this.canvasEngine.getContext().lineWidth;
+    
+    // 暂时使用false作为isDrawing状态，稍后可以改进
+    this.cursorHandler.updateCursor(currentTool, false, lineWidth);
   }
 
   // ============================================
@@ -561,6 +621,12 @@ export class DrawBoard {
    * 销毁DrawBoard实例
    */
   public destroy(): void {
+    // 从静态单例映射中移除实例
+    if (this.container) {
+      DrawBoard.instances.delete(this.container);
+      console.log('✅ DrawBoard instance removed from static registry');
+    }
+    
     this.safeDestroy();
   }
 

@@ -25,12 +25,17 @@ export class CanvasEngine {
   private contextCache: Map<string, DrawContext> = new Map();
 
   constructor(container: HTMLCanvasElement | HTMLDivElement) {
-    console.log('CanvasEngine constructor called with:', container);
+    console.log('🔧 CanvasEngine constructor called with:', container);
     
     if (container instanceof HTMLDivElement) {
       this.container = container;
-      // 幂等：清理已有canvas，确保只存在一组
-      Array.from(this.container.querySelectorAll('canvas')).forEach(c => c.remove());
+      
+      // 🧹 清理现有canvas（每次都清理，确保干净的状态）
+      const existingCanvases = this.container.querySelectorAll('canvas');
+      if (existingCanvases.length > 0) {
+        console.log(`🧹 Removing ${existingCanvases.length} existing canvas elements`);
+        Array.from(existingCanvases).forEach(c => c.remove());
+      }
       
       // 确保容器有正确的样式
       this.container.style.position = 'relative';
@@ -215,10 +220,25 @@ export class CanvasEngine {
 
   public resize(): void {
     const container = this.container;
-    this.width = container.offsetWidth;
-    this.height = container.offsetHeight;
+    const newWidth = container.offsetWidth;
+    const newHeight = container.offsetHeight;
     
-    console.log('CanvasEngine resize:', this.width, 'x', this.height);
+    console.log('CanvasEngine resize:', newWidth, 'x', newHeight);
+    
+    // 🔒 防止0尺寸导致canvas清空
+    if (newWidth <= 0 || newHeight <= 0) {
+      console.warn('⚠️ Container size is 0, skipping resize to prevent canvas clearing');
+      return;
+    }
+    
+    // 🔒 防止重复resize相同尺寸
+    if (this.width === newWidth && this.height === newHeight) {
+      console.log('✅ Size unchanged, skipping resize');
+      return;
+    }
+    
+    this.width = newWidth;
+    this.height = newHeight;
     
     this.layers.forEach((layer, name) => {
       layer.canvas.width = this.width;
@@ -287,8 +307,26 @@ export class CanvasEngine {
     }
   }
 
+  /**
+   * 销毁CanvasEngine，清理所有资源
+   */
   public destroy(): void {
+    console.log('🗑️ Destroying CanvasEngine...');
+    
+    // 清理所有canvas元素
+    this.layers.forEach((layer, name) => {
+      console.log(`  Removing layer: ${name}`);
+      if (layer.canvas.parentNode) {
+        layer.canvas.parentNode.removeChild(layer.canvas);
+      }
+    });
+    
+    // 清理layers映射
     this.layers.clear();
-    this.container.remove();
+    
+    // 清理上下文缓存
+    this.contextCache.clear();
+    
+    console.log('✅ CanvasEngine destroyed successfully');
   }
 } 

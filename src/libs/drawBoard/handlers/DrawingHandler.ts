@@ -188,6 +188,13 @@ export class DrawingHandler {
   }
 
   /**
+   * 获取是否正在绘制的状态
+   */
+  public getIsDrawing(): boolean {
+    return this.isDrawing;
+  }
+
+  /**
    * 强制重绘
    */
   public forceRedraw(): void {
