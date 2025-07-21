@@ -112,9 +112,9 @@ export class CursorHandler {
       // 选择工具 - 使用鼠标指针图标
       'select': 'default',
       
-      // 几何图形工具 - 使用十字光标
-      'rect': 'crosshair',
-      'circle': 'crosshair',
+      // 几何图形工具 - 使用对应的图标
+      'rect': this.getRectCursor(lineWidth),
+      'circle': this.getCircleCursor(lineWidth),
       'line': 'crosshair',
       'polygon': 'crosshair',
       
@@ -178,5 +178,31 @@ export class CursorHandler {
     const center = size / 2;
     
     return `url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}' viewBox='0 0 ${size} ${size}'%3E%3Ccircle cx='${center}' cy='${center}' r='${radius}' fill='none' stroke='%23666' stroke-width='2' opacity='0.8'/%3E%3C/svg%3E") ${center} ${center}, auto`;
+  }
+
+  /**
+   * 获取矩形工具的鼠标样式
+   * @param lineWidth 当前线宽
+   * @returns CSS cursor 值
+   */
+  private getRectCursor(lineWidth: number): string {
+    // 根据线宽调整矩形图标大小，最小20px，最大32px
+    const size = Math.max(20, Math.min(32, 20 + lineWidth * 1.5));
+    const hotspot = Math.floor(size / 2);
+    
+    return `url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2' ry='2'/%3E%3C/svg%3E") ${hotspot} ${hotspot}, auto`;
+  }
+
+  /**
+   * 获取圆形工具的鼠标样式
+   * @param lineWidth 当前线宽
+   * @returns CSS cursor 值
+   */
+  private getCircleCursor(lineWidth: number): string {
+    // 根据线宽调整圆形图标大小，最小20px，最大32px
+    const size = Math.max(20, Math.min(32, 20 + lineWidth * 1.5));
+    const hotspot = Math.floor(size / 2);
+    
+    return `url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3C/svg%3E") ${hotspot} ${hotspot}, auto`;
   }
 } 

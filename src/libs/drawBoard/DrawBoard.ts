@@ -258,9 +258,14 @@ export class DrawBoard {
     // 最后将drawingHandler设置给stateHandler
     this.stateHandler.setDrawingHandler(this.drawingHandler);
 
-    // 初始化鼠标样式处理器
+    // 初始化鼠标样式处理器 - 使用与EventManager相同的interactionCanvas
     const interactionCanvas = this.canvasEngine.getLayer('interaction')?.canvas;
-    this.cursorHandler = new CursorHandler(this.container, interactionCanvas);
+    if (!interactionCanvas) {
+      console.warn('交互层canvas未找到，CursorHandler将使用容器元素');
+      this.cursorHandler = new CursorHandler(this.container);
+    } else {
+      this.cursorHandler = new CursorHandler(this.container, interactionCanvas);
+    }
   }
 
   /**

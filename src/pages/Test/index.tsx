@@ -14,7 +14,6 @@ const Test: React.FC = () => {
   const drawBoardRef = useRef<DrawBoard | null>(null);
   const mutationObserverRef = useRef<MutationObserver | null>(null);
   const initCountRef = useRef(0);
-  const monitorIntervalRef = useRef<number | null>(null);
 
   // 检测React严格模式
   useEffect(() => {
@@ -61,35 +60,6 @@ const Test: React.FC = () => {
     console.log('📡 Started monitoring container changes');
   };
 
-  // 开始自动监控canvas状态
-  const startAutoMonitoring = () => {
-    // 清除之前的监控
-    if (monitorIntervalRef.current) {
-      clearInterval(monitorIntervalRef.current);
-    }
-
-    monitorIntervalRef.current = setInterval(() => {
-      const container = containerRef.current;
-      if (container && drawBoardRef.current) {
-        const canvasCount = container.querySelectorAll('canvas').length;
-        if (canvasCount === 0) {
-          console.warn('🚨 Auto-monitor detected missing canvas! Attempting to fix...');
-          checkCanvasStatus(); // 这会尝试修复问题
-        }
-      }
-    }, 2000); // 每2秒检查一次
-
-    console.log('🔄 Started auto-monitoring canvas status');
-  };
-
-  // 停止自动监控
-  const stopAutoMonitoring = () => {
-    if (monitorIntervalRef.current) {
-      clearInterval(monitorIntervalRef.current);
-      monitorIntervalRef.current = null;
-      console.log('⏹️ Stopped auto-monitoring');
-    }
-  };
 
   // 初始化DrawBoard
   useEffect(() => {
@@ -178,9 +148,6 @@ const Test: React.FC = () => {
           
           console.log('Initial tool settings applied');
           
-          // 启动自动监控
-          startAutoMonitoring();
-          
           // 添加绘制事件监听器进行调试
           const interactionCanvas = container.querySelector('canvas[style*="pointer-events: auto"]');
           if (interactionCanvas) {
@@ -242,14 +209,11 @@ const Test: React.FC = () => {
 
     // 延迟初始化
     console.log('📅 Scheduling DrawBoard initialization with 50ms delay');
-    setTimeout(initDrawBoard, 50);
+    initDrawBoard();
 
     // 清理函数
     return () => {
       console.log('🧹 Cleaning up DrawBoard and monitors');
-      
-      // 停止自动监控
-      stopAutoMonitoring();
       
       // 停止容器监控
       if (mutationObserverRef.current) {
@@ -1398,7 +1362,6 @@ const Test: React.FC = () => {
           <button onClick={testEventManagerListeners} className="debug-btn">测试EventManager DOM监听器</button>
           <button onClick={checkEventListenerConflicts} className="debug-btn">检查DOM事件监听器冲突</button>
           <button onClick={rebuildEventManagerBinding} className="debug-btn">完全重建EventManager绑定</button>
-          <button onClick={stopAutoMonitoring} className="debug-btn emergency-stop">🚨 停止自动监控</button>
         </div>
         
         <div className="canvas-container">
