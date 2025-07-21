@@ -184,6 +184,7 @@ export class DrawBoard {
   // ============================================
 
   private initializeCoreComponents(container: HTMLCanvasElement | HTMLDivElement, config: DrawBoardConfig): void {
+
     this.canvasEngine = new CanvasEngine(container);
     
     // 直接初始化工具管理器（无需异步）
@@ -198,6 +199,7 @@ export class DrawBoard {
     
     // 事件管理器绑定到交互层
     const interactionCanvas = this.canvasEngine.getLayer('interaction')?.canvas;
+    
     if (!interactionCanvas) {
       console.error('交互层canvas未找到');
       this.eventManager = new EventManager(
@@ -261,6 +263,14 @@ export class DrawBoard {
     this.cursorHandler = new CursorHandler(this.container, interactionCanvas);
   }
 
+  /**
+   * 业务事件绑定和路由
+   * 🔗 业务事件绑定：将 EventManager 的标准化事件绑定到具体业务处理方法
+   * 🎨 绘制流程控制：handleDrawStart/Move/End 控制绘制的生命周期
+   * 🧩 模块协调：协调 ToolManager、HistoryManager、DrawingHandler 等模块
+   * 📊 状态管理：通过 StateHandler 管理和通知状态变化
+   * 🔧 工具调度：根据当前工具类型调用相应的绘制逻辑
+  */
   private bindEvents(): void {
     this.eventManager.on('mousedown', this.handleDrawStart.bind(this));
     this.eventManager.on('mousemove', this.handleDrawMove.bind(this));
@@ -311,14 +321,7 @@ export class DrawBoard {
     this.drawingHandler.handleDrawMove(event);
   }
 
-  private handleDrawEnd(): void {
-    // 创建一个默认的DrawEvent
-    const event = {
-      type: 'mouseup' as const,
-      point: { x: 0, y: 0 },
-      pressure: 0,
-      timestamp: Date.now()
-    };
+  private handleDrawEnd(event: DrawEvent): void {
     this.drawingHandler.handleDrawEnd(event);
     this.updateCursor();
   }

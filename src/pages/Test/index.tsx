@@ -188,29 +188,29 @@ const Test: React.FC = () => {
             
             interactionCanvas.addEventListener('mousedown', (e) => {
               const mouseEvent = e as MouseEvent;
-              console.log('🖱️ Mouse down on interaction canvas:', {
-                x: mouseEvent.offsetX,
-                y: mouseEvent.offsetY,
-                currentTool: drawBoardRef.current?.getCurrentTool()
-              });
+              // console.log('🖱️ Mouse down on interaction canvas:', {
+              //   x: mouseEvent.offsetX,
+              //   y: mouseEvent.offsetY,
+              //   currentTool: drawBoardRef.current?.getCurrentTool()
+              // });
             });
             
             interactionCanvas.addEventListener('mousemove', (e) => {
               const mouseEvent = e as MouseEvent;
               if (mouseEvent.buttons === 1) { // 只在拖拽时记录
-                console.log('🖱️ Mouse drag:', {
-                  x: mouseEvent.offsetX,
-                  y: mouseEvent.offsetY
-                });
+                // console.log('🖱️ Mouse drag:', {
+                //   x: mouseEvent.offsetX,
+                //   y: mouseEvent.offsetY
+                // });
               }
             });
             
             interactionCanvas.addEventListener('mouseup', (e) => {
               const mouseEvent = e as MouseEvent;
-              console.log('🖱️ Mouse up:', {
-                x: mouseEvent.offsetX,
-                y: mouseEvent.offsetY
-              });
+              // console.log('🖱️ Mouse up:', {
+              //   x: mouseEvent.offsetX,
+              //   y: mouseEvent.offsetY
+              // });
             });
           } else {
             console.warn('⚠️ No interaction canvas found with pointer-events: auto');

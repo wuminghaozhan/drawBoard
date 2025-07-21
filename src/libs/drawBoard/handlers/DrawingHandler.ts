@@ -4,6 +4,7 @@ import type { HistoryManager } from '../history/HistoryManager';
 import type { DrawAction } from '../tools/DrawTool';
 import type { PerformanceManager } from '../core/PerformanceManager';
 import type { SelectionManager } from '../core/SelectionManager';
+import type { DrawEvent } from '../events/EventManager';
 import { logger } from '../utils/Logger';
 
 // 定义必要的接口
@@ -46,9 +47,8 @@ export class DrawingHandler {
   /**
    * 处理绘制开始事件
    */
-  public handleDrawStart(event: any): void {
+  public handleDrawStart(event: DrawEvent): void {
     if (this.isDrawing) return;
-
     const point = this.getEventPoint(event);
     const tool = this.toolManager.getCurrentToolInstance();
     
@@ -56,7 +56,7 @@ export class DrawingHandler {
 
     this.isDrawing = true;
     // 创建新的绘制动作
-    this.currentAction = this.createDrawAction(point, tool);
+    this.currentAction = this.createDrawAction(point);
     
     logger.debug('开始绘制', { toolType: this.toolManager.getCurrentTool(), point });
     this.onStateChange();
@@ -65,7 +65,7 @@ export class DrawingHandler {
   /**
    * 处理绘制移动事件
    */
-  public handleDrawMove(event: any): void {
+  public handleDrawMove(event: DrawEvent): void {
     if (!this.isDrawing || !this.currentAction) return;
 
     const point = this.getEventPoint(event);
@@ -78,7 +78,7 @@ export class DrawingHandler {
   /**
    * 处理绘制结束事件
    */
-  public handleDrawEnd(event: any): void {
+  public handleDrawEnd(event: DrawEvent): void {
     if (!this.isDrawing || !this.currentAction) return;
 
     const point = this.getEventPoint(event);
@@ -99,7 +99,7 @@ export class DrawingHandler {
   /**
    * 创建绘制动作
    */
-  private createDrawAction(startPoint: Point, tool: any): DrawAction {
+  private createDrawAction(startPoint: Point): DrawAction {
     return {
       id: Date.now().toString(),
       type: this.toolManager.getCurrentTool(),
@@ -116,7 +116,7 @@ export class DrawingHandler {
   /**
    * 处理键盘事件
    */
-  public handleKeyboardEvent(event: KeyboardEvent): boolean {
+  public handleKeyboardEvent(): boolean {
     // 简化的键盘处理
     return false;
   }
@@ -124,11 +124,10 @@ export class DrawingHandler {
   /**
    * 从事件获取坐标点
    */
-  private getEventPoint(event: any): Point {
-    const rect = this.canvasEngine.getCanvas().getBoundingClientRect();
+  private getEventPoint(event: DrawEvent): Point {
     return {
-      x: (event.clientX || event.touches?.[0]?.clientX || 0) - rect.left,
-      y: (event.clientY || event.touches?.[0]?.clientY || 0) - rect.top
+      x: (event.point?.x || 0),
+      y: (event.point?.y || 0)
     };
   }
 

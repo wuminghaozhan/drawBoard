@@ -37,8 +37,11 @@ export class CanvasEngine {
         Array.from(existingCanvases).forEach(c => c.remove());
       }
       
-      // 确保容器有正确的样式
-      this.container.style.position = 'relative';
+      // 确保容器有正确的样式，只有static时才改变position
+      const currentPosition = getComputedStyle(this.container).position;
+      if (currentPosition === 'static') {
+        this.container.style.position = 'relative';
+      }
     } else {
       // 创建容器
       this.container = document.createElement('div');

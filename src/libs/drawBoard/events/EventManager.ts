@@ -66,10 +66,18 @@ export class EventManager {
     this.bindEvents();
   }
 
+  /**
+   * 底层事件处理和分发
+   * 🎯 DOM 事件绑定：直接监听 Canvas 的原生鼠标和触摸事件
+   * ⚡ 性能优化：节流控制、防重复点击、事件合并
+   * 🔄 事件转换：将 DOM 事件转换为 DrawBoard 内部事件格式
+   * 📡 事件分发：使用观察者模式向上层分发事件
+   * 🛡️ 事件过滤：防止重复事件、无效事件的处理
+  */
   private bindEvents(): void {
     // 鼠标事件
-    this.canvas.addEventListener('mousedown', this.boundHandlers.mouseDown);
-    this.canvas.addEventListener('mousemove', this.boundHandlers.mouseMove);
+    this.canvas.addEventListener('mousedown', (...args) => {console.log('mousedown____', args);this.boundHandlers.mouseDown(...args)});
+    this.canvas.addEventListener('mousemove', (...args) => {this.boundHandlers.mouseMove(...args)});
     this.canvas.addEventListener('mouseup', this.boundHandlers.mouseUp);
     this.canvas.addEventListener('mouseout', this.boundHandlers.mouseUp);
 
@@ -110,6 +118,7 @@ export class EventManager {
     if (now - this.lastMouseDownTime < this.minEventInterval) {
       return;
     }
+    
     this.lastMouseDownTime = now;
     
     logger.debug('Mouse down event triggered');
@@ -122,6 +131,7 @@ export class EventManager {
     };
     
     logger.debug('Mouse down point:', event.point);
+
     this.safeEmitEvent(event);
   }
 
@@ -146,9 +156,19 @@ export class EventManager {
     if (!this.isPointerDown) return; // 防止无效的mouseup事件
     
     this.isPointerDown = false;
+    
+    // 检查是否是mouseout事件，如果是则使用最后一个有效坐标
+    let point: Point;
+    if (e.type === 'mouseout') {
+      // 使用最后一个处理的事件坐标，避免mouseout时的无效坐标
+      point = this.lastProcessedEvent?.point || { x: 0, y: 0, timestamp: Date.now() };
+    } else {
+      point = this.getMousePoint(e);
+    }
+    
     const event: DrawEvent = {
       type: 'mouseup',
-      point: this.getMousePoint(e),
+      point: point,
       timestamp: Date.now()
     };
     
