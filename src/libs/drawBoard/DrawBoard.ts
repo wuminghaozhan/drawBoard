@@ -6,6 +6,8 @@ import { ShortcutManager } from './shortcuts/ShortcutManager';
 import { ExportManager } from './utils/ExportManager';
 import { SelectionManager } from './core/SelectionManager';
 import { PerformanceManager, type PerformanceConfig, type MemoryStats } from './core/PerformanceManager';
+import { ComplexityManager } from './core/ComplexityManager';
+import { VirtualLayerManager, type VirtualLayer } from './core/VirtualLayerManager';
 import { DrawingHandler } from './handlers/DrawingHandler';
 import { CursorHandler } from './handlers/CursorHandler';
 import { StateHandler, type DrawBoardState } from './handlers/StateHandler';
@@ -88,7 +90,6 @@ export class DrawBoard {
     const existingInstance = DrawBoard.instances.get(container);
     
     if (existingInstance) {
-      console.log('✅ Returning existing DrawBoard instance for container');
       return existingInstance;
     }
     
@@ -141,6 +142,12 @@ export class DrawBoard {
   /** 性能管理器 - 管理预渲染缓存和性能优化 */
   private performanceManager!: PerformanceManager;
 
+  /** 复杂度管理器 - 管理绘制动作的复杂度评分 */
+  private complexityManager!: ComplexityManager;
+
+  /** 虚拟图层管理器 - 管理虚拟图层 */
+  private virtualLayerManager!: VirtualLayerManager;
+
   // ============================================
   // 处理器实例
   // ============================================
@@ -185,14 +192,31 @@ export class DrawBoard {
 
   private initializeCoreComponents(container: HTMLCanvasElement | HTMLDivElement, config: DrawBoardConfig): void {
 
-    this.canvasEngine = new CanvasEngine(container);
+    this.canvasEngine = new CanvasEngine(container); // Canvas引擎
     
     // 直接初始化工具管理器（无需异步）
-    this.toolManager = new ToolManager();
+    this.toolManager = new ToolManager(); // 工具管理器
     
-    this.historyManager = new HistoryManager();
-    this.selectionManager = new SelectionManager();
-    this.performanceManager = new PerformanceManager(config.performanceConfig);
+    this.historyManager = new HistoryManager(); // 历史记录管理器
+    this.selectionManager = new SelectionManager(); // 选择管理器
+    this.performanceManager = new PerformanceManager(config.performanceConfig); // 性能管理器
+    this.complexityManager = new ComplexityManager(); // 复杂度管理器
+    this.virtualLayerManager = new VirtualLayerManager(); // 虚拟图层管理器
+    
+    // 设置PerformanceManager的DrawBoard引用，用于自动触发复杂度重新计算
+    this.performanceManager.setDrawBoard(this);
+    
+    // 设置ComplexityManager的依赖关系
+    this.complexityManager.setDependencies(
+      this.historyManager, 
+      this.performanceManager as unknown as { 
+        getMemoryStats(): { cacheHitRate: number; underMemoryPressure: boolean }; 
+        updateConfig(config: { complexityThreshold: number }): void; 
+        stats: { totalDrawCalls: number } 
+      }
+    );
+
+    // VirtualLayerManager 不需要外部依赖，它是独立的
     
     // 保存容器元素引用
     this.container = container instanceof HTMLCanvasElement ? container : container;
@@ -252,7 +276,8 @@ export class DrawBoard {
       this.historyManager,
       this.selectionManager,
       this.performanceManager,
-      () => this.stateHandler.emitStateChange()
+      () => this.stateHandler.emitStateChange(),
+      this.virtualLayerManager
     );
 
     // 最后将drawingHandler设置给stateHandler
@@ -324,45 +349,77 @@ export class DrawBoard {
 
   private handleDrawMove(event: DrawEvent): void {
     this.drawingHandler.handleDrawMove(event);
+    // 在绘制移动时也更新光标，提供实时反馈
+    this.updateCursor();
   }
 
   private handleDrawEnd(event: DrawEvent): void {
     this.drawingHandler.handleDrawEnd(event);
-    this.updateCursor();
+    
+    // 检查是否需要重新计算复杂度
+    this.checkComplexityRecalculation();
+    
+    // 更新状态
+    this.stateHandler.emitStateChange();
   }
 
   // ============================================
   // 公共API - 工具管理
   // ============================================
   
-  public setTool(type: ToolType): void {
-    // 异步加载工具，但不阻塞调用
-    this.toolManager.setCurrentTool(type).then(() => {
-      this.updateCursor();
-      // 🔧 工具切换只需要更新鼠标样式，不需要重绘历史记录
-      console.log('✅ Tool switched to:', type);
-    }).catch(error => {
-      console.error('Failed to set tool:', type, error);
-    });
-  }
-
   /**
-   * 异步设置工具（推荐使用）
+   * 设置当前工具（异步版本，支持重量级工具）
+   * @param type 工具类型
    */
-  public async setToolAsync(type: ToolType): Promise<void> {
-    await this.toolManager.setCurrentTool(type);
+  public async setTool(toolType: ToolType): Promise<void> {
+    await this.toolManager.setCurrentTool(toolType);
+    
+    // 切换到复杂工具时检查复杂度
+    if (['brush', 'pen'].includes(toolType)) {
+      console.log(`🔄 切换到复杂工具 ${toolType}，检查复杂度...`);
+      this.checkComplexityRecalculation();
+    }
+    
     this.updateCursor();
     // 🔧 工具切换只需要更新鼠标样式，不需要重绘历史记录
-    console.log('✅ Tool switched to:', type, '(async)');
+    console.log('✅ Tool switched to:', toolType);
   }
 
   /**
-   * 初始化默认工具（同步初始化常用工具）
+   * 初始化默认工具（异步初始化常用工具）
    */
   public async initializeDefaultTools(): Promise<void> {
     // 预加载常用工具
     await this.toolManager.setCurrentTool('pen');
     console.log('默认工具初始化完成');
+  }
+
+  /**
+   * 预加载工具（后台加载，不阻塞UI）
+   */
+  public async preloadTool(type: ToolType): Promise<void> {
+    await this.toolManager.preloadTool(type);
+  }
+
+  /**
+   * 预加载多个工具
+   */
+  public async preloadTools(types: ToolType[]): Promise<void> {
+    await this.toolManager.preloadTools(types);
+  }
+
+  /**
+   * 获取工具加载状态
+   */
+  public getToolLoadingState(): 'idle' | 'loading' | 'ready' | 'error' {
+    return this.toolManager.getLoadingState();
+  }
+
+  /**
+   * 获取工具元数据
+   */
+  public getToolMetadata(type: ToolType) {
+    return this.toolManager.getToolMetadata(type);
   }
 
   public getCurrentTool(): ToolType {
@@ -375,6 +432,7 @@ export class DrawBoard {
   }
   
   public setLineWidth(width: number): void {
+    console.log('setLineWidth___', width);
     this.canvasEngine.setContext({ lineWidth: width });
     this.updateCursor();
     // 线宽改变不需要重绘，只影响后续绘制
@@ -456,6 +514,7 @@ export class DrawBoard {
   // ============================================
 
   public clearSelection(): void {
+    console.log('clearSelection___');
     this.selectionManager.clearSelection();
     this.drawingHandler.forceRedraw();
     this.updateCursor();
@@ -491,15 +550,19 @@ export class DrawBoard {
   // ============================================
 
   public setCursor(cursor: string): void {
+    console.log('setCursor___', cursor);
     this.cursorHandler.setCursor(cursor);
   }
 
   private updateCursor(): void {
+    console.log('updateCursor___', this.toolManager.getCurrentTool());
     const currentTool = this.toolManager.getCurrentTool();
     const lineWidth = this.canvasEngine.getContext().lineWidth;
     
-    // 暂时使用false作为isDrawing状态，稍后可以改进
-    this.cursorHandler.updateCursor(currentTool, false, lineWidth);
+    // 获取真实的绘制状态
+    const isDrawing = this.drawingHandler.getIsDrawing();
+    
+    this.cursorHandler.updateCursor(currentTool, isDrawing, lineWidth);
   }
 
   // ============================================
@@ -585,8 +648,13 @@ export class DrawBoard {
   }
 
   public recalculateComplexity(): void {
-    // 重新计算复杂度可能影响缓存策略
+    // 委托给复杂度管理器
+    const stats = this.complexityManager.recalculateAllComplexities();
+    
+    // 强制重绘以应用新的复杂度评估
     this.drawingHandler.forceRedraw();
+    
+    console.log(`📊 复杂度重新计算完成，统计信息:`, stats);
   }
 
   public setForceRealTimeRender(enabled: boolean = true): void {
@@ -606,19 +674,133 @@ export class DrawBoard {
   // 公共API - 其他工具函数
   // ============================================
 
+  /**
+   * 获取历史记录
+   */
   public getHistory(): DrawAction[] {
     return this.historyManager.getHistory();
   }
 
+  /**
+   * 获取工具名称列表
+   */
   public getToolNames(): Array<{ type: ToolType; name: string }> {
     return this.toolManager.getToolNames();
   }
 
+  /**
+   * 获取快捷键列表
+   */
   public getShortcuts(): Array<{ key: string; description: string }> {
     return this.shortcutManager.getShortcuts().map(s => ({
       key: s.key,
       description: s.description
     }));
+  }
+
+  // ============================================
+  // 复杂度管理
+  // ============================================
+  /**
+   * 获取复杂度统计信息
+   */
+  public getComplexityStats(): import('./core/ComplexityManager').ComplexityStats {
+    return this.complexityManager.getStats();
+  }
+
+  /**
+   * 更新复杂度配置
+   */
+  public updateComplexityConfig(config: Partial<import('./core/ComplexityManager').ComplexityConfig>): void {
+    this.complexityManager.updateConfig(config);
+  }
+
+  /**
+   * 清除复杂度缓存
+   */
+  public clearComplexityCache(): void {
+    this.complexityManager.clearCache();
+  }
+
+  // ============================================
+  // 虚拟图层管理
+  // ============================================
+
+  /**
+   * 创建虚拟图层
+   */
+  public createVirtualLayer(name?: string): VirtualLayer {
+    return this.virtualLayerManager.createVirtualLayer(name);
+  }
+
+  /**
+   * 删除虚拟图层
+   */
+  public deleteVirtualLayer(layerId: string): boolean {
+    return this.virtualLayerManager.deleteVirtualLayer(layerId);
+  }
+
+  /**
+   * 设置活动虚拟图层
+   */
+  public setActiveVirtualLayer(layerId: string): boolean {
+    return this.virtualLayerManager.setActiveVirtualLayer(layerId);
+  }
+
+  /**
+   * 获取活动虚拟图层
+   */
+  public getActiveVirtualLayer(): VirtualLayer | null {
+    return this.virtualLayerManager.getActiveVirtualLayer();
+  }
+
+  /**
+   * 获取指定虚拟图层
+   */
+  public getVirtualLayer(layerId: string): VirtualLayer | null {
+    return this.virtualLayerManager.getVirtualLayer(layerId);
+  }
+
+  /**
+   * 获取所有虚拟图层
+   */
+  public getAllVirtualLayers(): VirtualLayer[] {
+    return this.virtualLayerManager.getAllVirtualLayers();
+  }
+
+  /**
+   * 设置虚拟图层可见性
+   */
+  public setVirtualLayerVisible(layerId: string, visible: boolean): boolean {
+    return this.virtualLayerManager.setVirtualLayerVisible(layerId, visible);
+  }
+
+  /**
+   * 设置虚拟图层透明度
+   */
+  public setVirtualLayerOpacity(layerId: string, opacity: number): boolean {
+    return this.virtualLayerManager.setVirtualLayerOpacity(layerId, opacity);
+  }
+
+  /**
+   * 设置虚拟图层锁定状态
+   */
+  public setVirtualLayerLocked(layerId: string, locked: boolean): boolean {
+    return this.virtualLayerManager.setVirtualLayerLocked(layerId, locked);
+  }
+
+  /**
+   * 重命名虚拟图层
+   */
+  public renameVirtualLayer(layerId: string, newName: string): boolean {
+    return this.virtualLayerManager.renameVirtualLayer(layerId, newName);
+  }
+
+  /**
+   * 获取虚拟图层统计信息
+   */
+  public getVirtualLayerStats() {
+    return this.virtualLayerManager.getVirtualLayerStats();
   }
 
   // ============================================
@@ -634,7 +816,7 @@ export class DrawBoard {
       DrawBoard.instances.delete(this.container);
       console.log('✅ DrawBoard instance removed from static registry');
     }
-    
+    console.log('destroy___', this.container);
     this.safeDestroy();
   }
 
@@ -643,13 +825,51 @@ export class DrawBoard {
    */
   private safeDestroy(): void {
     try {
+      console.log('🔄 开始销毁DrawBoard资源...');
+      
+      // 1. 首先销毁事件和快捷键管理器（停止用户交互）
       this.shortcutManager?.destroy();
       this.eventManager?.destroy();
-      this.performanceManager?.destroy();
+      
+      // 2. 销毁处理器（停止内部处理）
+      this.drawingHandler?.destroy();
+      this.cursorHandler?.destroy();
       this.stateHandler?.destroy();
+      
+      // 3. 销毁核心管理器（按依赖顺序）
+      this.complexityManager?.destroy();
+      this.performanceManager?.destroy();
+      this.selectionManager?.destroy();
+      this.historyManager?.destroy();
+      this.toolManager?.destroy();
+      this.virtualLayerManager?.destroy(); // 销毁虚拟图层管理器
+      
+      // 4. 最后销毁Canvas引擎（清理DOM资源）
       this.canvasEngine?.destroy();
+      
+      // 5. 清理导出管理器
+      this.exportManager?.destroy();
+      
+      // 6. 清理容器引用
+      this.container = null as unknown as HTMLElement;
+      
+      console.log('✅ DrawBoard资源销毁完成');
     } catch (error) {
       console.error('销毁资源时出错:', error);
+    }
+  }
+
+  // ============================================
+  // 复杂度自动管理
+  // ============================================
+
+  /**
+   * 检查是否需要重新计算复杂度
+   */
+  private checkComplexityRecalculation(): void {
+    // 委托给复杂度管理器检查
+    if (this.complexityManager.shouldRecalculate()) {
+      this.recalculateComplexity();
     }
   }
 } 

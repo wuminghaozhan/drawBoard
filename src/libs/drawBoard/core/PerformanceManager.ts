@@ -1,6 +1,6 @@
 import type { DrawAction, PreRenderedCache } from '../tools/DrawTool';
 import { PerformanceMode } from '../tools/DrawTool';
-import { logger } from '../utils/Logger';
+
 
 // 重新导出PerformanceMode供外部使用
 export { PerformanceMode } from '../tools/DrawTool';
@@ -84,6 +84,7 @@ export class PerformanceManager {
     totalDrawCalls: 0
   };
   private memoryMonitoringInterval?: number;
+  private drawBoard?: { recalculateComplexity: () => void }; // DrawBoard引用，用于触发复杂度重新计算
 
   /**
    * 默认性能配置
@@ -106,6 +107,13 @@ export class PerformanceManager {
     if (this.config.enableMemoryMonitoring) {
       this.startMemoryMonitoring();
     }
+  }
+
+  /**
+   * 设置DrawBoard引用，用于触发复杂度重新计算
+   */
+  public setDrawBoard(drawBoard: { recalculateComplexity: () => void }): void {
+    this.drawBoard = drawBoard;
   }
 
   /**
@@ -488,10 +496,24 @@ export class PerformanceManager {
         if (stats.underMemoryPressure) {
           console.log('检测到内存压力，切换到平衡模式');
           this.setPerformanceMode(PerformanceMode.BALANCED);
+          
+          // 触发复杂度重新计算
+          if (this.drawBoard) {
+            console.log('📊 内存压力下触发复杂度重新计算');
+            this.drawBoard.recalculateComplexity();
+          }
         } else if (stats.currentCacheMemoryMB < this.config.maxCacheMemoryMB * 0.5) {
           // 内存充足时切换到高性能模式
           console.log('内存充足，切换到高性能模式');
           this.setPerformanceMode(PerformanceMode.HIGH_PERFORMANCE);
+        }
+      }
+
+      // 缓存命中率过低时触发复杂度重新计算
+      if (stats.cacheHitRate < 0.3 && this.stats.totalDrawCalls > 50) {
+        console.log(`📊 缓存命中率过低(${(stats.cacheHitRate * 100).toFixed(1)}%)，触发复杂度重新计算`);
+        if (this.drawBoard) {
+          this.drawBoard.recalculateComplexity();
         }
       }
 

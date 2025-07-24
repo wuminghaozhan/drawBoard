@@ -324,4 +324,22 @@ export class SelectionManager {
     ctx.lineWidth = saved.lineWidth;
     ctx.fillStyle = saved.fillStyle;
   }
+
+  /**
+   * 销毁选择管理器，清理所有资源
+   */
+  public destroy(): void {
+    // 清空选择状态
+    this.selectedActions.clear();
+    this.selectionBox = null;
+    this.isDragging = false;
+    this.dragOffset = { x: 0, y: 0 };
+    
+    // 清理缓存
+    this.cachedHandles = null;
+    this.cachedSelectionBox = null;
+    this.cachedHandleSize = 0;
+    
+    console.log('🗑️ SelectionManager destroyed');
+  }
 } 

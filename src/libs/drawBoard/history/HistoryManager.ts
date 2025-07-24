@@ -218,6 +218,27 @@ export class HistoryManager {
   }
 
   /**
+   * 销毁历史管理器，清理所有资源
+   */
+  public destroy(): void {
+    // 清空历史记录
+    this.history = [];
+    this.undoneActions = [];
+    
+    // 重置内存统计
+    this.currentMemoryBytes = 0;
+    this.operationCount = 0;
+    
+    // 重置配置
+    this.maxHistorySize = 100;
+    this.maxUndoneSize = 50;
+    this.maxMemoryMB = 50;
+    this.memoryCheckInterval = 10;
+    
+    console.log('🗑️ HistoryManager destroyed');
+  }
+
+  /**
    * 按ID移除特定动作
    */
   public removeActionById(actionId: string): boolean {

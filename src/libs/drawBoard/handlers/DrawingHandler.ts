@@ -4,6 +4,7 @@ import type { HistoryManager } from '../history/HistoryManager';
 import type { DrawAction } from '../tools/DrawTool';
 import type { PerformanceManager } from '../core/PerformanceManager';
 import type { SelectionManager } from '../core/SelectionManager';
+import type { VirtualLayerManager } from '../core/VirtualLayerManager';
 import type { DrawEvent } from '../events/EventManager';
 import { logger } from '../utils/Logger';
 
@@ -22,6 +23,7 @@ export class DrawingHandler {
   private historyManager: HistoryManager;
   private performanceManager: PerformanceManager;
   private selectionManager: SelectionManager;
+  private virtualLayerManager?: VirtualLayerManager;
   private onStateChange: () => void;
 
   // 交互状态
@@ -34,13 +36,15 @@ export class DrawingHandler {
     historyManager: HistoryManager,
     selectionManager: SelectionManager,
     performanceManager: PerformanceManager,
-    onStateChange: () => void
+    onStateChange: () => void,
+    virtualLayerManager?: VirtualLayerManager
   ) {
     this.canvasEngine = canvasEngine;
     this.toolManager = toolManager;
     this.historyManager = historyManager;
     this.selectionManager = selectionManager;
     this.performanceManager = performanceManager;
+    this.virtualLayerManager = virtualLayerManager;
     this.onStateChange = onStateChange;
   }
 
@@ -85,6 +89,11 @@ export class DrawingHandler {
     
     // 添加最后一个点
     this.currentAction.points.push(point);
+    
+    // 处理虚拟图层分配
+    if (this.virtualLayerManager) {
+      this.virtualLayerManager.handleNewAction(this.currentAction);
+    }
     
     // 保存到历史记录
     this.historyManager.addAction(this.currentAction);

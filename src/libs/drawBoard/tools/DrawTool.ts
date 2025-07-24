@@ -1,6 +1,33 @@
 import type { Point } from '../core/CanvasEngine';
 
-import type { SelectionBox } from '../core/SelectionManager';
+/**
+ * 绘制上下文接口
+ * 定义了绘制时的基本属性
+ */
+export interface DrawContext {
+  strokeStyle: string;
+  lineWidth: number;
+  fillStyle: string;
+}
+
+/**
+ * 工具类型枚举
+ * 定义了所有可用的绘制工具类型
+ */
+export const ToolType = {
+  PEN: 'pen',
+  BRUSH: 'brush',
+  RECT: 'rect',
+  CIRCLE: 'circle',
+  LINE: 'line',
+  POLYGON: 'polygon',
+  TEXT: 'text',
+  ERASER: 'eraser',
+  SELECT: 'select',
+  TRANSFORM: 'transform'
+} as const;
+
+export type ToolType = typeof ToolType[keyof typeof ToolType];
 
 /**
  * 性能模式枚举
@@ -45,35 +72,45 @@ export interface PreRenderedCache {
 
 /**
  * 绘制动作接口
- * 
- * 定义了一个完整的绘制操作的数据结构，支持预渲染缓存优化
+ * 定义了每个绘制操作的基本信息
  */
 export interface DrawAction {
+  /** 动作唯一标识 */
   id: string;
-  type: string;
+  /** 工具类型 */
+  type: ToolType;
+  /** 绘制点数组 */
   points: Point[];
-  context: {
-    strokeStyle: string;
-    lineWidth: number;
-    fillStyle: string;
-  };
+  /** 绘制上下文（颜色、线宽等） */
+  context: DrawContext;
+  /** 时间戳 */
   timestamp: number;
-  
-  // 特殊工具字段
-  text?: string; // 文字工具专用
-  selected?: boolean; // 选择工具专用
-  selectedActions?: string[]; // 选择工具专用
-  selectionBox?: SelectionBox; // 选择工具专用
-  
-  // 性能优化字段
-  /** 预渲染缓存数据，如果存在则可以直接使用，否则需要实时绘制 */
-  preRenderedCache?: PreRenderedCache;
-  /** 是否支持预渲染缓存（简单图形通常不需要缓存） */
-  supportsCaching?: boolean;
-  /** 绘制复杂度评分，用于决定是否启用缓存 */
+  /** 复杂度评分（用于性能优化） */
   complexityScore?: number;
-  /** 是否强制使用实时绘制（用于调试或特殊需求） */
-  forceRealTimeRender?: boolean;
+  /** 是否支持缓存 */
+  supportsCaching?: boolean;
+  /** 特殊属性（如文本内容） */
+  text?: string;
+  /** 是否被选中 */
+  selected?: boolean;
+  
+  // ============================================
+  // 虚拟图层属性
+  // ============================================
+  /** 虚拟图层ID */
+  virtualLayerId?: string;
+  /** 虚拟图层名称 */
+  layerName?: string;
+  /** 虚拟图层可见性 */
+  layerVisible?: boolean;
+  /** 虚拟图层透明度 (0-1) */
+  layerOpacity?: number;
+  /** 虚拟图层锁定状态 */
+  layerLocked?: boolean;
+  /** 虚拟图层创建时间 */
+  layerCreated?: number;
+  /** 虚拟图层修改时间 */
+  layerModified?: number;
 }
 
 export abstract class DrawTool {

@@ -6,21 +6,23 @@ import { logger } from '../utils/Logger';
 export type ToolType = 'pen' | 'rect' | 'circle' | 'line' | 'polygon' | 'text' | 'eraser' | 'select';
 
 /**
- * 工具管理器 - 简化版本
+ * 工具管理器 - 异步版本（支持重量级工具扩展）
  * 
  * 管理当前激活的工具，配合ToolFactory使用
+ * 支持异步加载，为未来重量级工具（AI、3D、协作等）提供扩展性
  */
 export class ToolManager {
   private currentTool: ToolType = 'pen';
   private currentToolInstance: DrawTool | null = null;
   private toolFactory: ToolFactory;
+  private loadingState: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
 
   constructor() {
     this.toolFactory = ToolFactory.getInstance();
   }
 
   /**
-   * 设置当前工具（异步）
+   * 设置当前工具（异步版本，支持重量级工具）
    */
   public async setCurrentTool(toolType: ToolType): Promise<void> {
     if (this.currentTool === toolType && this.currentToolInstance) {
@@ -29,14 +31,17 @@ export class ToolManager {
     }
 
     try {
+      this.loadingState = 'loading';
       logger.debug(`切换工具: ${this.currentTool} -> ${toolType}`);
       
       const tool = await this.toolFactory.createTool(toolType);
       this.currentTool = toolType;
       this.currentToolInstance = tool;
+      this.loadingState = 'ready';
       
       logger.info(`工具切换成功: ${toolType}`);
     } catch (error) {
+      this.loadingState = 'error';
       logger.error(`切换工具失败: ${toolType}`, error);
       throw error;
     }
@@ -85,9 +90,9 @@ export class ToolManager {
   }
 
   /**
-   * 获取工具实例（同步方法，仅返回已缓存的工具）
+   * 获取工具实例（异步方法）
    */
-  public getTool(type?: ToolType): DrawTool | null {
+  public async getTool(type?: ToolType): Promise<DrawTool | null> {
     const toolType = type || this.currentTool;
     
     // 如果是当前工具且已加载，直接返回
@@ -95,8 +100,13 @@ export class ToolManager {
       return this.currentToolInstance;
     }
     
-    // 否则返回null，需要通过异步方法获取
-    return null;
+    // 否则尝试创建工具
+    try {
+      return await this.toolFactory.createTool(toolType);
+    } catch (error) {
+      logger.error(`获取工具失败: ${toolType}`, error);
+      return null;
+    }
   }
 
   /**
@@ -104,6 +114,13 @@ export class ToolManager {
    */
   public getCurrentToolInstance(): DrawTool | null {
     return this.currentToolInstance;
+  }
+
+  /**
+   * 获取加载状态
+   */
+  public getLoadingState(): 'idle' | 'loading' | 'ready' | 'error' {
+    return this.loadingState;
   }
 
   /**
@@ -122,17 +139,42 @@ export class ToolManager {
   }
 
   /**
+   * 预加载工具（后台加载，不阻塞UI）
+   */
+  public async preloadTool(type: ToolType): Promise<void> {
+    await this.toolFactory.preloadTool(type);
+  }
+
+  /**
+   * 预加载多个工具
+   */
+  public async preloadTools(types: ToolType[]): Promise<void> {
+    await this.toolFactory.preloadTools(types);
+  }
+
+  /**
+   * 获取工具元数据
+   */
+  public getToolMetadata(type: ToolType) {
+    return this.toolFactory.getToolMetadata(type);
+  }
+
+  /**
    * 获取工具管理器统计信息
    */
   public getStats(): {
     currentTool: ToolType;
+    loadingState: string;
     availableTools: number;
     cachedTools: number;
+    loadingTools: number;
     toolTypes: ToolType[];
+    heavyTools: ToolType[];
   } {
     const factoryStats = this.toolFactory.getStats();
     return {
       currentTool: this.currentTool,
+      loadingState: this.loadingState,
       ...factoryStats
     };
   }
@@ -148,9 +190,21 @@ export class ToolManager {
   /**
    * 注册自定义工具（保持扩展性）
    */
-  public registerTool(type: ToolType, factory: () => DrawTool): void {
+  public registerTool(type: ToolType, factory: () => DrawTool | Promise<DrawTool>): void {
     this.toolFactory.register(type, factory);
     logger.info(`注册自定义工具: ${type}`);
+  }
+
+  /**
+   * 注册重量级工具（未来扩展）
+   */
+  public registerHeavyTool(
+    type: ToolType,
+    factory: () => Promise<DrawTool>,
+    metadata: Omit<import('./ToolFactory').ToolMetadata, 'type'>
+  ): void {
+    this.toolFactory.registerHeavyTool(type, factory, metadata);
+    logger.info(`注册重量级工具: ${type}`, metadata);
   }
 
   /**
@@ -158,6 +212,8 @@ export class ToolManager {
    */
   public destroy(): void {
     this.toolFactory.destroy();
+    this.currentToolInstance = null;
+    this.loadingState = 'idle';
     logger.debug('工具管理器已销毁');
   }
 } 

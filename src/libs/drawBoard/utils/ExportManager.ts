@@ -47,4 +47,13 @@ export class ExportManager {
       });
     });
   }
+
+  /**
+   * 销毁导出管理器，清理所有资源
+   */
+  public destroy(): void {
+    // ExportManager主要持有Canvas引用，不需要强制清理
+    // Canvas的生命周期由CanvasEngine管理
+    console.log('🗑️ ExportManager destroyed');
+  }
 } 

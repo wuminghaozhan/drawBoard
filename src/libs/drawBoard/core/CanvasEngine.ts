@@ -67,6 +67,7 @@ export class CanvasEngine {
    * 确保容器尺寸准备就绪后再设置Canvas
    */
   private initializeCanvasSize(): void {
+    console.log('initializeCanvasSize', this.container.offsetWidth, this.container.offsetHeight);
     // 检查容器是否已有尺寸
     if (this.container.offsetWidth > 0 && this.container.offsetHeight > 0) {
       this.resize();

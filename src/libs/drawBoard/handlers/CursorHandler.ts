@@ -55,6 +55,19 @@ export class CursorHandler {
     this.setCursor('default');
   }
 
+  /**
+   * 销毁光标处理器，清理所有资源
+   */
+  public destroy(): void {
+    // 重置光标样式
+    this.resetCursor();
+    
+    // 清理Canvas引用
+    this.interactionCanvas = null;
+    
+    console.log('🗑️ CursorHandler destroyed');
+  }
+
   // ============================================
   // 私有方法 - 样式生成
   // ============================================
