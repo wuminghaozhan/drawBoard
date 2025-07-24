@@ -20,15 +20,26 @@ const Test: React.FC = () => {
 
   // 初始化DrawBoard
   useEffect(() => {
+    // 使用ref来跟踪初始化状态，避免React严格模式的双重调用
+    const initRef = { initialized: false };
+
     const initDrawBoard = () => {
       const container = containerRef.current;
       if (!container) return;
+
+      // 检查是否已经初始化
+      if (initRef.initialized || drawBoardRef.current) {
+        console.log('DrawBoard already initialized or initializing');
+        return;
+      }
 
       // 等待容器渲染完成
       if (container.offsetWidth === 0 || container.offsetHeight === 0) {
         setTimeout(initDrawBoard, 100);
         return;
       }
+
+      initRef.initialized = true;
 
       try {
         // 创建DrawBoard实例
@@ -52,17 +63,19 @@ const Test: React.FC = () => {
           console.log('Default tools loaded');
           
           // 设置初始工具和颜色
-          drawBoardRef.current!.setTool(drawData.tool);
-          drawBoardRef.current!.setColor(drawData.color);
-          drawBoardRef.current!.setLineWidth(drawData.lineWidth);
-          
-          console.log('Initial tool settings applied');
+          if (drawBoardRef.current) {
+            drawBoardRef.current.setTool(drawData.tool);
+            drawBoardRef.current.setColor(drawData.color);
+            drawBoardRef.current.setLineWidth(drawData.lineWidth);
+            console.log('Initial tool settings applied');
+          }
         }).catch(error => {
           console.error('Failed to initialize default tools:', error);
         });
 
       } catch (error) {
         console.error('DrawBoard initialization failed:', error);
+        initRef.initialized = false; // 重置状态，允许重试
       }
     };
 
@@ -78,6 +91,7 @@ const Test: React.FC = () => {
           drawBoardRef.current.destroy();
         }
         drawBoardRef.current = null;
+        initRef.initialized = false; // 重置初始化状态
       }
     };
   }, []);

@@ -59,6 +59,20 @@ export { TextTool } from './tools/TextTool';
 export { EraserTool } from './tools/EraserTool';
 export { SelectTool } from './tools/SelectTool';
 
+// 错误处理和资源管理
+export { 
+  ErrorHandler, 
+  DrawBoardError, 
+  DrawBoardErrorCode,
+  type ErrorRecoveryStrategy 
+} from './utils/ErrorHandler';
+
+export { 
+  ResourceManager, 
+  type DestroyableResource, 
+  type ResourceStats 
+} from './utils/ResourceManager';
+
 // 类型导出
 export type { ToolType } from './tools/DrawTool';
 export type { DrawAction, DrawContext } from './tools/DrawTool';

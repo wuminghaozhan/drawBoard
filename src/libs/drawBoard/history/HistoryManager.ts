@@ -235,7 +235,7 @@ export class HistoryManager {
     this.maxMemoryMB = 50;
     this.memoryCheckInterval = 10;
     
-    console.log('🗑️ HistoryManager destroyed');
+    logger.info('🗑️ HistoryManager destroyed');
   }
 
   /**

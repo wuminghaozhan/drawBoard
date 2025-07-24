@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>资源管理器修复测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .drawing-container {
+            width: 600px;
+            height: 400px;
+            border: 2px solid #ccc;
+            margin: 20px 0;
+            position: relative;
+            background: white;
+        }
+        .controls {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        button {
+            margin: 5px;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button.danger {
+            background: #dc3545;
+        }
+        button.danger:hover {
+            background: #c82333;
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 资源管理器修复测试</h1>
+        <p>测试React严格模式下的资源管理器和DrawBoard实例创建</p>
+        
+        <div class="status" id="status">等待初始化...</div>
+        
+        <div class="controls">
+            <button onclick="createInstance()">创建DrawBoard实例</button>
+            <button onclick="destroyInstance()" class="danger">销毁DrawBoard实例</button>
+            <button onclick="resetResourceManager()" class="danger">重置资源管理器</button>
+            <button onclick="clearLog()">清空日志</button>
+        </div>
+        
+        <div class="drawing-container" id="drawingContainer">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #999;">
+                画布容器
+            </div>
+        </div>
+        
+        <div class="log" id="log"></div>
+    </div>
+
+    <script type="module">
+        // 模拟DrawBoard的核心功能
+        class MockResourceManager {
+            constructor() {
+                this.resources = new Map();
+                this.isDestroying = false;
+                this.log('MockResourceManager 创建');
+            }
+            
+            register(resource, name) {
+                if (this.isDestroying) {
+                    throw new Error('资源管理器正在销毁中，无法注册新资源');
+                }
+                const id = `resource_${Date.now()}`;
+                this.resources.set(id, { ...resource, name });
+                this.log(`注册资源: ${name} (${id})`);
+                return id;
+            }
+            
+            async destroy() {
+                if (this.isDestroying) {
+                    this.log('资源管理器已经在销毁中');
+                    return;
+                }
+                
+                this.isDestroying = true;
+                this.log(`开始销毁 ${this.resources.size} 个资源`);
+                
+                for (const [id, resource] of this.resources) {
+                    try {
+                        await resource.destroy();
+                        this.log(`资源销毁成功: ${resource.name} (${id})`);
+                    } catch (error) {
+                        this.log(`资源销毁失败: ${resource.name} - ${error.message}`);
+                    }
+                }
+                
+                this.resources.clear();
+                this.isDestroying = false;
+                this.log('所有资源销毁完成');
+            }
+            
+            reset() {
+                this.resources.clear();
+                this.isDestroying = false;
+                this.log('资源管理器已重置');
+            }
+            
+            log(message) {
+                console.log(`[ResourceManager] ${message}`);
+                addLog(`[ResourceManager] ${message}`);
+            }
+        }
+        
+        class MockDrawBoard {
+            constructor(container, config = {}) {
+                this.container = container;
+                this.config = config;
+                this.resourceManager = new MockResourceManager();
+                this.isDestroyed = false;
+                
+                this.log('DrawBoard 构造函数开始');
+                
+                // 模拟初始化过程
+                setTimeout(() => {
+                    try {
+                        this.registerAsResource();
+                        this.log('DrawBoard 初始化完成');
+                        updateStatus('success', 'DrawBoard 实例创建成功');
+                    } catch (error) {
+                        this.log(`DrawBoard 初始化失败: ${error.message}`);
+                        updateStatus('error', `DrawBoard 初始化失败: ${error.message}`);
+                    }
+                }, 100);
+            }
+            
+            registerAsResource() {
+                // 检查资源管理器是否可用
+                if (!this.resourceManager || this.resourceManager.isDestroying) {
+                    this.log('资源管理器不可用，跳过资源注册');
+                    return;
+                }
+                
+                try {
+                    this.resourceManager.register({
+                        name: 'DrawBoard',
+                        type: 'drawBoard',
+                        destroy: async () => {
+                            await this.destroy();
+                        }
+                    }, 'DrawBoard主实例');
+                } catch (error) {
+                    this.log(`资源注册失败: ${error.message}`);
+                    // 不抛出错误，允许DrawBoard继续工作
+                }
+            }
+            
+            async destroy() {
+                if (this.isDestroyed) {
+                    this.log('DrawBoard 已经销毁');
+                    return;
+                }
+                
+                this.log('开始销毁 DrawBoard');
+                this.isDestroyed = true;
+                
+                try {
+                    await this.resourceManager.destroy();
+                    this.log('DrawBoard 销毁完成');
+                    updateStatus('success', 'DrawBoard 实例销毁成功');
+                } catch (error) {
+                    this.log(`DrawBoard 销毁失败: ${error.message}`);
+                    updateStatus('error', `DrawBoard 销毁失败: ${error.message}`);
+                }
+            }
+            
+            log(message) {
+                console.log(`[DrawBoard] ${message}`);
+                addLog(`[DrawBoard] ${message}`);
+            }
+        }
+        
+        // 全局变量
+        let currentInstance = null;
+        
+        // 工具函数
+        function addLog(message) {
+            const logElement = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logElement.innerHTML += `[${timestamp}] ${message}\n`;
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+        
+        function updateStatus(type, message) {
+            const statusElement = document.getElementById('status');
+            statusElement.className = `status ${type}`;
+            statusElement.textContent = message;
+        }
+        
+        // 全局函数
+        window.createInstance = function() {
+            if (currentInstance) {
+                addLog('DrawBoard 实例已存在，先销毁');
+                destroyInstance();
+            }
+            
+            const container = document.getElementById('drawingContainer');
+            addLog('开始创建 DrawBoard 实例...');
+            updateStatus('warning', '正在创建 DrawBoard 实例...');
+            
+            try {
+                currentInstance = new MockDrawBoard(container, {
+                    maxHistorySize: 100,
+                    enableShortcuts: true
+                });
+            } catch (error) {
+                addLog(`创建实例失败: ${error.message}`);
+                updateStatus('error', `创建实例失败: ${error.message}`);
+            }
+        };
+        
+        window.destroyInstance = function() {
+            if (!currentInstance) {
+                addLog('没有可销毁的 DrawBoard 实例');
+                updateStatus('warning', '没有可销毁的 DrawBoard 实例');
+                return;
+            }
+            
+            addLog('开始销毁 DrawBoard 实例...');
+            updateStatus('warning', '正在销毁 DrawBoard 实例...');
+            
+            currentInstance.destroy().then(() => {
+                currentInstance = null;
+                addLog('DrawBoard 实例已销毁并清理');
+            });
+        };
+        
+        window.resetResourceManager = function() {
+            if (currentInstance && currentInstance.resourceManager) {
+                currentInstance.resourceManager.reset();
+                addLog('资源管理器已重置');
+                updateStatus('success', '资源管理器已重置');
+            } else {
+                addLog('没有可重置的资源管理器');
+                updateStatus('warning', '没有可重置的资源管理器');
+            }
+        };
+        
+        window.clearLog = function() {
+            document.getElementById('log').innerHTML = '';
+        };
+        
+        // 模拟React严格模式的双重调用
+        function simulateStrictMode() {
+            addLog('=== 模拟 React 严格模式双重调用 ===');
+            
+            // 第一次调用
+            addLog('第一次调用 createInstance()');
+            createInstance();
+            
+            // 模拟异步操作后再次调用
+            setTimeout(() => {
+                addLog('第二次调用 createInstance() (模拟严格模式)');
+                createInstance();
+            }, 200);
+        }
+        
+        // 页面加载完成后自动测试
+        window.addEventListener('load', () => {
+            addLog('页面加载完成，开始测试...');
+            setTimeout(simulateStrictMode, 1000);
+        });
+    </script>
+</body>
+</html> 

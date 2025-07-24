@@ -359,7 +359,7 @@ export class ComplexityManager {
     this.historyManager = undefined;
     this.performanceManager = undefined;
     
-    console.log('🗑️ ComplexityManager destroyed');
+    logger.info('🗑️ ComplexityManager destroyed');
   }
 
   // ============================================

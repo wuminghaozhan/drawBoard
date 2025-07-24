@@ -1,5 +1,6 @@
 import type { DrawAction, PreRenderedCache } from '../tools/DrawTool';
 import { PerformanceMode } from '../tools/DrawTool';
+import { logger } from '../utils/Logger';
 
 
 // 重新导出PerformanceMode供外部使用
@@ -256,10 +257,10 @@ export class PerformanceManager {
       this.enforceMemoryLimits();
 
       return cache;
-    } catch (error) {
-      console.error('创建缓存失败:', error);
-      return null;
-    }
+          } catch (error) {
+        logger.error('创建缓存失败:', error);
+        return null;
+      }
   }
 
   /**
@@ -289,7 +290,7 @@ export class PerformanceManager {
       this.stats.totalDrawCalls++;
       return true;
     } catch (error) {
-      console.error('从缓存绘制失败:', error);
+      logger.error('从缓存绘制失败:', error);
       this.removeCache(action.id);
       this.stats.cacheMisses++;
       return false;

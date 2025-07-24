@@ -17,6 +17,9 @@ import type { DrawAction } from './tools/DrawTool';
 import type { DrawEvent } from './events/EventManager';
 import type { StrokeConfig } from './tools/stroke/StrokeTypes';
 import type { StrokePresetType } from './tools/StrokePresets';
+import { ErrorHandler, DrawBoardError, DrawBoardErrorCode } from './utils/ErrorHandler';
+import { ResourceManager } from './utils/ResourceManager';
+import { logger } from './utils/Logger';
 
 /**
  * DrawBoard 配置接口
@@ -104,16 +107,26 @@ export class DrawBoard {
     const existingInstance = DrawBoard.instances.get(container);
     
     if (existingInstance) {
-      return existingInstance;
+      // 检查实例是否仍然有效
+      try {
+        // 尝试访问实例属性来验证其有效性
+        if (existingInstance.container && existingInstance.canvasEngine) {
+          logger.debug('🔍 返回现有DrawBoard实例');
+          return existingInstance;
+        }
+      } catch {
+        logger.warn('现有实例无效，将创建新实例');
+        DrawBoard.instances.delete(container);
+      }
     }
     
-    console.log('🔧 Creating new DrawBoard instance for container');
+    logger.info('🔧 Creating new DrawBoard instance for container');
     const newInstance = new DrawBoard(container, config);
     DrawBoard.instances.set(container, newInstance);
     
     return newInstance;
   }
-  
+
   /**
    * 销毁指定容器的DrawBoard实例
    */
@@ -122,11 +135,21 @@ export class DrawBoard {
     if (instance) {
       instance.destroy();
       DrawBoard.instances.delete(container);
-      console.log('✅ DrawBoard instance destroyed and removed from registry');
+      logger.info('✅ DrawBoard instance destroyed and removed from registry');
       return true;
     }
     return false;
   }
+
+  // ============================================
+  // 错误处理和资源管理
+  // ============================================
+  
+  /** 错误处理器实例 */
+  private errorHandler: ErrorHandler;
+  
+  /** 资源管理器实例 */
+  private resourceManager: ResourceManager;
 
   // ============================================
   // 核心管理器实例
@@ -185,14 +208,50 @@ export class DrawBoard {
    * @param config - 配置选项，包含历史记录大小、快捷键开关、运笔配置等
    */
   constructor(container: HTMLCanvasElement | HTMLDivElement, config: DrawBoardConfig = {}) {
+    // 首先初始化错误处理和资源管理
+    this.errorHandler = ErrorHandler.getInstance();
+    this.resourceManager = ResourceManager.getInstance();
+    
     try {
-      // 同步初始化核心组件（移除插件系统的异步复杂性）
+      // 初始化核心组件
       this.initializeCoreComponents(container, config);
       
+      // 初始化处理器
+      this.initializeHandlers();
+      
+      // 绑定事件
+      this.bindEvents();
+      
+      // 设置快捷键
+      this.setupShortcuts();
+      
+      // 启用快捷键（如果配置允许）
+      if (config.enableShortcuts !== false) {
+        this.enableShortcuts();
+      }
+      
+      // 注册DrawBoard实例作为资源（在最后进行，确保所有组件都已初始化）
+      try {
+        this.registerAsResource();
+      } catch (error) {
+        logger.warn('资源注册失败，但DrawBoard实例仍可正常使用:', error);
+      }
+      
+      logger.info('=== DrawBoard 初始化完成 ===');
+      
     } catch (error) {
-      console.error('DrawBoard初始化失败:', error);
-      // 清理已初始化的资源
-      this.safeDestroy();
+      logger.error('DrawBoard初始化失败:', error);
+      
+      // 使用错误处理系统
+      const drawBoardError = DrawBoardError.fromError(
+        error as Error,
+        DrawBoardErrorCode.INITIALIZATION_FAILED,
+        { container, config }
+      );
+      
+      // 异步处理错误，避免在构造函数中阻塞
+      this.errorHandler.handle(drawBoardError);
+      
       throw new Error(`DrawBoard初始化失败: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -223,10 +282,10 @@ export class DrawBoard {
     // 设置ComplexityManager的依赖关系
     this.complexityManager.setDependencies(
       this.historyManager, 
-      this.performanceManager as unknown as { 
+      this.performanceManager as unknown as {
         getMemoryStats(): { cacheHitRate: number; underMemoryPressure: boolean }; 
         updateConfig(config: { complexityThreshold: number }): void; 
-        stats: { totalDrawCalls: number } 
+        stats: { totalDrawCalls: number }
       }
     );
 
@@ -239,7 +298,7 @@ export class DrawBoard {
     const interactionCanvas = this.canvasEngine.getLayer('interaction')?.canvas;
     
     if (!interactionCanvas) {
-      console.error('交互层canvas未找到');
+      logger.error('交互层canvas未找到');
       this.eventManager = new EventManager(
         container instanceof HTMLCanvasElement ? container : document.createElement('canvas')
       );
@@ -288,8 +347,6 @@ export class DrawBoard {
       this.canvasEngine,
       this.toolManager,
       this.historyManager,
-      this.selectionManager,
-      this.performanceManager,
       () => this.stateHandler.emitStateChange(),
       this.virtualLayerManager
     );
@@ -300,7 +357,7 @@ export class DrawBoard {
     // 初始化鼠标样式处理器 - 使用与EventManager相同的interactionCanvas
     const interactionCanvas = this.canvasEngine.getLayer('interaction')?.canvas;
     if (!interactionCanvas) {
-      console.warn('交互层canvas未找到，CursorHandler将使用容器元素');
+      logger.warn('交互层canvas未找到，CursorHandler将使用容器元素');
       this.cursorHandler = new CursorHandler(this.container);
     } else {
       this.cursorHandler = new CursorHandler(this.container, interactionCanvas);
@@ -402,7 +459,7 @@ export class DrawBoard {
   public async initializeDefaultTools(): Promise<void> {
     // 预加载常用工具
     await this.toolManager.setCurrentTool('pen');
-    console.log('默认工具初始化完成');
+          logger.info('默认工具初始化完成');
   }
 
   /**
@@ -476,6 +533,10 @@ export class DrawBoard {
     }
   }
 
+  /**
+   * 获取当前笔刷预设
+   * @returns 当前笔刷预设类型或null
+   */
   public async getCurrentStrokePreset(): Promise<StrokePresetType | null> {
     const penTool = await this.toolManager.getTool('pen');
     if (penTool && 'getCurrentPreset' in penTool) {
@@ -822,59 +883,98 @@ export class DrawBoard {
   }
 
   // ============================================
+  // 错误处理和资源管理API
+  // ============================================
+
+  /**
+   * 获取错误统计信息
+   */
+  public getErrorStats() {
+    return this.errorHandler.getErrorStats();
+  }
+
+  /**
+   * 获取错误历史
+   */
+  public getErrorHistory() {
+    return this.errorHandler.getErrorHistory();
+  }
+
+  /**
+   * 清空错误历史
+   */
+  public clearErrorHistory(): void {
+    this.errorHandler.clearErrorHistory();
+  }
+
+  /**
+   * 订阅错误事件
+   */
+  public onError(code: DrawBoardErrorCode, callback: (error: DrawBoardError) => void): () => void {
+    return this.errorHandler.onError(code, callback);
+  }
+
+  /**
+   * 获取资源统计信息
+   */
+  public getResourceStats() {
+    return this.resourceManager.getStats();
+  }
+
+  /**
+   * 检查资源泄漏
+   */
+  public checkResourceLeaks() {
+    return this.resourceManager.checkResourceLeaks();
+  }
+
+  /**
+   * 清理已销毁的资源
+   */
+  public cleanupDestroyedResources(): void {
+    this.resourceManager.cleanupDestroyedResources();
+  }
+
+  // ============================================
   // 生命周期管理
   // ============================================
 
   /**
    * 销毁DrawBoard实例
    */
-  public destroy(): void {
-    // 从静态单例映射中移除实例
-    if (this.container) {
-      DrawBoard.instances.delete(this.container);
-      console.log('✅ DrawBoard instance removed from static registry');
-    }
-    this.safeDestroy();
-  }
-
-  /**
-   * 安全的销毁方法，即使部分组件未初始化也能正常执行
-   */
-  private safeDestroy(): void {
+  public async destroy(): Promise<void> {
     try {
-      console.log('🔄 开始销毁DrawBoard资源...');
+      // 从静态单例映射中移除实例
+      if (this.container) {
+        DrawBoard.instances.delete(this.container);
+        logger.info('✅ DrawBoard instance removed from static registry');
+      }
       
-      // 1. 首先销毁事件和快捷键管理器（停止用户交互）
-      this.shortcutManager?.destroy();
-      this.eventManager?.destroy();
+      // 使用资源管理器销毁所有资源
+      await this.resourceManager.destroy();
       
-      // 2. 销毁处理器（停止内部处理）
-      this.drawingHandler?.destroy();
-      this.cursorHandler?.destroy();
-      this.stateHandler?.destroy();
-      
-      // 3. 销毁核心管理器（按依赖顺序）
-      this.complexityManager?.destroy();
-      this.performanceManager?.destroy();
-      this.selectionManager?.destroy();
-      this.historyManager?.destroy();
-      this.toolManager?.destroy();
-      this.virtualLayerManager?.destroy(); // 销毁虚拟图层管理器
-      
-      // 4. 最后销毁Canvas引擎（清理DOM资源）
-      this.canvasEngine?.destroy();
-      
-      // 5. 清理导出管理器
-      this.exportManager?.destroy();
-      
-      // 6. 清理容器引用
+      // 清理容器引用
       this.container = null as unknown as HTMLElement;
       
-      console.log('✅ DrawBoard资源销毁完成');
+      logger.info('✅ DrawBoard销毁完成');
+      
     } catch (error) {
-      console.error('销毁资源时出错:', error);
+      logger.error('DrawBoard销毁失败:', error);
+      
+      // 使用错误处理系统
+      const drawBoardError = DrawBoardError.fromError(
+        error as Error,
+        DrawBoardErrorCode.RESOURCE_DESTROY_FAILED,
+        { container: this.container }
+      );
+      
+      await this.errorHandler.handle(drawBoardError);
     }
   }
+
+
+
+
 
   // ============================================
   // 复杂度自动管理
@@ -887,6 +987,34 @@ export class DrawBoard {
     // 委托给复杂度管理器检查
     if (this.complexityManager.shouldRecalculate()) {
       await this.recalculateComplexity();
+    }
+  }
+
+  // ============================================
+  // 资源管理
+  // ============================================
+
+  /**
+   * 注册DrawBoard实例作为资源
+   */
+  private registerAsResource(): void {
+    // 检查资源管理器是否可用
+    if (!this.resourceManager || this.resourceManager['isDestroying']) {
+      logger.warn('资源管理器不可用，跳过资源注册');
+      return;
+    }
+
+    try {
+      this.resourceManager.register({
+        name: 'DrawBoard',
+        type: 'drawBoard',
+        destroy: async () => {
+          await this.destroy();
+        }
+      }, 'DrawBoard主实例');
+    } catch (error) {
+      logger.warn('资源注册失败:', error);
+      // 不抛出错误，允许DrawBoard继续工作
     }
   }
 } 

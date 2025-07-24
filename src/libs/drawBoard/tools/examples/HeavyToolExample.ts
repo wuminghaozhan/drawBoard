@@ -1,6 +1,5 @@
 import { DrawTool } from '../DrawTool';
-import type { ToolType } from '../DrawTool';
-import { logger } from '../../utils/Logger';
+import type { ToolType, DrawAction } from '../DrawTool';
 
 /**
  * AI绘画工具示例 - 重量级工具
@@ -184,8 +183,6 @@ export class AIPaintingTool extends DrawTool {
  */
 export class ThreeDModelingTool extends DrawTool {
   private threeJS: any = null;
-  private renderer: any = null;
-  private physicsEngine: any = null;
   private isInitialized: boolean = false;
 
   constructor() {
@@ -301,8 +298,6 @@ export class ThreeDModelingTool extends DrawTool {
  * 协作工具示例 - 重量级工具
  */
 export class CollaborativeTool extends DrawTool {
-  private websocket: any = null;
-  private serverConnection: any = null;
   private isConnected: boolean = false;
 
   constructor() {

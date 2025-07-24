@@ -46,10 +46,7 @@ export class PenToolRefactored extends DrawTool {
   private bezierRenderer: BezierRenderer;
   private realtimeRenderer: RealtimeRenderer;
   
-  // 状态管理
-  private lastTimestamp: number = 0;
-  private lastPressure: number = 0.5;
-  private lastVelocity: number = 0.5;
+
 
   constructor() {
     super('画笔', 'pen');

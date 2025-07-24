@@ -41,7 +41,6 @@ export class SelectTool extends DrawTool {
   private isTransformMode: boolean = false;
   private selectedActionForTransform: DrawAction | null = null;
   private isDragging: boolean = false;
-  private dragStartPoint: Point | null = null;
   private currentHoverControlPoint: ControlPoint | null = null;
 
   constructor() {

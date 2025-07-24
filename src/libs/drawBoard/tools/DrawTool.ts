@@ -90,6 +90,16 @@ export interface DrawAction {
   text?: string;
   /** 是否被选中 */
   selected?: boolean;
+  /** 选中的动作列表（用于选择工具） */
+  selectedActions?: DrawAction[];
+  
+  // ============================================
+  // 性能优化属性
+  // ============================================
+  /** 是否强制实时渲染（跳过缓存） */
+  forceRealTimeRender?: boolean;
+  /** 预渲染缓存数据 */
+  preRenderedCache?: PreRenderedCache;
   
   // ============================================
   // 虚拟图层属性

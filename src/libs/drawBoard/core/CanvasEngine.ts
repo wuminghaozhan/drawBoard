@@ -16,6 +16,8 @@ export interface CanvasLayer {
   visible: boolean;
 }
 
+import { logger } from '../utils/Logger';
+
 export class CanvasEngine {
   protected container: HTMLDivElement;
   protected layers: Map<string, CanvasLayer> = new Map();
@@ -25,7 +27,7 @@ export class CanvasEngine {
   private contextCache: Map<string, DrawContext> = new Map();
 
   constructor(container: HTMLCanvasElement | HTMLDivElement) {
-    console.log('🔧 CanvasEngine constructor called with:', container);
+    logger.debug('🔧 CanvasEngine constructor called with:', container);
     
     if (container instanceof HTMLDivElement) {
       this.container = container;
@@ -33,7 +35,7 @@ export class CanvasEngine {
       // 🧹 清理现有canvas（每次都清理，确保干净的状态）
       const existingCanvases = this.container.querySelectorAll('canvas');
       if (existingCanvases.length > 0) {
-        console.log(`🧹 Removing ${existingCanvases.length} existing canvas elements`);
+        logger.debug(`🧹 Removing ${existingCanvases.length} existing canvas elements`);
         Array.from(existingCanvases).forEach(c => c.remove());
       }
       
@@ -67,7 +69,7 @@ export class CanvasEngine {
    * 确保容器尺寸准备就绪后再设置Canvas
    */
   private initializeCanvasSize(): void {
-    console.log('initializeCanvasSize', this.container.offsetWidth, this.container.offsetHeight);
+    logger.debug('initializeCanvasSize', this.container.offsetWidth, this.container.offsetHeight);
     // 检查容器是否已有尺寸
     if (this.container.offsetWidth > 0 && this.container.offsetHeight > 0) {
       this.resize();
@@ -78,7 +80,7 @@ export class CanvasEngine {
           this.resize();
         } else {
           // 再次失败则使用默认尺寸
-          console.warn('容器尺寸仍为0，使用默认尺寸');
+          logger.warn('容器尺寸仍为0，使用默认尺寸');
           this.container.style.width = '800px';
           this.container.style.height = '600px';
           this.resize();
@@ -97,13 +99,13 @@ export class CanvasEngine {
   }
 
   private createLayer(name: string, zIndex: number): void {
-    console.log('Creating layer:', name, 'with z-index:', zIndex);
+    logger.debug('Creating layer:', name, 'with z-index:', zIndex);
     
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d')!;
     
     if (!ctx) {
-      console.error('Failed to get 2D context for layer:', name);
+      logger.error('Failed to get 2D context for layer:', name);
       return;
     }
     
@@ -121,11 +123,11 @@ export class CanvasEngine {
     // 交互层需要接收事件
     if (name === 'interaction') {
       canvas.style.pointerEvents = 'auto';
-      console.log('Interaction layer created with pointer-events: auto');
+      logger.debug('Interaction layer created with pointer-events: auto');
     }
     
     this.container.appendChild(canvas);
-    console.log('Canvas appended to container for layer:', name);
+    logger.debug('Canvas appended to container for layer:', name);
     
     this.layers.set(name, {
       canvas,
@@ -133,7 +135,7 @@ export class CanvasEngine {
       visible: true
     });
     
-    console.log('Layer created successfully:', name);
+    logger.debug('Layer created successfully:', name);
   }
 
   protected setupContext(ctx: CanvasRenderingContext2D, layerName?: string): void {
@@ -227,17 +229,17 @@ export class CanvasEngine {
     const newWidth = container.offsetWidth;
     const newHeight = container.offsetHeight;
     
-    console.log('CanvasEngine resize:', newWidth, 'x', newHeight);
+    logger.debug('CanvasEngine resize:', newWidth, 'x', newHeight);
     
     // 🔒 防止0尺寸导致canvas清空
     if (newWidth <= 0 || newHeight <= 0) {
-      console.warn('⚠️ Container size is 0, skipping resize to prevent canvas clearing');
+      logger.warn('⚠️ Container size is 0, skipping resize to prevent canvas clearing');
       return;
     }
     
     // 🔒 防止重复resize相同尺寸
     if (this.width === newWidth && this.height === newHeight) {
-      console.log('✅ Size unchanged, skipping resize');
+      logger.debug('✅ Size unchanged, skipping resize');
       return;
     }
     
@@ -315,11 +317,11 @@ export class CanvasEngine {
    * 销毁CanvasEngine，清理所有资源
    */
   public destroy(): void {
-    console.log('🗑️ Destroying CanvasEngine...');
+    logger.info('🗑️ Destroying CanvasEngine...');
     
     // 清理所有canvas元素
     this.layers.forEach((layer, name) => {
-      console.log(`  Removing layer: ${name}`);
+      logger.debug(`  Removing layer: ${name}`);
       if (layer.canvas.parentNode) {
         layer.canvas.parentNode.removeChild(layer.canvas);
       }
@@ -331,6 +333,6 @@ export class CanvasEngine {
     // 清理上下文缓存
     this.contextCache.clear();
     
-    console.log('✅ CanvasEngine destroyed successfully');
+    logger.info('✅ CanvasEngine destroyed successfully');
   }
 } 

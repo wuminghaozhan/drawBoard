@@ -35,6 +35,13 @@ const Navigation: React.FC = () => {
         { path: '/performance', label: '⚡ 性能优化', description: '渲染优化、内存管理' },
         { path: '/protocol', label: '📋 协议解析', description: 'EDB文件格式解析' },
         { path: '/edb', label: '📁 EDB演示', description: 'EDB文件处理演示' },
+        { path: '/virtual-layer', label: '📄 虚拟图层', description: '虚拟图层管理演示' },
+      ]
+    },
+    {
+      title: '系统管理',
+      items: [
+        { path: '/error-handling', label: '🛡️ 错误处理', description: '错误处理和资源管理' },
       ]
     },
     {

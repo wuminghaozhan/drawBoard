@@ -2,8 +2,6 @@ import type { ToolManager } from '../tools/ToolManager';
 import type { CanvasEngine } from '../core/CanvasEngine';
 import type { HistoryManager } from '../history/HistoryManager';
 import type { DrawAction } from '../tools/DrawTool';
-import type { PerformanceManager } from '../core/PerformanceManager';
-import type { SelectionManager } from '../core/SelectionManager';
 import type { VirtualLayerManager } from '../core/VirtualLayerManager';
 import type { DrawEvent } from '../events/EventManager';
 import { logger } from '../utils/Logger';
@@ -21,8 +19,6 @@ export class DrawingHandler {
   private toolManager: ToolManager;
   private canvasEngine: CanvasEngine;
   private historyManager: HistoryManager;
-  private performanceManager: PerformanceManager;
-  private selectionManager: SelectionManager;
   private virtualLayerManager?: VirtualLayerManager;
   private onStateChange: () => void;
 
@@ -37,16 +33,12 @@ export class DrawingHandler {
     canvasEngine: CanvasEngine,
     toolManager: ToolManager,
     historyManager: HistoryManager,
-    selectionManager: SelectionManager,
-    performanceManager: PerformanceManager,
     onStateChange: () => void,
     virtualLayerManager?: VirtualLayerManager
   ) {
     this.canvasEngine = canvasEngine;
     this.toolManager = toolManager;
     this.historyManager = historyManager;
-    this.selectionManager = selectionManager;
-    this.performanceManager = performanceManager;
     this.virtualLayerManager = virtualLayerManager;
     this.onStateChange = onStateChange;
   }
