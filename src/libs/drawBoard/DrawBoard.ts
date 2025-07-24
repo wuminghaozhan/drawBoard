@@ -17,8 +17,8 @@ import type { DrawAction } from './tools/DrawTool';
 import type { DrawEvent } from './events/EventManager';
 import type { StrokeConfig } from './tools/stroke/StrokeTypes';
 import type { StrokePresetType } from './tools/StrokePresets';
-import { ErrorHandler, DrawBoardError, DrawBoardErrorCode } from './utils/ErrorHandler';
-import { ResourceManager } from './utils/ResourceManager';
+import { ErrorHandler, DrawBoardError, DrawBoardErrorCode, type DrawBoardErrorCode as DrawBoardErrorCodeType } from './utils/ErrorHandler';
+import { LightweightResourceManager } from './utils/LightweightResourceManager';
 import { logger } from './utils/Logger';
 
 /**
@@ -149,7 +149,7 @@ export class DrawBoard {
   private errorHandler: ErrorHandler;
   
   /** 资源管理器实例 */
-  private resourceManager: ResourceManager;
+  private resourceManager?: LightweightResourceManager;
 
   // ============================================
   // 核心管理器实例
@@ -208,9 +208,8 @@ export class DrawBoard {
    * @param config - 配置选项，包含历史记录大小、快捷键开关、运笔配置等
    */
   constructor(container: HTMLCanvasElement | HTMLDivElement, config: DrawBoardConfig = {}) {
-    // 首先初始化错误处理和资源管理
+    // 初始化错误处理
     this.errorHandler = ErrorHandler.getInstance();
-    this.resourceManager = ResourceManager.getInstance();
     
     try {
       // 初始化核心组件
@@ -222,19 +221,9 @@ export class DrawBoard {
       // 绑定事件
       this.bindEvents();
       
-      // 设置快捷键
-      this.setupShortcuts();
-      
       // 启用快捷键（如果配置允许）
       if (config.enableShortcuts !== false) {
         this.enableShortcuts();
-      }
-      
-      // 注册DrawBoard实例作为资源（在最后进行，确保所有组件都已初始化）
-      try {
-        this.registerAsResource();
-      } catch (error) {
-        logger.warn('资源注册失败，但DrawBoard实例仍可正常使用:', error);
       }
       
       logger.info('=== DrawBoard 初始化完成 ===');
@@ -381,12 +370,7 @@ export class DrawBoard {
     this.eventManager.on('touchend', this.handleDrawEnd.bind(this));
   }
 
-  /**
-   * 启用快捷键
-   */
-  private setupShortcuts(): void {
-    this.shortcutManager.enable();
-  }
+
 
   // ============================================
   // 配置和快捷键管理
@@ -490,15 +474,26 @@ export class DrawBoard {
     return this.toolManager.getToolMetadata(type);
   }
 
+  /**
+   * 获取当前工具
+   */
   public getCurrentTool(): ToolType {
     return this.toolManager.getCurrentTool();
   }
   
+  /**
+   * 设置颜色
+   * @param color 颜色
+   */
   public setColor(color: string): void {
     this.canvasEngine.setContext({ strokeStyle: color, fillStyle: color });
     // 颜色改变不需要重绘，只影响后续绘制
   }
   
+  /**
+   * 设置线宽
+   * @param width 线宽
+   */
   public setLineWidth(width: number): void {
     this.canvasEngine.setContext({ lineWidth: width });
     this.updateCursor();
@@ -509,6 +504,10 @@ export class DrawBoard {
   // 公共API - 运笔效果
   // ============================================
 
+  /**
+   * 设置运笔效果配置
+   * @param config 运笔效果配置
+   */
   public async setStrokeConfig(config: Partial<StrokeConfig>): Promise<void> {
     const penTool = await this.toolManager.getTool('pen');
     if (penTool && 'setStrokeConfig' in penTool) {
@@ -517,6 +516,10 @@ export class DrawBoard {
     }
   }
 
+  /**
+   * 获取运笔效果配置
+   * @returns 运笔效果配置或null
+   */
   public async getStrokeConfig(): Promise<StrokeConfig | null> {
     const penTool = await this.toolManager.getTool('pen');
     if (penTool && 'getStrokeConfig' in penTool) {
@@ -525,6 +528,10 @@ export class DrawBoard {
     return null;
   }
 
+  /**
+   * 设置运笔预设
+   * @param preset 运笔预设
+   */
   public async setStrokePreset(preset: StrokePresetType): Promise<void> {
     const penTool = await this.toolManager.getTool('pen');
     if (penTool && 'setPreset' in penTool) {
@@ -584,11 +591,17 @@ export class DrawBoard {
   // 公共API - 选择操作
   // ============================================
 
+  /**
+   * 清除选择
+   */
   public async clearSelection(): Promise<void> {
     this.selectionManager.clearSelection();
     await this.drawingHandler.forceRedraw();
   }
 
+  /**
+   * 删除选择
+   */
   public async deleteSelection(): Promise<void> {
     if (!this.selectionManager.hasSelection()) return;
     
@@ -601,15 +614,24 @@ export class DrawBoard {
     await this.drawingHandler.forceRedraw();
   }
 
+  /**
+   * 复制选择
+   */
   public copySelection(): DrawAction[] {
     if (!this.selectionManager.hasSelection()) return [];
     return this.selectionManager.copySelectedActions();
   }
 
+  /**
+   * 是否有选择
+   */
   public hasSelection(): boolean {
     return this.selectionManager.hasSelection();
   }
 
+  /**
+   * 获取选择
+   */
   public getSelectedActions(): DrawAction[] {
     return this.selectionManager.getSelectedActions().map(item => item.action);
   }
@@ -618,10 +640,17 @@ export class DrawBoard {
   // 公共API - 鼠标样式
   // ============================================
 
+  /**
+   * 设置鼠标样式
+   * @param cursor 鼠标样式
+   */
   public setCursor(cursor: string): void {
     this.cursorHandler.setCursor(cursor);
   }
 
+  /**
+   * 更新鼠标样式
+   */
   private updateCursor(): void {
     const currentTool = this.toolManager.getCurrentTool();
     const lineWidth = this.canvasEngine.getContext().lineWidth;
@@ -636,10 +665,16 @@ export class DrawBoard {
   // 公共API - 状态管理
   // ============================================
 
+  /**
+   * 获取状态
+   */
   public getState(): DrawBoardState {
     return this.stateHandler.getState();
   }
 
+  /**
+   * 监听状态变化
+   */
   public onStateChange(callback: (state: DrawBoardState) => void): () => void {
     return this.stateHandler.onStateChange(callback);
   }
@@ -648,11 +683,17 @@ export class DrawBoard {
   // 公共API - 布局和显示
   // ============================================
   
+  /**
+   * 调整画布大小
+   */
   public async resize(): Promise<void> {
     this.canvasEngine.resize();
     await this.drawingHandler.forceRedraw();
   }
 
+  /**
+   * 显示网格
+   */
   public showGrid(show: boolean = true, gridSize: number = 20): void {
     if (show) {
       this.canvasEngine.drawGrid(gridSize);
@@ -661,10 +702,16 @@ export class DrawBoard {
     }
   }
 
+  /**
+   * 设置图层可见性
+   */
   public setLayerVisible(layerName: string, visible: boolean): void {
     this.canvasEngine.setLayerVisible(layerName, visible);
   }
 
+  /**
+   * 获取图层上下文
+   */
   public getLayerContext(layerName: string): CanvasRenderingContext2D | null {
     const layer = this.canvasEngine.getLayer(layerName);
     return layer?.ctx || null;
@@ -910,7 +957,7 @@ export class DrawBoard {
   /**
    * 订阅错误事件
    */
-  public onError(code: DrawBoardErrorCode, callback: (error: DrawBoardError) => void): () => void {
+  public onError(code: DrawBoardErrorCodeType, callback: (error: DrawBoardError) => void): () => void {
     return this.errorHandler.onError(code, callback);
   }
 
@@ -918,21 +965,36 @@ export class DrawBoard {
    * 获取资源统计信息
    */
   public getResourceStats() {
-    return this.resourceManager.getStats();
+    if (!this.resourceManager) {
+      return { total: 0, hasResources: false };
+    }
+    return {
+      total: this.resourceManager.getResourceCount(),
+      hasResources: this.resourceManager.hasResources()
+    };
   }
 
   /**
    * 检查资源泄漏
    */
   public checkResourceLeaks() {
-    return this.resourceManager.checkResourceLeaks();
+    if (!this.resourceManager) {
+      return { hasLeaks: false, leakedResources: [], recommendations: [] };
+    }
+    const hasResources = this.resourceManager.hasResources();
+    return {
+      hasLeaks: hasResources,
+      leakedResources: hasResources ? ['DrawBoard resources'] : [],
+      recommendations: hasResources ? ['建议调用destroy()方法清理资源'] : []
+    };
   }
 
   /**
    * 清理已销毁的资源
    */
   public cleanupDestroyedResources(): void {
-    this.resourceManager.cleanupDestroyedResources();
+    // 轻量级资源管理器不需要手动清理
+    logger.info('轻量级资源管理器无需手动清理');
   }
 
   // ============================================
@@ -950,8 +1012,10 @@ export class DrawBoard {
         logger.info('✅ DrawBoard instance removed from static registry');
       }
       
-      // 使用资源管理器销毁所有资源
-      await this.resourceManager.destroy();
+      // 销毁所有资源
+      if (this.resourceManager) {
+        await this.resourceManager.destroy();
+      }
       
       // 清理容器引用
       this.container = null as unknown as HTMLElement;
@@ -987,34 +1051,6 @@ export class DrawBoard {
     // 委托给复杂度管理器检查
     if (this.complexityManager.shouldRecalculate()) {
       await this.recalculateComplexity();
-    }
-  }
-
-  // ============================================
-  // 资源管理
-  // ============================================
-
-  /**
-   * 注册DrawBoard实例作为资源
-   */
-  private registerAsResource(): void {
-    // 检查资源管理器是否可用
-    if (!this.resourceManager || this.resourceManager['isDestroying']) {
-      logger.warn('资源管理器不可用，跳过资源注册');
-      return;
-    }
-
-    try {
-      this.resourceManager.register({
-        name: 'DrawBoard',
-        type: 'drawBoard',
-        destroy: async () => {
-          await this.destroy();
-        }
-      }, 'DrawBoard主实例');
-    } catch (error) {
-      logger.warn('资源注册失败:', error);
-      // 不抛出错误，允许DrawBoard继续工作
     }
   }
 } 

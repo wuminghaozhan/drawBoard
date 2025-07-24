@@ -43,7 +43,17 @@ export class TransformToolRefactored extends DrawTool {
     super('变换', 'transform');
     
     // 初始化模块化组件
-    this.controlPointGenerator = new ControlPointGenerator();
+    this.controlPointGenerator = new ControlPointGenerator({
+      controlPointSize: 8,
+      controlPointColor: '#007AFF',
+      controlPointBorderColor: '#FFFFFF',
+      controlPointHoverColor: '#0056CC',
+      selectionBoxColor: 'rgba(0, 122, 255, 0.2)',
+      selectionBoxLineWidth: 2,
+      keyboardMoveStep: 1,
+      showBoundingBox: true,
+      enableKeyboardControl: true
+    });
     
     this.setupKeyboardListeners();
   }
@@ -80,6 +90,39 @@ export class TransformToolRefactored extends DrawTool {
   public getControlPoints(): ControlPoint[] {
     return [...this.controlPoints];
   }
+
+  /**
+   * 根据点位置获取控制点
+   */
+  public getControlPointAt(point: Point): ControlPoint | null {
+    return this.findControlPointAt(point);
+  }
+
+  /**
+   * 检查点是否在选中图形内
+   */
+  public isPointInSelectedShape(point: Point): boolean {
+    return this.isPointInside(point);
+  }
+
+  /**
+   * 开始移动操作
+   */
+  public startMove(point: Point): void {
+    if (this.selectedAction) {
+      this.activeOperation = {
+        type: 'move',
+        actionId: this.selectedAction.id,
+        startPoints: [...this.selectedAction.points],
+        controlPoint: this.controlPoints[0], // 使用第一个控制点作为移动控制点
+        startBounds: this.calculateBounds(this.selectedAction.points),
+        startPoint: point,
+        currentPoint: point
+      };
+    }
+  }
+
+
 
   /**
    * 检查是否有选中的图形
@@ -158,7 +201,7 @@ export class TransformToolRefactored extends DrawTool {
       startBounds: this.calculateBounds(this.selectedAction.points),
       startPoint,
       currentPoint: startPoint,
-      currentPoints: [...this.selectedAction.points] // 添加缺失的属性
+
     };
   }
 
@@ -375,7 +418,7 @@ export class TransformToolRefactored extends DrawTool {
    */
   private calculateBounds(points: Point[]): BoundingBox {
     if (points.length === 0) {
-      return { x: 0, y: 0, width: 0, height: 0 };
+      return { x: 0, y: 0, width: 0, height: 0, centerX: 0, centerY: 0 };
     }
 
     const xs = points.map(p => p.x);
@@ -390,7 +433,9 @@ export class TransformToolRefactored extends DrawTool {
       x: minX,
       y: minY,
       width: maxX - minX,
-      height: maxY - minY
+      height: maxY - minY,
+      centerX: (minX + maxX) / 2,
+      centerY: (minY + maxY) / 2
     };
   }
 
@@ -452,7 +497,6 @@ export class TransformToolRefactored extends DrawTool {
     }
     
     this.clearSelection();
-    super.destroy?.();
   }
 }
 

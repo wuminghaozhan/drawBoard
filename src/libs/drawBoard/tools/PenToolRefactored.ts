@@ -287,8 +287,6 @@ export class PenToolRefactored extends DrawTool {
   public destroy(): void {
     // 清理资源
     this.currentPreset = null;
-    this.lastTimestamp = 0;
-    this.lastPressure = 0.5;
-    this.lastVelocity = 0.5;
+
   }
 } 

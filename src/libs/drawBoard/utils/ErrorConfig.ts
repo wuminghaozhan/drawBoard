@@ -1,4 +1,4 @@
-import { DrawBoardErrorCode } from './ErrorHandler';
+import { DrawBoardErrorCode, type DrawBoardErrorCode as DrawBoardErrorCodeType } from './ErrorHandler';
 
 /**
  * 错误处理配置
@@ -19,7 +19,7 @@ export interface ErrorConfig {
   /** 错误处理超时时间（毫秒） */
   recoveryTimeout: number;
   /** 特定错误代码的处理策略 */
-  errorStrategies: Record<DrawBoardErrorCode, ErrorStrategy>;
+  errorStrategies: Record<DrawBoardErrorCodeType, ErrorStrategy>;
 }
 
 /**
@@ -59,7 +59,49 @@ export const DEFAULT_ERROR_CONFIG: ErrorConfig = {
       userMessage: '画板初始化失败，请刷新页面重试',
       recordToHistory: true
     },
-    [DrawBoardErrorCode.TOOL_LOAD_FAILED]: {
+    [DrawBoardErrorCode.CONTAINER_NOT_FOUND]: {
+      level: 'error',
+      recoverable: false,
+      userMessage: '容器元素未找到',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.CANVAS_CREATION_FAILED]: {
+      level: 'error',
+      recoverable: false,
+      userMessage: 'Canvas创建失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.CANVAS_ERROR]: {
+      level: 'error',
+      recoverable: true,
+      userMessage: 'Canvas错误',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.CONTEXT_2D_FAILED]: {
+      level: 'error',
+      recoverable: false,
+      userMessage: '2D上下文获取失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.LAYER_CREATION_FAILED]: {
+      level: 'error',
+      recoverable: false,
+      userMessage: '图层创建失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.TOOL_ERROR]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '工具错误',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.TOOL_NOT_FOUND]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '工具未找到',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.TOOL_LOADING_FAILED]: {
       level: 'warn',
       recoverable: true,
       autoRecovery: 'fallback',
@@ -68,13 +110,16 @@ export const DEFAULT_ERROR_CONFIG: ErrorConfig = {
       userMessage: '工具加载失败，已切换到基础工具',
       recordToHistory: true
     },
-    [DrawBoardErrorCode.RENDER_FAILED]: {
+    [DrawBoardErrorCode.TOOL_INITIALIZATION_FAILED]: {
       level: 'warn',
       recoverable: true,
-      autoRecovery: 'retry',
-      maxRetries: 2,
-      retryInterval: 500,
-      userMessage: '渲染失败，正在重试',
+      userMessage: '工具初始化失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.MEMORY_ERROR]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '内存错误',
       recordToHistory: true
     },
     [DrawBoardErrorCode.MEMORY_LIMIT_EXCEEDED]: {
@@ -84,26 +129,103 @@ export const DEFAULT_ERROR_CONFIG: ErrorConfig = {
       userMessage: '内存使用超限，正在清理缓存',
       recordToHistory: true
     },
-    [DrawBoardErrorCode.NETWORK_ERROR]: {
+    [DrawBoardErrorCode.CACHE_CREATION_FAILED]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '缓存创建失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.RENDERING_ERROR]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '渲染错误',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.DRAW_ACTION_FAILED]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '绘制动作失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.REDRAW_FAILED]: {
       level: 'warn',
       recoverable: true,
       autoRecovery: 'retry',
-      maxRetries: 5,
-      retryInterval: 2000,
-      userMessage: '网络连接失败，正在重试',
+      maxRetries: 2,
+      retryInterval: 500,
+      userMessage: '渲染失败，正在重试',
       recordToHistory: true
     },
-    [DrawBoardErrorCode.INVALID_OPERATION]: {
+    [DrawBoardErrorCode.EVENT_ERROR]: {
       level: 'warn',
       recoverable: true,
-      autoRecovery: 'ignore',
-      userMessage: '操作无效，已忽略',
-      recordToHistory: false
+      userMessage: '事件错误',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.EVENT_BINDING_FAILED]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '事件绑定失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.EVENT_HANDLER_FAILED]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '事件处理失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.HISTORY_ERROR]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '历史记录错误',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.UNDO_FAILED]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '撤销失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.REDO_FAILED]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '重做失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.EXPORT_ERROR]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '导出错误',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.IMAGE_EXPORT_FAILED]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '图片导出失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.CLIPBOARD_COPY_FAILED]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '剪贴板复制失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.RESOURCE_ERROR]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '资源错误',
+      recordToHistory: true
     },
     [DrawBoardErrorCode.RESOURCE_DESTROY_FAILED]: {
       level: 'error',
       recoverable: false,
       userMessage: '资源清理失败',
+      recordToHistory: true
+    },
+    [DrawBoardErrorCode.RESOURCE_LEAK_DETECTED]: {
+      level: 'warn',
+      recoverable: true,
+      userMessage: '检测到资源泄漏',
       recordToHistory: true
     },
     [DrawBoardErrorCode.UNKNOWN_ERROR]: {

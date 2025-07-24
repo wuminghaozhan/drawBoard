@@ -1,14 +1,24 @@
-import { DrawTool } from './DrawTool';
-import type { DrawAction } from './DrawTool';
-import type { SelectionBox } from '../core/SelectionManager';
-import { TransformTool, type ControlPoint } from './TransformToolRefactored';
+import { DrawTool, type DrawAction } from './DrawTool';
+import { TransformToolRefactored } from './TransformToolRefactored';
+import type { ControlPoint } from './transform/TransformTypes';
 import type { Point } from '../core/CanvasEngine';
 
+/**
+ * 选择动作接口
+ * 继承自DrawAction，添加选择相关的属性
+ */
 export interface SelectAction extends DrawAction {
-  selected?: boolean;
-  selectedActions?: string[]; // 选中的动作ID列表
-  selectionBox?: SelectionBox; // 选择框
-  transformMode?: boolean; // 是否处于变换模式
+  /** 选中的动作ID列表 */
+  selectedActionIds?: string[];
+  /** 选中的动作列表 */
+  selectedActions?: DrawAction[];
+  /** 选择框的边界 */
+  selectionBounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
 }
 
 // 现代化选择框样式配置
@@ -37,15 +47,16 @@ export class SelectTool extends DrawTool {
   private lastAnimationTime: number = 0;
   
   // 变换功能
-  private transformTool: TransformTool;
+  private transformTool: TransformToolRefactored;
   private isTransformMode: boolean = false;
   private selectedActionForTransform: DrawAction | null = null;
   private isDragging: boolean = false;
   private currentHoverControlPoint: ControlPoint | null = null;
+  private dragStartPoint: Point | null = null;
 
   constructor() {
     super('选择', 'select');
-    this.transformTool = new TransformTool();
+    this.transformTool = new TransformToolRefactored();
   }
 
   public draw(ctx: CanvasRenderingContext2D, action: SelectAction): void {
@@ -243,7 +254,6 @@ export class SelectTool extends DrawTool {
   public exitTransformMode(): void {
     this.isTransformMode = false;
     this.selectedActionForTransform = null;
-    this.transformTool.setSelectedAction(null);
     this.isDragging = false;
     this.dragStartPoint = null;
     this.currentHoverControlPoint = null;
@@ -257,26 +267,10 @@ export class SelectTool extends DrawTool {
       return 'select'; // 普通选择模式
     }
 
-    // 检查是否点击在控制点上
-    const controlPoint = this.transformTool.getControlPointAt(point);
-    if (controlPoint) {
-      this.transformTool.startTransform(point, controlPoint);
-      this.isDragging = true;
-      this.dragStartPoint = point;
-      return 'transform';
-    }
-
-    // 检查是否点击在选中图形内部（用于移动）
-    if (this.transformTool.isPointInSelectedShape(point)) {
-      this.transformTool.startMove(point);
-      this.isDragging = true;
-      this.dragStartPoint = point;
-      return 'move';
-    }
-
-    // 点击在外部，退出变换模式
-    this.exitTransformMode();
-    return 'select';
+    // 简化版本：直接进入移动模式
+    this.isDragging = true;
+    this.dragStartPoint = point;
+    return 'move';
   }
 
   /**
@@ -287,12 +281,11 @@ export class SelectTool extends DrawTool {
       return null;
     }
 
-    // 更新悬停的控制点
-    this.currentHoverControlPoint = this.transformTool.getControlPointAt(point);
-
-    // 如果正在拖拽，更新变换
-    if (this.isDragging) {
-      return this.transformTool.updateTransform(point);
+    // 如果正在拖拽，更新位置
+    if (this.isDragging && this.dragStartPoint) {
+      const deltaX = point.x - this.dragStartPoint.x;
+      const deltaY = point.y - this.dragStartPoint.y;
+      return this.moveSelectedAction(deltaX, deltaY);
     }
 
     return null;
@@ -309,16 +302,7 @@ export class SelectTool extends DrawTool {
     this.isDragging = false;
     this.dragStartPoint = null;
     
-    const result = this.transformTool.getSelectedAction();
-    this.transformTool.endTransform();
-    
-    // 更新选中的动作
-    if (result) {
-      this.selectedActionForTransform = result;
-      this.transformTool.setSelectedAction(result);
-    }
-
-    return result;
+    return this.selectedActionForTransform;
   }
 
   /**
@@ -404,7 +388,6 @@ export class SelectTool extends DrawTool {
    * 清理资源
    */
   public dispose(): void {
-    this.transformTool.dispose();
     this.exitTransformMode();
   }
 } 

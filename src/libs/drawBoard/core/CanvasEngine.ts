@@ -138,6 +138,9 @@ export class CanvasEngine {
     logger.debug('Layer created successfully:', name);
   }
 
+  /**
+   * 设置上下文
+   */
   protected setupContext(ctx: CanvasRenderingContext2D, layerName?: string): void {
     // 如果有层名，检查缓存
     if (layerName) {
@@ -165,6 +168,9 @@ export class CanvasEngine {
            a.fillStyle === b.fillStyle;
   }
 
+  /**
+   * 设置上下文
+   */
   public setContext(context: Partial<DrawContext>): void {
     const newContext = { ...this.context, ...context };
     
@@ -206,10 +212,16 @@ export class CanvasEngine {
     this.contextCache.set(layerName, layerContext);
   }
 
+  /**
+   * 获取上下文
+   */
   public getContext(): DrawContext {
     return { ...this.context };
   }
 
+  /**
+   * 清除画布
+   */
   public clear(layerName?: string): void {
     if (layerName) {
       const layer = this.layers.get(layerName);
@@ -224,6 +236,9 @@ export class CanvasEngine {
     }
   }
 
+  /**
+   * 调整画布大小
+   */
   public resize(): void {
     const container = this.container;
     const newWidth = container.offsetWidth;
@@ -291,6 +306,9 @@ export class CanvasEngine {
     }
   }
 
+  /**
+   * 绘制网格
+   */
   public drawGrid(gridSize: number = 20, color: string = '#f0f0f0'): void {
     const ctx = this.getBackgroundLayer();
     ctx.strokeStyle = color;

@@ -1,5 +1,4 @@
 import type { Point } from '../../core/CanvasEngine';
-import type { DrawAction } from '../DrawTool';
 
 /**
  * 控制点类型枚举
@@ -35,17 +34,7 @@ export interface ControlPoint {
   pointIndex?: number; // 用于线条的点索引
 }
 
-/**
- * 变换操作接口
- */
-export interface TransformOperation {
-  type: 'move' | 'resize' | 'reshape';
-  actionId: string;
-  startPoints: Point[];
-  currentPoints: Point[];
-  controlPoint: ControlPoint;
-  startBounds: ShapeBounds;
-}
+
 
 /**
  * 图形边界框接口

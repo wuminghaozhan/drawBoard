@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { DrawBoard, DrawBoardErrorCode, type DrawBoardError } from '../../libs/drawBoard';
+import { useState, useEffect, useRef } from 'react';
+import { DrawBoard, DrawBoardErrorCode, type DrawBoardError, type DrawBoardErrorCode as DrawBoardErrorCodeType } from '../../libs/drawBoard';
 import './style.scss';
 
 interface ErrorInfo {
-  code: DrawBoardErrorCode;
+  code: DrawBoardErrorCodeType;
   message: string;
   timestamp: number;
   recoverable: boolean;
@@ -79,7 +79,7 @@ export default function ErrorHandlingDemo() {
     }
   }, []);
 
-  const triggerTestError = (errorCode: DrawBoardErrorCode) => {
+  const triggerTestError = (errorCode: DrawBoardErrorCodeType) => {
     if (!drawBoardRef.current) return;
 
     // 模拟不同类型的错误
