@@ -14,20 +14,17 @@ export interface DrawContext {
  * 工具类型枚举
  * 定义了所有可用的绘制工具类型
  */
-export const ToolType = {
-  PEN: 'pen',
-  BRUSH: 'brush',
-  RECT: 'rect',
-  CIRCLE: 'circle',
-  LINE: 'line',
-  POLYGON: 'polygon',
-  TEXT: 'text',
-  ERASER: 'eraser',
-  SELECT: 'select',
-  TRANSFORM: 'transform'
-} as const;
-
-export type ToolType = typeof ToolType[keyof typeof ToolType];
+export type ToolType = 
+  | 'pen'
+  | 'brush'
+  | 'rect'
+  | 'circle'
+  | 'line'
+  | 'polygon'
+  | 'text'
+  | 'eraser'
+  | 'select'
+  | 'transform';
 
 /**
  * 性能模式枚举

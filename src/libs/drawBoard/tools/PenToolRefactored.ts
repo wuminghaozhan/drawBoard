@@ -92,7 +92,7 @@ export class PenToolRefactored extends DrawTool {
   public setPreset(presetType: StrokePresetType): void {
     const preset = getStrokePreset(presetType);
     if (preset) {
-      this.setStrokeConfig(preset);
+      this.setStrokeConfig(preset.config);
       this.currentPreset = presetType;
     }
   }

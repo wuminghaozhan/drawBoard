@@ -1,15 +1,17 @@
-import type { DrawTool } from './DrawTool';
 import { ToolFactory } from './ToolFactory';
+import { DrawTool } from './DrawTool';
+import type { ToolType } from './DrawTool';
 import { logger } from '../utils/Logger';
 
-// 保持向后兼容的工具类型定义
-export type ToolType = 'pen' | 'rect' | 'circle' | 'line' | 'polygon' | 'text' | 'eraser' | 'select';
-
 /**
- * 工具管理器 - 异步版本（支持重量级工具扩展）
+ * 工具管理器 - 管理当前工具状态和工具切换
  * 
- * 管理当前激活的工具，配合ToolFactory使用
- * 支持异步加载，为未来重量级工具（AI、3D、协作等）提供扩展性
+ * 功能特性：
+ * - 工具状态管理
+ * - 异步工具加载
+ * - 工具缓存
+ * - 加载状态跟踪
+ * - 工具元数据管理
  */
 export class ToolManager {
   private currentTool: ToolType = 'pen';
@@ -78,13 +80,15 @@ export class ToolManager {
   private getToolDisplayName(type: ToolType): string {
     const nameMap: Record<ToolType, string> = {
       pen: '画笔',
+      brush: '毛笔',
       rect: '矩形',
       circle: '圆形', 
       line: '直线',
       polygon: '多边形',
       text: '文字',
       eraser: '橡皮擦',
-      select: '选择'
+      select: '选择',
+      transform: '变换'
     };
     return nameMap[type] || type;
   }
@@ -211,7 +215,8 @@ export class ToolManager {
    * 销毁工具管理器
    */
   public destroy(): void {
-    this.toolFactory.destroy();
+    // 不销毁ToolFactory，因为它是全局单例
+    // this.toolFactory.destroy(); // 注释掉这行
     this.currentToolInstance = null;
     this.loadingState = 'idle';
     logger.debug('工具管理器已销毁');

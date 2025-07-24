@@ -23,6 +23,10 @@ export interface VirtualLayerConfig {
   maxLayers?: number;
   defaultLayerName?: string;
   autoCreateLayer?: boolean;
+  /** 每个图层最大动作数，默认为1000 */
+  maxActionsPerLayer?: number;
+  /** 清理间隔，默认为100次操作 */
+  cleanupInterval?: number;
 }
 
 /**
@@ -48,11 +52,31 @@ export class VirtualLayerManager {
   private maxLayers: number = 50;
   private defaultLayerName: string = '虚拟图层';
   private autoCreateLayer: boolean = true;
+  
+  // 性能优化：缓存统计信息
+  private statsCache: {
+    totalLayers: number;
+    visibleLayers: number;
+    lockedLayers: number;
+    totalActions: number;
+    lastUpdate: number;
+  } | null = null;
+  
+  // 性能优化：缓存可见动作ID
+  private visibleActionIdsCache: string[] | null = null;
+  private visibleActionIdsCacheTime: number = 0;
+  
+  // 清理配置
+  private maxActionsPerLayer: number = 1000; // 每个图层最大动作数
+  private cleanupInterval: number = 100; // 每100次操作清理一次
+  private operationCount: number = 0;
 
   constructor(config: VirtualLayerConfig = {}) {
     this.maxLayers = config.maxLayers || 50;
     this.defaultLayerName = config.defaultLayerName || '虚拟图层';
     this.autoCreateLayer = config.autoCreateLayer !== false;
+    this.maxActionsPerLayer = config.maxActionsPerLayer || 1000;
+    this.cleanupInterval = config.cleanupInterval || 100;
     
     // 创建默认虚拟图层
     this.createDefaultLayer();
@@ -190,6 +214,7 @@ export class VirtualLayerManager {
 
     layer.visible = visible;
     layer.modified = Date.now();
+    this.invalidateCache(); // 失效缓存
     logger.debug('设置虚拟图层可见性:', layer.name, visible);
     return true;
   }
@@ -203,6 +228,7 @@ export class VirtualLayerManager {
 
     layer.opacity = Math.max(0, Math.min(1, opacity));
     layer.modified = Date.now();
+    this.invalidateCache(); // 失效缓存
     logger.debug('设置虚拟图层透明度:', layer.name, layer.opacity);
     return true;
   }
@@ -216,6 +242,7 @@ export class VirtualLayerManager {
 
     layer.locked = locked;
     layer.modified = Date.now();
+    this.invalidateCache(); // 失效缓存
     logger.debug('设置虚拟图层锁定:', layer.name, locked);
     return true;
   }
@@ -230,6 +257,7 @@ export class VirtualLayerManager {
     const oldName = layer.name;
     layer.name = newName.trim() || oldName;
     layer.modified = Date.now();
+    this.invalidateCache(); // 失效缓存
     logger.debug('重命名虚拟图层:', oldName, '->', layer.name);
     return true;
   }
@@ -263,6 +291,15 @@ export class VirtualLayerManager {
       layer.actionIds.push(actionId);
       layer.modified = Date.now();
     }
+
+    // 性能优化：增加操作计数并检查清理
+    this.operationCount++;
+    if (this.operationCount % this.cleanupInterval === 0) {
+      this.performCleanup();
+    }
+
+    // 失效缓存
+    this.invalidateCache();
 
     logger.debug('分配动作到虚拟图层:', actionId, '->', layer.name);
     return true;
@@ -325,9 +362,62 @@ export class VirtualLayerManager {
   }
 
   /**
-   * 获取所有可见动作ID
+   * 获取虚拟图层统计信息
+   */
+  public getVirtualLayerStats(): {
+    totalLayers: number;
+    visibleLayers: number;
+    lockedLayers: number;
+    totalActions: number;
+  } {
+    // 性能优化：使用缓存
+    const now = Date.now();
+    if (this.statsCache && (now - this.statsCache.lastUpdate) < 1000) {
+      return {
+        totalLayers: this.statsCache.totalLayers,
+        visibleLayers: this.statsCache.visibleLayers,
+        lockedLayers: this.statsCache.lockedLayers,
+        totalActions: this.statsCache.totalActions
+      };
+    }
+
+    // 重新计算统计信息
+    let totalActions = 0;
+    let visibleLayers = 0;
+    let lockedLayers = 0;
+    
+    for (const layer of this.virtualLayers.values()) {
+      totalActions += layer.actionIds.length;
+      if (layer.visible) visibleLayers++;
+      if (layer.locked) lockedLayers++;
+    }
+
+    // 更新缓存
+    this.statsCache = {
+      totalLayers: this.virtualLayers.size,
+      visibleLayers,
+      lockedLayers,
+      totalActions,
+      lastUpdate: now
+    };
+
+    return {
+      totalLayers: this.statsCache.totalLayers,
+      visibleLayers: this.statsCache.visibleLayers,
+      lockedLayers: this.statsCache.lockedLayers,
+      totalActions: this.statsCache.totalActions
+    };
+  }
+
+  /**
+   * 获取所有可见动作ID（性能优化版本）
    */
   public getVisibleActionIds(): string[] {
+    const now = Date.now();
+    if (this.visibleActionIdsCache && (now - this.visibleActionIdsCacheTime) < 1000) {
+      return [...this.visibleActionIdsCache];
+    }
+
     const visibleActionIds: string[] = [];
     
     for (const layer of this.virtualLayers.values()) {
@@ -336,7 +426,53 @@ export class VirtualLayerManager {
       }
     }
     
-    return visibleActionIds;
+    // 更新缓存
+    this.visibleActionIdsCache = visibleActionIds;
+    this.visibleActionIdsCacheTime = now;
+    
+    return [...visibleActionIds];
+  }
+
+  /**
+   * 失效缓存
+   */
+  private invalidateCache(): void {
+    this.statsCache = null;
+    this.visibleActionIdsCache = null;
+  }
+
+  /**
+   * 执行清理操作
+   */
+  private performCleanup(): void {
+    // 清理过大的图层
+    for (const layer of this.virtualLayers.values()) {
+      if (layer.actionIds.length > this.maxActionsPerLayer) {
+        // 保留最新的动作，删除旧的
+        const excessCount = layer.actionIds.length - this.maxActionsPerLayer;
+        layer.actionIds.splice(0, excessCount);
+        layer.modified = Date.now();
+        logger.debug(`清理图层 ${layer.name}，删除了 ${excessCount} 个旧动作`);
+      }
+    }
+
+    // 清理孤立的动作映射（动作已不存在但映射还在）
+    const validActionIds = new Set<string>();
+    for (const layer of this.virtualLayers.values()) {
+      layer.actionIds.forEach(id => validActionIds.add(id));
+    }
+
+    let cleanedCount = 0;
+    for (const [actionId] of this.actionLayerMap) {
+      if (!validActionIds.has(actionId)) {
+        this.actionLayerMap.delete(actionId);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      logger.debug(`清理了 ${cleanedCount} 个孤立的动作映射`);
+    }
   }
 
   /**
@@ -351,28 +487,6 @@ export class VirtualLayerManager {
    */
   private generateLayerId(): string {
     return `vlayer_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  }
-
-  /**
-   * 获取虚拟图层统计信息
-   */
-  public getVirtualLayerStats(): {
-    totalLayers: number;
-    visibleLayers: number;
-    lockedLayers: number;
-    totalActions: number;
-  } {
-    let totalActions = 0;
-    for (const layer of this.virtualLayers.values()) {
-      totalActions += layer.actionIds.length;
-    }
-
-    return {
-      totalLayers: this.virtualLayers.size,
-      visibleLayers: Array.from(this.virtualLayers.values()).filter(l => l.visible).length,
-      lockedLayers: Array.from(this.virtualLayers.values()).filter(l => l.locked).length,
-      totalActions
-    };
   }
 
   /**

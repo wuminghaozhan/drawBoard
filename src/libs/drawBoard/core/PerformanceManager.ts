@@ -120,14 +120,34 @@ export class PerformanceManager {
    * 设置性能模式
    */
   public setPerformanceMode(mode: PerformanceMode): void {
-    const oldMode = this.config.mode;
     this.config.mode = mode;
     
-    console.log(`性能模式从 ${oldMode} 切换到 ${mode}`);
+    // 根据模式调整配置
+    switch (mode) {
+      case PerformanceMode.HIGH_PERFORMANCE:
+        this.config.enableCaching = true;
+        this.config.enableBatching = true;
+        this.config.complexityThreshold = 50;
+        break;
+      case PerformanceMode.LOW_MEMORY:
+        this.config.enableCaching = false;
+        this.config.enableBatching = false;
+        this.config.complexityThreshold = 200;
+        this.clearAllCaches();
+        break;
+      case PerformanceMode.BALANCED:
+        this.config.enableCaching = true;
+        this.config.enableBatching = true;
+        this.config.complexityThreshold = 100;
+        break;
+      case PerformanceMode.AUTO:
+        // 自动模式保持当前配置，由监控器动态调整
+        break;
+    }
     
-    // 模式切换时的特殊处理
-    if (mode === PerformanceMode.LOW_MEMORY) {
-      this.clearAllCaches();
+    // 启动内存监控
+    if (this.config.enableMemoryMonitoring) {
+      this.startMemoryMonitoring();
     }
   }
 
@@ -292,8 +312,9 @@ export class PerformanceManager {
    */
   public clearAllCaches(): void {
     this.cacheMap.clear();
-    this.accessOrder.length = 0;
-    console.log('已清空所有预渲染缓存');
+    this.accessOrder = [];
+    this.stats.cacheHits = 0;
+    this.stats.cacheMisses = 0;
   }
 
   /**
@@ -494,24 +515,20 @@ export class PerformanceManager {
       // 自动模式下的智能切换
       if (this.config.mode === PerformanceMode.AUTO) {
         if (stats.underMemoryPressure) {
-          console.log('检测到内存压力，切换到平衡模式');
           this.setPerformanceMode(PerformanceMode.BALANCED);
           
           // 触发复杂度重新计算
           if (this.drawBoard) {
-            console.log('📊 内存压力下触发复杂度重新计算');
             this.drawBoard.recalculateComplexity();
           }
         } else if (stats.currentCacheMemoryMB < this.config.maxCacheMemoryMB * 0.5) {
           // 内存充足时切换到高性能模式
-          console.log('内存充足，切换到高性能模式');
           this.setPerformanceMode(PerformanceMode.HIGH_PERFORMANCE);
         }
       }
 
       // 缓存命中率过低时触发复杂度重新计算
       if (stats.cacheHitRate < 0.3 && this.stats.totalDrawCalls > 50) {
-        console.log(`📊 缓存命中率过低(${(stats.cacheHitRate * 100).toFixed(1)}%)，触发复杂度重新计算`);
         if (this.drawBoard) {
           this.drawBoard.recalculateComplexity();
         }
@@ -539,10 +556,6 @@ export class PerformanceManager {
     for (const id of expiredIds) {
       this.removeCache(id);
     }
-
-    if (expiredIds.length > 0) {
-      console.log(`清理了 ${expiredIds.length} 个过期缓存`);
-    }
   }
 
   /**
@@ -556,9 +569,6 @@ export class PerformanceManager {
     if (enabled) {
       // 清空所有缓存，强制实时渲染
       this.clearAllCaches();
-      console.log('启用强制实时渲染模式');
-    } else {
-      console.log('禁用强制实时渲染模式');
     }
   }
 } 

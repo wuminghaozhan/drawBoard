@@ -1,5 +1,5 @@
 import { CanvasEngine } from './core/CanvasEngine';
-import { ToolManager, type ToolType } from './tools/ToolManager';
+import { ToolManager } from './tools/ToolManager';
 import { HistoryManager } from './history/HistoryManager';
 import { EventManager } from './events/EventManager';
 import { ShortcutManager } from './shortcuts/ShortcutManager';
@@ -12,6 +12,7 @@ import { DrawingHandler } from './handlers/DrawingHandler';
 import { CursorHandler } from './handlers/CursorHandler';
 import { StateHandler, type DrawBoardState } from './handlers/StateHandler';
 import { PerformanceMode } from './tools/DrawTool';
+import type { ToolType } from './tools/DrawTool';
 import type { DrawAction } from './tools/DrawTool';
 import type { DrawEvent } from './events/EventManager';
 import type { StrokeConfig } from './tools/stroke/StrokeTypes';
@@ -34,6 +35,19 @@ export interface DrawBoardConfig {
   strokeConfig?: Partial<StrokeConfig>;
   /** 性能配置 */
   performanceConfig?: Partial<PerformanceConfig>;
+  /** 虚拟图层配置 */
+  virtualLayerConfig?: {
+    /** 最大图层数量，默认为50 */
+    maxLayers?: number;
+    /** 默认图层名称，默认为'虚拟图层' */
+    defaultLayerName?: string;
+    /** 是否自动创建图层，默认为true */
+    autoCreateLayer?: boolean;
+    /** 每个图层最大动作数，默认为1000 */
+    maxActionsPerLayer?: number;
+    /** 清理间隔，默认为100次操作 */
+    cleanupInterval?: number;
+  };
 }
 
 /**
@@ -201,7 +215,7 @@ export class DrawBoard {
     this.selectionManager = new SelectionManager(); // 选择管理器
     this.performanceManager = new PerformanceManager(config.performanceConfig); // 性能管理器
     this.complexityManager = new ComplexityManager(); // 复杂度管理器
-    this.virtualLayerManager = new VirtualLayerManager(); // 虚拟图层管理器
+    this.virtualLayerManager = new VirtualLayerManager(config.virtualLayerConfig); // 虚拟图层管理器
     
     // 设置PerformanceManager的DrawBoard引用，用于自动触发复杂度重新计算
     this.performanceManager.setDrawBoard(this);
@@ -353,11 +367,11 @@ export class DrawBoard {
     this.updateCursor();
   }
 
-  private handleDrawEnd(event: DrawEvent): void {
+  private async handleDrawEnd(event: DrawEvent): Promise<void> {
     this.drawingHandler.handleDrawEnd(event);
     
     // 检查是否需要重新计算复杂度
-    this.checkComplexityRecalculation();
+    await this.checkComplexityRecalculation();
     
     // 更新状态
     this.stateHandler.emitStateChange();
@@ -376,13 +390,10 @@ export class DrawBoard {
     
     // 切换到复杂工具时检查复杂度
     if (['brush', 'pen'].includes(toolType)) {
-      console.log(`🔄 切换到复杂工具 ${toolType}，检查复杂度...`);
-      this.checkComplexityRecalculation();
+      await this.checkComplexityRecalculation();
     }
     
     this.updateCursor();
-    // 🔧 工具切换只需要更新鼠标样式，不需要重绘历史记录
-    console.log('✅ Tool switched to:', toolType);
   }
 
   /**
@@ -432,7 +443,6 @@ export class DrawBoard {
   }
   
   public setLineWidth(width: number): void {
-    console.log('setLineWidth___', width);
     this.canvasEngine.setContext({ lineWidth: width });
     this.updateCursor();
     // 线宽改变不需要重绘，只影响后续绘制
@@ -442,32 +452,32 @@ export class DrawBoard {
   // 公共API - 运笔效果
   // ============================================
 
-  public setStrokeConfig(config: Partial<StrokeConfig>): void {
-    const penTool = this.toolManager.getTool('pen');
+  public async setStrokeConfig(config: Partial<StrokeConfig>): Promise<void> {
+    const penTool = await this.toolManager.getTool('pen');
     if (penTool && 'setStrokeConfig' in penTool) {
       (penTool as { setStrokeConfig: (config: Partial<StrokeConfig>) => void }).setStrokeConfig(config);
       // 配置改变不需要重绘，只影响后续绘制
     }
   }
 
-  public getStrokeConfig(): StrokeConfig | null {
-    const penTool = this.toolManager.getTool('pen');
+  public async getStrokeConfig(): Promise<StrokeConfig | null> {
+    const penTool = await this.toolManager.getTool('pen');
     if (penTool && 'getStrokeConfig' in penTool) {
       return (penTool as { getStrokeConfig: () => StrokeConfig }).getStrokeConfig();
     }
     return null;
   }
 
-  public setStrokePreset(preset: StrokePresetType): void {
-    const penTool = this.toolManager.getTool('pen');
+  public async setStrokePreset(preset: StrokePresetType): Promise<void> {
+    const penTool = await this.toolManager.getTool('pen');
     if (penTool && 'setPreset' in penTool) {
       (penTool as { setPreset: (preset: StrokePresetType) => void }).setPreset(preset);
       // 预设改变不需要重绘，只影响后续绘制
     }
   }
 
-  public getCurrentStrokePreset(): StrokePresetType | null {
-    const penTool = this.toolManager.getTool('pen');
+  public async getCurrentStrokePreset(): Promise<StrokePresetType | null> {
+    const penTool = await this.toolManager.getTool('pen');
     if (penTool && 'getCurrentPreset' in penTool) {
       return (penTool as { getCurrentPreset: () => StrokePresetType | null }).getCurrentPreset();
     }
@@ -478,27 +488,27 @@ export class DrawBoard {
   // 公共API - 历史记录管理
   // ============================================
 
-  public undo(): boolean {
+  public async undo(): Promise<boolean> {
     const action = this.historyManager.undo();
     if (action) {
-      this.drawingHandler.forceRedraw();
+      await this.drawingHandler.forceRedraw();
       return true;
     }
     return false;
   }
 
-  public redo(): boolean {
+  public async redo(): Promise<boolean> {
     const action = this.historyManager.redo();
     if (action) {
-      this.drawingHandler.forceRedraw();
+      await this.drawingHandler.forceRedraw();
       return true;
     }
     return false;
   }
 
-  public clear(): void {
+  public async clear(): Promise<void> {
     this.historyManager.clear();
-    this.drawingHandler.forceRedraw();
+    await this.drawingHandler.forceRedraw();
   }
 
   public canUndo(): boolean {
@@ -513,14 +523,12 @@ export class DrawBoard {
   // 公共API - 选择操作
   // ============================================
 
-  public clearSelection(): void {
-    console.log('clearSelection___');
+  public async clearSelection(): Promise<void> {
     this.selectionManager.clearSelection();
-    this.drawingHandler.forceRedraw();
-    this.updateCursor();
+    await this.drawingHandler.forceRedraw();
   }
 
-  public deleteSelection(): void {
+  public async deleteSelection(): Promise<void> {
     if (!this.selectionManager.hasSelection()) return;
     
     const selectedIds = this.selectionManager.getSelectedActionIdsForDeletion();
@@ -529,7 +537,7 @@ export class DrawBoard {
       this.historyManager.removeActionById(id);
     });
     this.selectionManager.clearSelection();
-    this.drawingHandler.forceRedraw();
+    await this.drawingHandler.forceRedraw();
   }
 
   public copySelection(): DrawAction[] {
@@ -550,12 +558,10 @@ export class DrawBoard {
   // ============================================
 
   public setCursor(cursor: string): void {
-    console.log('setCursor___', cursor);
     this.cursorHandler.setCursor(cursor);
   }
 
   private updateCursor(): void {
-    console.log('updateCursor___', this.toolManager.getCurrentTool());
     const currentTool = this.toolManager.getCurrentTool();
     const lineWidth = this.canvasEngine.getContext().lineWidth;
     
@@ -581,9 +587,9 @@ export class DrawBoard {
   // 公共API - 布局和显示
   // ============================================
   
-  public resize(): void {
+  public async resize(): Promise<void> {
     this.canvasEngine.resize();
-    this.drawingHandler.forceRedraw();
+    await this.drawingHandler.forceRedraw();
   }
 
   public showGrid(show: boolean = true, gridSize: number = 20): void {
@@ -627,10 +633,10 @@ export class DrawBoard {
   // 公共API - 性能管理
   // ============================================
 
-  public setPerformanceMode(mode: PerformanceMode): void {
+  public async setPerformanceMode(mode: PerformanceMode): Promise<void> {
     this.performanceManager.setPerformanceMode(mode);
     // 性能模式改变可能影响缓存，需要重绘历史
-    this.drawingHandler.forceRedraw();
+    await this.drawingHandler.forceRedraw();
   }
 
   public updatePerformanceConfig(config: Partial<PerformanceConfig>): void {
@@ -641,23 +647,21 @@ export class DrawBoard {
     return this.performanceManager.getMemoryStats();
   }
 
-  public clearPerformanceCache(): void {
+  public async clearPerformanceCache(): Promise<void> {
     this.performanceManager.clearAllCaches();
     // 清除缓存后需要重绘历史
-    this.drawingHandler.forceRedraw();
+    await this.drawingHandler.forceRedraw();
   }
 
-  public recalculateComplexity(): void {
+  public async recalculateComplexity(): Promise<void> {
     // 委托给复杂度管理器
-    const stats = this.complexityManager.recalculateAllComplexities();
+    this.complexityManager.recalculateAllComplexities();
     
     // 强制重绘以应用新的复杂度评估
-    this.drawingHandler.forceRedraw();
-    
-    console.log(`📊 复杂度重新计算完成，统计信息:`, stats);
+    await this.drawingHandler.forceRedraw();
   }
 
-  public setForceRealTimeRender(enabled: boolean = true): void {
+  public async setForceRealTimeRender(enabled: boolean = true): Promise<void> {
     // 设置强制实时渲染模式
     if (this.performanceManager) {
       // 可以通过performanceManager设置强制实时渲染
@@ -666,7 +670,7 @@ export class DrawBoard {
     
     // 如果启用强制实时渲染，立即重绘
     if (enabled) {
-      this.drawingHandler.forceRedraw();
+      await this.drawingHandler.forceRedraw();
     }
   }
 
@@ -696,6 +700,20 @@ export class DrawBoard {
       key: s.key,
       description: s.description
     }));
+  }
+
+  /**
+   * 获取工具管理器实例
+   */
+  public getToolManager(): ToolManager {
+    return this.toolManager;
+  }
+
+  /**
+   * 获取复杂度管理器实例
+   */
+  public getComplexityManager(): ComplexityManager {
+    return this.complexityManager;
   }
 
   // ============================================
@@ -816,7 +834,6 @@ export class DrawBoard {
       DrawBoard.instances.delete(this.container);
       console.log('✅ DrawBoard instance removed from static registry');
     }
-    console.log('destroy___', this.container);
     this.safeDestroy();
   }
 
@@ -866,10 +883,10 @@ export class DrawBoard {
   /**
    * 检查是否需要重新计算复杂度
    */
-  private checkComplexityRecalculation(): void {
+  private async checkComplexityRecalculation(): Promise<void> {
     // 委托给复杂度管理器检查
     if (this.complexityManager.shouldRecalculate()) {
-      this.recalculateComplexity();
+      await this.recalculateComplexity();
     }
   }
 } 

@@ -1,4 +1,4 @@
-import type { ToolType } from '../tools/ToolManager';
+import type { ToolType } from '../tools/DrawTool';
 
 /**
  * 鼠标样式处理器 - 负责管理画板的鼠标样式
@@ -79,15 +79,16 @@ export class CursorHandler {
    * @param lineWidth 线宽
    * @returns CSS cursor 值
    */
-  private getCursorForDrawingState(tool: ToolType, isDrawing: boolean, lineWidth: number): string {
+  private getCursorForDrawingState(toolType: ToolType, isDrawing: boolean, lineWidth: number): string {
     if (!isDrawing) {
-      return this.getCursorForTool(tool, lineWidth);
+      return this.getCursorForTool(toolType);
     }
 
     // 绘制状态下的特殊样式
     const drawingCursorMap: Record<ToolType, string> = {
       // 画笔绘制中 - 使用动态大小的实心圆点
       'pen': this.getPenDrawingCursor(lineWidth),
+      'brush': this.getPenDrawingCursor(lineWidth),
       
       // 橡皮擦绘制中 - 使用动态大小的空心圆
       'eraser': this.getEraserDrawingCursor(lineWidth),
@@ -102,10 +103,13 @@ export class CursorHandler {
       'polygon': 'crosshair',
       
       // 文字工具绘制中
-      'text': 'text'
+      'text': 'text',
+      
+      // 变换工具绘制中
+      'transform': 'move'
     };
     
-    return drawingCursorMap[tool] || this.getCursorForTool(tool, lineWidth);
+    return drawingCursorMap[toolType] || this.getCursorForTool(toolType);
   }
 
   /**
@@ -114,28 +118,21 @@ export class CursorHandler {
    * @param lineWidth 当前线宽
    * @returns CSS cursor 值
    */
-  private getCursorForTool(tool: ToolType, lineWidth: number): string {
+  private getCursorForTool(toolType: ToolType): string {
     const cursorMap: Record<ToolType, string> = {
-      // 画笔工具 - 使用画笔图标
-      'pen': this.getPenCursor(lineWidth),
-      
-      // 橡皮擦工具 - 使用动态大小的橡皮擦图标
-      'eraser': this.getEraserCursor(lineWidth),
-      
-      // 选择工具 - 使用鼠标指针图标
-      'select': 'default',
-      
-      // 几何图形工具 - 使用对应的图标
-      'rect': this.getRectCursor(lineWidth),
-      'circle': this.getCircleCursor(lineWidth),
-      'line': 'crosshair',
-      'polygon': 'crosshair',
-      
-      // 文字工具 - 使用文本光标
-      'text': 'text'
+      pen: 'crosshair',
+      brush: 'crosshair',
+      eraser: 'crosshair',
+      select: 'default',
+      rect: 'crosshair',
+      circle: 'crosshair',
+      line: 'crosshair',
+      polygon: 'crosshair',
+      text: 'text',
+      transform: 'move'
     };
     
-    return cursorMap[tool] || 'default';
+    return cursorMap[toolType] || 'default';
   }
 
   /**

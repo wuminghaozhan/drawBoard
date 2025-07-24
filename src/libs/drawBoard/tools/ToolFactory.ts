@@ -1,6 +1,6 @@
 import { DrawTool } from './DrawTool';
+import type { ToolType } from './DrawTool';
 import type { DrawAction } from './DrawTool';
-import type { ToolType } from './ToolManager';
 import { logger } from '../utils/Logger';
 
 /**
@@ -31,14 +31,19 @@ export interface ToolMetadata {
  * - 降级策略：加载失败时提供基础功能
  */
 export class ToolFactory {
-  private static instance: ToolFactory;
+  private static instance: ToolFactory | undefined;
   private tools: Map<ToolType, DrawTool> = new Map();
   private loadingPromises: Map<ToolType, Promise<DrawTool>> = new Map();
   private factories: Map<ToolType, () => DrawTool | Promise<DrawTool>> = new Map();
   private toolMetadata: Map<ToolType, ToolMetadata> = new Map();
 
   private constructor() {
-    this.registerBuiltinTools();
+    try {
+      this.registerBuiltinTools();
+    } catch (error) {
+      console.error('❌ ToolFactory 构造函数执行失败:', error);
+      throw error;
+    }
   }
 
   public static getInstance(): ToolFactory {
@@ -73,6 +78,9 @@ export class ToolFactory {
    * 创建工具实例（异步版本，支持重量级工具）
    */
   public async createTool(type: ToolType): Promise<DrawTool> {
+    logger.debug(`尝试创建工具: ${type}`);
+    logger.debug(`当前已注册的工具类型: ${Array.from(this.factories.keys())}`);
+    
     // 检查缓存
     if (this.tools.has(type)) {
       logger.debug(`从缓存获取工具: ${type}`);
@@ -88,6 +96,7 @@ export class ToolFactory {
     // 检查工厂
     const factory = this.factories.get(type);
     if (!factory) {
+      logger.error(`工具类型 ${type} 未找到，已注册的工具: ${Array.from(this.factories.keys())}`);
       throw new Error(`未知的工具类型: ${type}`);
     }
 
@@ -178,24 +187,27 @@ export class ToolFactory {
    * 降级到基础工具
    */
   private async fallbackToBasicTool(type: ToolType): Promise<DrawTool> {
-    logger.warn(`重量级工具 ${type} 加载失败，降级到基础版本`);
+    logger.warn(`重量级工具 ${type} 加载失败，降级到基础工具`);
     
-    // 根据工具类型提供基础实现
     const basicTools: Record<ToolType, () => DrawTool> = {
       pen: () => new BasicPenTool(),
+      brush: () => new BasicBrushTool(),
       rect: () => new BasicRectTool(),
       circle: () => new BasicCircleTool(),
       line: () => new BasicLineTool(),
       polygon: () => new BasicPolygonTool(),
       text: () => new BasicTextTool(),
       eraser: () => new BasicEraserTool(),
-      select: () => new BasicSelectTool()
+      select: () => new BasicSelectTool(),
+      transform: () => new BasicTransformTool()
     };
     
-    const basicTool = basicTools[type]();
-    this.tools.set(type, basicTool);
+    const basicToolFactory = basicTools[type];
+    if (!basicToolFactory) {
+      throw new Error(`不支持的工具类型: ${type}`);
+    }
     
-    return basicTool;
+    return basicToolFactory();
   }
 
   /**
@@ -267,48 +279,118 @@ export class ToolFactory {
    * 注册内置工具（当前为轻量级，未来可扩展为重量级）
    */
   private registerBuiltinTools(): void {
-    // 当前所有工具都是轻量级的
-    this.register('pen', async () => {
-      const { PenToolRefactored } = await import('./PenToolRefactored');
-      return new PenToolRefactored();
-    }, { isHeavy: false, estimatedLoadTime: 50 });
+    try {
+      logger.debug('开始注册内置工具...');
+      
+      // 当前所有工具都是轻量级的
+      this.register('pen', async () => {
+        logger.debug('注册 pen 工具工厂');
+        try {
+          const { PenToolRefactored } = await import('./PenToolRefactored');
+          logger.debug('PenToolRefactored 导入成功');
+          return new PenToolRefactored();
+        } catch (importError) {
+          logger.error('导入 PenToolRefactored 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 50 });
 
-    this.register('rect', async () => {
-      const { RectTool } = await import('./RectTool');
-      return new RectTool();
-    }, { isHeavy: false, estimatedLoadTime: 30 });
+      this.register('brush', async () => {
+        logger.debug('注册 brush 工具工厂');
+        try {
+          const { PenToolRefactored } = await import('./PenToolRefactored');
+          const brushTool = new PenToolRefactored();
+          brushTool.setPreset('brush'); // 设置为毛笔预设
+          return brushTool;
+        } catch (importError) {
+          logger.error('导入 PenToolRefactored (brush) 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 60 });
 
-    this.register('circle', async () => {
-      const { CircleTool } = await import('./CircleTool');
-      return new CircleTool();
-    }, { isHeavy: false, estimatedLoadTime: 30 });
+      this.register('rect', async () => {
+        logger.debug('注册 rect 工具工厂');
+        try {
+          const { RectTool } = await import('./RectTool');
+          return new RectTool();
+        } catch (importError) {
+          logger.error('导入 RectTool 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 30 });
 
-    this.register('line', async () => {
-      const { LineTool } = await import('./LineTool');
-      return new LineTool();
-    }, { isHeavy: false, estimatedLoadTime: 30 });
+      this.register('circle', async () => {
+        logger.debug('注册 circle 工具工厂');
+        try {
+          const { CircleTool } = await import('./CircleTool');
+          return new CircleTool();
+        } catch (importError) {
+          logger.error('导入 CircleTool 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 30 });
 
-    this.register('polygon', async () => {
-      const { PolygonTool } = await import('./PolygonTool');
-      return new PolygonTool();
-    }, { isHeavy: false, estimatedLoadTime: 40 });
+      this.register('line', async () => {
+        logger.debug('注册 line 工具工厂');
+        try {
+          const { LineTool } = await import('./LineTool');
+          return new LineTool();
+        } catch (importError) {
+          logger.error('导入 LineTool 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 30 });
 
-    this.register('text', async () => {
-      const { TextTool } = await import('./TextTool');
-      return new TextTool();
-    }, { isHeavy: false, estimatedLoadTime: 60 });
+      this.register('polygon', async () => {
+        logger.debug('注册 polygon 工具工厂');
+        try {
+          const { PolygonTool } = await import('./PolygonTool');
+          return new PolygonTool();
+        } catch (importError) {
+          logger.error('导入 PolygonTool 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 40 });
 
-    this.register('eraser', async () => {
-      const { EraserTool } = await import('./EraserTool');
-      return new EraserTool();
-    }, { isHeavy: false, estimatedLoadTime: 40 });
+      this.register('text', async () => {
+        logger.debug('注册 text 工具工厂');
+        try {
+          const { TextTool } = await import('./TextTool');
+          return new TextTool();
+        } catch (importError) {
+          logger.error('导入 TextTool 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 60 });
 
-    this.register('select', async () => {
-      const { SelectTool } = await import('./SelectTool');
-      return new SelectTool();
-    }, { isHeavy: false, estimatedLoadTime: 50 });
+      this.register('eraser', async () => {
+        logger.debug('注册 eraser 工具工厂');
+        try {
+          const { EraserTool } = await import('./EraserTool');
+          return new EraserTool();
+        } catch (importError) {
+          logger.error('导入 EraserTool 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 40 });
 
-    logger.info('内置工具工厂注册完成');
+      this.register('select', async () => {
+        logger.debug('注册 select 工具工厂');
+        try {
+          const { SelectTool } = await import('./SelectTool');
+          return new SelectTool();
+        } catch (importError) {
+          logger.error('导入 SelectTool 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 50 });
+
+      logger.info(`内置工具工厂注册完成，已注册 ${this.factories.size} 个工具`);
+      logger.debug('已注册的工具类型:', Array.from(this.factories.keys()));
+    } catch (error) {
+      logger.error('注册内置工具时出错:', error);
+      throw error;
+    }
   }
 
   /**
@@ -332,6 +414,8 @@ export class ToolFactory {
     this.factories.clear();
     this.toolMetadata.clear();
     logger.debug('工具工厂已销毁');
+    // 重置单例实例，确保下次getInstance()会重新注册工具
+    ToolFactory.instance = undefined;
   }
 }
 
@@ -351,6 +435,21 @@ class BasicPenTool extends DrawTool {
     ctx.stroke();
   }
   getActionType(): string { return 'pen'; }
+}
+
+class BasicBrushTool extends DrawTool {
+  constructor() { super('基础毛笔', 'brush'); }
+  draw(ctx: CanvasRenderingContext2D, action: DrawAction): void {
+    // 基础毛笔绘制逻辑
+    if (action.points.length < 2) return;
+    ctx.beginPath();
+    ctx.moveTo(action.points[0].x, action.points[0].y);
+    for (let i = 1; i < action.points.length; i++) {
+      ctx.lineTo(action.points[i].x, action.points[i].y);
+    }
+    ctx.stroke();
+  }
+  getActionType(): string { return 'brush'; }
 }
 
 class BasicRectTool extends DrawTool {
@@ -382,9 +481,11 @@ class BasicLineTool extends DrawTool {
   constructor() { super('基础直线', 'line'); }
   draw(ctx: CanvasRenderingContext2D, action: DrawAction): void {
     if (action.points.length < 2) return;
+    const start = action.points[0];
+    const end = action.points[action.points.length - 1];
     ctx.beginPath();
-    ctx.moveTo(action.points[0].x, action.points[0].y);
-    ctx.lineTo(action.points[action.points.length - 1].x, action.points[action.points.length - 1].y);
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
     ctx.stroke();
   }
   getActionType(): string { return 'line'; }
@@ -408,8 +509,9 @@ class BasicPolygonTool extends DrawTool {
 class BasicTextTool extends DrawTool {
   constructor() { super('基础文字', 'text'); }
   draw(ctx: CanvasRenderingContext2D, action: DrawAction): void {
-    if (action.points.length < 1 || !action.text) return;
-    ctx.fillText(action.text, action.points[0].x, action.points[0].y);
+    if (action.text && action.points.length > 0) {
+      ctx.fillText(action.text, action.points[0].x, action.points[0].y);
+    }
   }
   getActionType(): string { return 'text'; }
 }
@@ -417,15 +519,19 @@ class BasicTextTool extends DrawTool {
 class BasicEraserTool extends DrawTool {
   constructor() { super('基础橡皮擦', 'eraser'); }
   draw(ctx: CanvasRenderingContext2D, action: DrawAction): void {
-    if (action.points.length < 2) return;
+    // 基础橡皮擦逻辑：绘制白色矩形覆盖
+    const originalComposite = ctx.globalCompositeOperation;
     ctx.globalCompositeOperation = 'destination-out';
+    
+    if (action.points.length < 2) return;
     ctx.beginPath();
     ctx.moveTo(action.points[0].x, action.points[0].y);
     for (let i = 1; i < action.points.length; i++) {
       ctx.lineTo(action.points[i].x, action.points[i].y);
     }
     ctx.stroke();
-    ctx.globalCompositeOperation = 'source-over';
+    
+    ctx.globalCompositeOperation = originalComposite;
   }
   getActionType(): string { return 'eraser'; }
 }
@@ -433,6 +539,7 @@ class BasicEraserTool extends DrawTool {
 class BasicSelectTool extends DrawTool {
   constructor() { super('基础选择', 'select'); }
   draw(ctx: CanvasRenderingContext2D, action: DrawAction): void {
+    // 基础选择逻辑：绘制选择框
     if (action.points.length < 2) return;
     const start = action.points[0];
     const end = action.points[action.points.length - 1];
@@ -441,6 +548,20 @@ class BasicSelectTool extends DrawTool {
     ctx.setLineDash([]);
   }
   getActionType(): string { return 'select'; }
+}
+
+class BasicTransformTool extends DrawTool {
+  constructor() { super('基础变换', 'transform'); }
+  draw(ctx: CanvasRenderingContext2D, action: DrawAction): void {
+    // 基础变换逻辑：绘制变换框
+    if (action.points.length < 2) return;
+    const start = action.points[0];
+    const end = action.points[action.points.length - 1];
+    ctx.setLineDash([3, 3]);
+    ctx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
+    ctx.setLineDash([]);
+  }
+  getActionType(): string { return 'transform'; }
 }
 
 /**

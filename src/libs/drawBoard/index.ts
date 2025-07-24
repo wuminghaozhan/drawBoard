@@ -33,13 +33,42 @@ import type { DrawBoardConfig } from './DrawBoard';
 // 核心类导出
 // ============================================
 export { DrawBoard } from './DrawBoard';
-export type { DrawBoardConfig } from './DrawBoard';
+export { CanvasEngine } from './core/CanvasEngine';
+export { ToolManager } from './tools/ToolManager';
+export { ToolFactory } from './tools/ToolFactory';
+export { HistoryManager } from './history/HistoryManager';
+export { SelectionManager } from './core/SelectionManager';
+export { PerformanceManager } from './core/PerformanceManager';
+export { ComplexityManager } from './core/ComplexityManager';
+export { VirtualLayerManager } from './core/VirtualLayerManager';
+export { EventManager } from './events/EventManager';
+export { DrawingHandler } from './handlers/DrawingHandler';
+export { CursorHandler } from './handlers/CursorHandler';
+export { StateHandler } from './handlers/StateHandler';
+export { ShortcutManager } from './shortcuts/ShortcutManager';
+export { ExportManager } from './utils/ExportManager';
 
-// ============================================
-// 工具相关导出
-// ============================================
-export type { ToolType } from './tools/ToolManager';
-export type { DrawTool } from './tools/DrawTool';
+// 工具类导出
+export { DrawTool } from './tools/DrawTool';
+export { PenToolRefactored } from './tools/PenToolRefactored';
+export { RectTool } from './tools/RectTool';
+export { CircleTool } from './tools/CircleTool';
+export { LineTool } from './tools/LineTool';
+export { PolygonTool } from './tools/PolygonTool';
+export { TextTool } from './tools/TextTool';
+export { EraserTool } from './tools/EraserTool';
+export { SelectTool } from './tools/SelectTool';
+
+// 类型导出
+export type { ToolType } from './tools/DrawTool';
+export type { DrawAction, DrawContext } from './tools/DrawTool';
+export type { DrawEvent } from './events/EventManager';
+export type { DrawBoardState } from './handlers/StateHandler';
+export type { PerformanceConfig, MemoryStats } from './core/PerformanceManager';
+export type { VirtualLayer, VirtualLayerConfig } from './core/VirtualLayerManager';
+export type { ToolMetadata } from './tools/ToolFactory';
+export type { StrokeConfig } from './tools/stroke/StrokeTypes';
+export type { StrokePresetType } from './tools/StrokePresets';
 
 // ============================================
 // 快捷创建函数

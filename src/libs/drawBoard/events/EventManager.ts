@@ -76,7 +76,7 @@ export class EventManager {
   */
   private bindEvents(): void {
     // 鼠标事件
-    this.canvas.addEventListener('mousedown', (...args) => {console.log('mousedown____', args);this.boundHandlers.mouseDown(...args)});
+    this.canvas.addEventListener('mousedown', this.boundHandlers.mouseDown);
     this.canvas.addEventListener('mousemove', (...args) => {this.boundHandlers.mouseMove(...args)});
     this.canvas.addEventListener('mouseup', this.boundHandlers.mouseUp);
     this.canvas.addEventListener('mouseout', this.boundHandlers.mouseUp);

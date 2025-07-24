@@ -1,4 +1,4 @@
-import type { ToolType } from '../tools/ToolManager';
+import type { ToolType } from '../tools/DrawTool';
 import type { PerformanceManager } from '../core/PerformanceManager';
 import type { HistoryManager } from '../history/HistoryManager';
 import type { ToolManager } from '../tools/ToolManager';

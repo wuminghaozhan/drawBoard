@@ -156,6 +156,30 @@ const Test: React.FC = () => {
     }
   };
 
+  // 测试工具类型
+  const testToolTypes = () => {
+    if (!drawBoardRef.current) return;
+    
+    const toolManager = drawBoardRef.current.getToolManager();
+    const availableTools = toolManager.getAvailableToolTypes();
+    const toolNames = toolManager.getToolNames();
+    const stats = toolManager.getStats();
+    
+    console.log('可用工具类型:', availableTools);
+    console.log('工具名称:', toolNames);
+    console.log('工具统计:', stats);
+    
+    // 添加更详细的调试信息
+    console.log('=== ToolFactory 调试信息 ===');
+    console.log('ToolManager 实例:', toolManager);
+    console.log('ToolFactory 统计:', stats);
+    console.log('已注册的工具类型数量:', availableTools.length);
+    console.log('当前工具:', stats.currentTool);
+    console.log('加载状态:', stats.loadingState);
+    
+    alert(`可用工具类型: ${availableTools.join(', ')}\n\n工具统计:\n- 当前工具: ${stats.currentTool}\n- 加载状态: ${stats.loadingState}\n- 可用工具数: ${stats.availableTools}\n- 缓存工具数: ${stats.cachedTools}`);
+  };
+
   // 图层控制
   const [layerVisibility, setLayerVisibility] = useState({
     background: true,
@@ -229,6 +253,7 @@ const Test: React.FC = () => {
             <button onClick={testCursor} className="btn btn-test">测试光标</button>
             <button onClick={recalculateComplexity} className="btn btn-complexity">重新计算复杂度</button>
             <button onClick={getComplexityStats} className="btn btn-complexity">获取复杂度统计</button>
+            <button onClick={testToolTypes} className="btn btn-complexity">测试工具类型</button>
           </div>
 
           <div className="control-group layer-controls">

@@ -1,0 +1,399 @@
+.virtual-layer-demo {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #f5f5f5;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  .demo-header {
+    background: #fff;
+    padding: 20px;
+    border-bottom: 1px solid #e0e0e0;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+
+    h1 {
+      margin: 0 0 10px 0;
+      color: #333;
+      font-size: 24px;
+    }
+
+    p {
+      margin: 0;
+      color: #666;
+      font-size: 14px;
+    }
+  }
+
+  .demo-content {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+
+    .control-panel {
+      width: 300px;
+      background: #fff;
+      border-right: 1px solid #e0e0e0;
+      padding: 20px;
+      overflow-y: auto;
+
+      .panel-section {
+        margin-bottom: 30px;
+
+        h3 {
+          margin: 0 0 15px 0;
+          color: #333;
+          font-size: 16px;
+          font-weight: 600;
+        }
+
+        .tool-buttons {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+
+          button {
+            padding: 8px 16px;
+            border: 1px solid #ddd;
+            background: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+
+            &:hover {
+              background: #f0f0f0;
+              border-color: #ccc;
+            }
+
+            &:active {
+              background: #e0e0e0;
+            }
+          }
+        }
+
+        .style-controls {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+
+          input[type="color"] {
+            width: 100%;
+            height: 40px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+          }
+
+          input[type="range"] {
+            width: 100%;
+          }
+
+          span {
+            font-size: 14px;
+            color: #666;
+          }
+        }
+
+        .action-buttons {
+          display: flex;
+          gap: 8px;
+
+          button {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            background: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+
+            &:hover:not(:disabled) {
+              background: #f0f0f0;
+              border-color: #ccc;
+            }
+
+            &:disabled {
+              opacity: 0.5;
+              cursor: not-allowed;
+            }
+          }
+        }
+      }
+    }
+
+    .canvas-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #fafafa;
+      position: relative;
+
+      .drawboard-container {
+        width: 800px;
+        height: 600px;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      }
+    }
+
+    .layer-panel {
+      width: 350px;
+      background: #fff;
+      border-left: 1px solid #e0e0e0;
+      display: flex;
+      flex-direction: column;
+
+      .panel-header {
+        padding: 20px;
+        border-bottom: 1px solid #e0e0e0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+
+        h3 {
+          margin: 0;
+          color: #333;
+          font-size: 16px;
+          font-weight: 600;
+        }
+
+        .btn-create {
+          padding: 8px 16px;
+          border: 1px solid #007bff;
+          background: #007bff;
+          color: #fff;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 14px;
+          transition: all 0.2s;
+
+          &:hover {
+            background: #0056b3;
+            border-color: #0056b3;
+          }
+        }
+      }
+
+      .layer-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px;
+
+        .layer-item {
+          border: 1px solid #e0e0e0;
+          border-radius: 6px;
+          margin-bottom: 10px;
+          background: #fff;
+          transition: all 0.2s;
+
+          &.active {
+            border-color: #007bff;
+            background: #f8f9ff;
+          }
+
+          &.hidden {
+            opacity: 0.6;
+            background: #f8f8f8;
+          }
+
+          &.locked {
+            border-color: #dc3545;
+            background: #fff5f5;
+          }
+
+          .layer-info {
+            padding: 12px;
+            border-bottom: 1px solid #f0f0f0;
+
+            .layer-name {
+              font-weight: 600;
+              color: #333;
+              margin-bottom: 4px;
+            }
+
+            .layer-stats {
+              font-size: 12px;
+              color: #666;
+            }
+          }
+
+          .layer-controls {
+            padding: 8px;
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+
+            button {
+              width: 32px;
+              height: 32px;
+              border: 1px solid #ddd;
+              background: #fff;
+              border-radius: 4px;
+              cursor: pointer;
+              font-size: 14px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              transition: all 0.2s;
+
+              &:hover:not(:disabled) {
+                background: #f0f0f0;
+                border-color: #ccc;
+              }
+
+              &:disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+              }
+
+              &.btn-activate {
+                &.active {
+                  background: #007bff;
+                  color: #fff;
+                  border-color: #007bff;
+                }
+              }
+
+              &.btn-visibility {
+                &.hidden {
+                  background: #6c757d;
+                  color: #fff;
+                  border-color: #6c757d;
+                }
+              }
+
+              &.btn-lock {
+                &.locked {
+                  background: #dc3545;
+                  color: #fff;
+                  border-color: #dc3545;
+                }
+              }
+
+              &.btn-delete:hover {
+                background: #dc3545;
+                color: #fff;
+                border-color: #dc3545;
+              }
+            }
+          }
+        }
+      }
+
+      .layer-stats-panel {
+        padding: 20px;
+        border-top: 1px solid #e0e0e0;
+        background: #f8f9fa;
+
+        h4 {
+          margin: 0 0 15px 0;
+          color: #333;
+          font-size: 14px;
+          font-weight: 600;
+        }
+
+        .stats-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+
+          .stat-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: #fff;
+            border-radius: 4px;
+            border: 1px solid #e0e0e0;
+
+            .stat-label {
+              font-size: 12px;
+              color: #666;
+            }
+
+            .stat-value {
+              font-weight: 600;
+              color: #333;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  .demo-footer {
+    background: #fff;
+    padding: 20px;
+    border-top: 1px solid #e0e0e0;
+
+    h3 {
+      margin: 0 0 15px 0;
+      color: #333;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 20px;
+      color: #666;
+      font-size: 14px;
+      line-height: 1.6;
+
+      li {
+        margin-bottom: 8px;
+      }
+    }
+  }
+}
+
+// 响应式设计
+@media (max-width: 1200px) {
+  .virtual-layer-demo {
+    .demo-content {
+      .control-panel {
+        width: 250px;
+      }
+
+      .layer-panel {
+        width: 300px;
+      }
+    }
+  }
+}
+
+@media (max-width: 768px) {
+  .virtual-layer-demo {
+    .demo-content {
+      flex-direction: column;
+
+      .control-panel {
+        width: 100%;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid #e0e0e0;
+      }
+
+      .canvas-container {
+        height: 400px;
+
+        .drawboard-container {
+          width: 100%;
+          height: 100%;
+          max-width: 600px;
+        }
+      }
+
+      .layer-panel {
+        width: 100%;
+        height: 300px;
+        border-left: none;
+        border-top: 1px solid #e0e0e0;
+      }
+    }
+  }
+} 

@@ -1,6 +1,6 @@
 import { DrawTool } from '../DrawTool';
-import type { DrawAction } from '../DrawTool';
-import type { ToolType } from '../ToolManager';
+import type { ToolType } from '../DrawTool';
+import { logger } from '../../utils/Logger';
 
 /**
  * AI绘画工具示例 - 重量级工具
