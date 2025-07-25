@@ -8,6 +8,7 @@ export interface DrawEvent {
   timestamp: number;
 }
 
+export type EventType = 'mousedown' | 'mousemove' | 'mouseup' | 'touchstart' | 'touchmove' | 'touchend';
 export type EventHandler = (event: DrawEvent) => void;
 
 /**
@@ -18,10 +19,12 @@ export type EventHandler = (event: DrawEvent) => void;
  * - 防重复点击机制
  * - 事件合并优化
  * - 更好的性能监控
+ * - 修复重复事件检测的坐标计算
+ * - 改进类型安全性
  */
 export class EventManager {
   private canvas: HTMLCanvasElement;
-  private handlers: Map<string, EventHandler[]> = new Map();
+  private handlers: Map<EventType, EventHandler[]> = new Map();
   
   // 节流控制
   private mouseMoveThrottle: Throttle;
@@ -35,6 +38,9 @@ export class EventManager {
   // 事件状态跟踪
   private isPointerDown: boolean = false;
   private lastProcessedEvent: DrawEvent | null = null;
+  
+  // 重复事件检测配置
+  private duplicateDistanceThreshold: number = 2; // 2像素的欧几里得距离阈值
   
   // 保存事件处理函数的引用，用于解绑
   private boundHandlers: {
@@ -89,16 +95,21 @@ export class EventManager {
 
   /**
    * 检查是否为重复事件
+   * 修复：使用欧几里得距离替代曼哈顿距离，提高检测精度
    */
   private isDuplicateEvent(event: DrawEvent): boolean {
     if (!this.lastProcessedEvent) return false;
     
     const timeDiff = event.timestamp - this.lastProcessedEvent.timestamp;
-    const pointDiff = Math.abs(event.point.x - this.lastProcessedEvent.point.x) + 
-                     Math.abs(event.point.y - this.lastProcessedEvent.point.y);
+    
+    // 使用欧几里得距离计算坐标差异，更精确
+    const pointDiff = Math.sqrt(
+      Math.pow(event.point.x - this.lastProcessedEvent.point.x, 2) + 
+      Math.pow(event.point.y - this.lastProcessedEvent.point.y, 2)
+    );
     
     // 如果时间间隔很短且位置几乎没变，认为是重复事件
-    return timeDiff < this.minEventInterval && pointDiff < 1;
+    return timeDiff < this.minEventInterval && pointDiff < this.duplicateDistanceThreshold;
   }
 
   /**
@@ -108,6 +119,8 @@ export class EventManager {
     if (!this.isDuplicateEvent(event)) {
       this.lastProcessedEvent = event;
       this.emit(event.type, event);
+    } else {
+      logger.debug('检测到重复事件，已过滤:', event.type, event.point);
     }
   }
 
@@ -121,7 +134,6 @@ export class EventManager {
     
     this.lastMouseDownTime = now;
     
-    logger.debug('Mouse down event triggered');
     this.isPointerDown = true;
     
     const event: DrawEvent = {
@@ -186,6 +198,11 @@ export class EventManager {
     this.lastTouchStartTime = now;
     
     const touch = e.touches[0];
+    if (!touch) {
+      logger.warn('触摸事件中没有找到有效的触摸点');
+      return;
+    }
+    
     this.isPointerDown = true;
     
     const event: DrawEvent = {
@@ -205,6 +222,11 @@ export class EventManager {
     this.touchMoveThrottle.throttle(() => {
       try {
         const touch = e.touches[0];
+        if (!touch) {
+          logger.warn('触摸移动事件中没有找到有效的触摸点');
+          return;
+        }
+        
         const event: DrawEvent = {
           type: 'touchmove',
           point: this.getTouchPoint(touch),
@@ -225,6 +247,11 @@ export class EventManager {
     this.isPointerDown = false;
     const touch = e.changedTouches[0];
     
+    if (!touch) {
+      logger.warn('触摸结束事件中没有找到有效的触摸点');
+      return;
+    }
+    
     const event: DrawEvent = {
       type: 'touchend',
       point: this.getTouchPoint(touch),
@@ -234,32 +261,54 @@ export class EventManager {
     this.safeEmitEvent(event);
   }
 
+  /**
+   * 获取鼠标坐标点
+   * 改进：考虑Canvas缩放比例，提供更精确的坐标
+   */
   private getMousePoint(e: MouseEvent): Point {
     const rect = this.canvas.getBoundingClientRect();
+    const scaleX = this.canvas.width / rect.width;
+    const scaleY = this.canvas.height / rect.height;
+    
     return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY,
       timestamp: Date.now()
     };
   }
 
+  /**
+   * 获取触摸坐标点
+   * 改进：考虑Canvas缩放比例，提供更精确的坐标
+   */
   private getTouchPoint(touch: Touch): Point {
     const rect = this.canvas.getBoundingClientRect();
+    const scaleX = this.canvas.width / rect.width;
+    const scaleY = this.canvas.height / rect.height;
+    
     return {
-      x: touch.clientX - rect.left,
-      y: touch.clientY - rect.top,
+      x: (touch.clientX - rect.left) * scaleX,
+      y: (touch.clientY - rect.top) * scaleY,
       timestamp: Date.now()
     };
   }
 
-  public on(eventType: string, handler: EventHandler): void {
+  /**
+   * 注册事件处理器
+   * 改进：使用强类型的事件类型
+   */
+  public on(eventType: EventType, handler: EventHandler): void {
     if (!this.handlers.has(eventType)) {
       this.handlers.set(eventType, []);
     }
     this.handlers.get(eventType)!.push(handler);
   }
 
-  public off(eventType: string, handler: EventHandler): void {
+  /**
+   * 移除事件处理器
+   * 改进：使用强类型的事件类型
+   */
+  public off(eventType: EventType, handler: EventHandler): void {
     const handlers = this.handlers.get(eventType);
     if (handlers) {
       const index = handlers.indexOf(handler);
@@ -269,14 +318,20 @@ export class EventManager {
     }
   }
 
-  private emit(eventType: string, event: DrawEvent): void {
+  /**
+   * 触发事件
+   * 改进：使用强类型的事件类型，提供更详细的错误信息
+   */
+  private emit(eventType: EventType, event: DrawEvent): void {
     const handlers = this.handlers.get(eventType);
     if (handlers) {
-      handlers.forEach(handler => {
+      handlers.forEach((handler, index) => {
         try {
           handler(event);
         } catch (error) {
-          logger.error(`事件处理器执行失败 (${eventType}):`, error);
+          logger.error(`事件处理器执行失败 (${eventType}) [${index}]:`, error);
+          // 可选：移除有问题的处理器以防止重复错误
+          // handlers.splice(index, 1);
         }
       });
     }
@@ -297,6 +352,28 @@ export class EventManager {
     this.minEventInterval = interval;
   }
 
+  /**
+   * 设置重复事件检测的距离阈值
+   */
+  public setDuplicateDistanceThreshold(threshold: number): void {
+    this.duplicateDistanceThreshold = threshold;
+  }
+
+  /**
+   * 获取当前事件状态
+   */
+  public getEventState(): {
+    isPointerDown: boolean;
+    lastProcessedEvent: DrawEvent | null;
+    handlersCount: number;
+  } {
+    return {
+      isPointerDown: this.isPointerDown,
+      lastProcessedEvent: this.lastProcessedEvent,
+      handlersCount: Array.from(this.handlers.values()).reduce((sum, handlers) => sum + handlers.length, 0)
+    };
+  }
+
   public destroy(): void {
     // 清理事件监听器
     this.canvas.removeEventListener('mousedown', this.boundHandlers.mouseDown);
@@ -313,5 +390,9 @@ export class EventManager {
     // 重置状态
     this.isPointerDown = false;
     this.lastProcessedEvent = null;
+    
+    // 取消节流器
+    this.mouseMoveThrottle.cancel();
+    this.touchMoveThrottle.cancel();
   }
 } 
