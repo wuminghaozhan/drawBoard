@@ -1,350 +1,315 @@
 .test-page {
   padding: 20px;
-  max-width: 1200px;
-  margin: 0 auto;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f8f9fa;
+  min-height: 100vh;
 
   .test-header {
     text-align: center;
     margin-bottom: 30px;
 
     h1 {
-      color: #333;
+      color: #2c3e50;
       margin-bottom: 10px;
-      font-size: 2.5rem;
     }
 
     p {
-      color: #666;
-      font-size: 1.1rem;
+      color: #6c757d;
+      font-size: 16px;
     }
   }
 
   .test-content {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 300px 1fr 300px;
     gap: 20px;
-  }
+    max-width: 1400px;
+    margin: 0 auto;
 
-  .control-panel {
-    background: #f8f9fa;
-    border-radius: 12px;
-    padding: 20px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 20px;
-    align-items: center;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    .control-panel {
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      height: fit-content;
 
-    .control-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
+      .control-group {
+        margin-bottom: 20px;
 
-      label {
-        font-weight: 500;
-        color: #333;
-        min-width: 60px;
-      }
-
-      select, input[type="range"] {
-        padding: 8px 12px;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        font-size: 14px;
-        background: white;
-        transition: border-color 0.2s;
-
-        &:focus {
-          outline: none;
-          border-color: #007bff;
-          box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
-        }
-      }
-
-      input[type="color"] {
-        width: 40px;
-        height: 40px;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
-        background: none;
-
-        &::-webkit-color-swatch-wrapper {
-          padding: 0;
+        label {
+          display: block;
+          margin-bottom: 8px;
+          font-weight: 600;
+          color: #2c3e50;
         }
 
-        &::-webkit-color-swatch {
+        select, input[type="color"], input[type="range"] {
+          width: 100%;
+          padding: 8px;
+          border: 1px solid #ddd;
+          border-radius: 6px;
+          font-size: 14px;
+        }
+
+        .btn {
+          padding: 8px 12px;
+          margin: 2px;
           border: none;
           border-radius: 6px;
-        }
-      }
+          cursor: pointer;
+          font-size: 12px;
+          transition: all 0.2s ease;
 
-      span {
-        color: #666;
-        font-size: 14px;
-        min-width: 30px;
-      }
-    }
-
-    .btn {
-      padding: 10px 16px;
-      border: none;
-      border-radius: 6px;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.2s;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-
-      &:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-      }
-
-      &:active {
-        transform: translateY(0);
-      }
-
-      &.btn-clear {
-        background: #dc3545;
-        color: white;
-
-        &:hover {
-          background: #c82333;
-        }
-      }
-
-      &.btn-undo {
-        background: #6c757d;
-        color: white;
-
-        &:hover {
-          background: #5a6268;
-        }
-      }
-
-      &.btn-redo {
-        background: #28a745;
-        color: white;
-
-        &:hover {
-          background: #218838;
-        }
-      }
-
-      &.btn-export {
-        background: #007bff;
-        color: white;
-
-        &:hover {
-          background: #0056b3;
-        }
-      }
-
-      &.btn-test {
-        background: #6f42c1;
-        color: white;
-
-        &:hover {
-          background: #5a2d8c;
-        }
-      }
-
-      &.btn-complexity {
-        background: #fd7e14;
-        color: white;
-
-        &:hover {
-          background: #e55a00;
-        }
-      }
-
-      &.btn-layer {
-        background: #17a2b8;
-        color: white;
-        font-size: 12px;
-        padding: 8px 12px;
-
-        &:hover {
-          background: #138496;
-        }
-
-        &.active {
-          background: #28a745;
           &:hover {
-            background: #218838;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+          }
+
+          &.btn-clear { background: #dc3545; color: white; }
+          &.btn-undo { background: #ffc107; color: #212529; }
+          &.btn-redo { background: #17a2b8; color: white; }
+          &.btn-export { background: #28a745; color: white; }
+          &.btn-test { background: #6f42c1; color: white; }
+          &.btn-complexity { background: #fd7e14; color: white; }
+          &.btn-canvas { background: #20c997; color: white; }
+          &.btn-shortcuts { background: #6f42c1; color: white; }
+        }
+
+        .layer-buttons {
+          display: flex;
+          gap: 5px;
+          flex-wrap: wrap;
+
+          .btn-layer {
+            flex: 1;
+            min-width: 60px;
+            background: #e9ecef;
+            color: #495057;
+            border: 1px solid #ced4da;
+
+            &.active {
+              background: #007bff;
+              color: white;
+              border-color: #007bff;
+            }
+          }
+        }
+
+        .virtual-layer-buttons {
+          display: flex;
+          gap: 5px;
+
+          .btn-create-layer {
+            background: #28a745;
+            color: white;
+            flex: 1;
+          }
+
+          .btn-refresh-layers {
+            background: #17a2b8;
+            color: white;
+            flex: 1;
+          }
+        }
+
+        .test-buttons {
+          display: flex;
+          gap: 5px;
+
+          .btn-test-layer {
+            background: #6f42c1;
+            color: white;
+            flex: 1;
           }
         }
       }
     }
 
-    .layer-controls {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 10px;
-
-      .layer-buttons {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-    }
-  }
-
-  .canvas-container {
-    background: white;
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-    min-height: 500px;
-
-    .drawing-container {
-      width: 100%;
-      height: 500px;
-      border: 2px dashed #ddd;
-      border-radius: 8px;
-      position: relative;
-      background: #fafafa;
-      transition: border-color 0.2s;
-
-      &:hover {
-        border-color: #007bff;
-      }
-
-      // 确保canvas正确显示
-      canvas {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        border-radius: 6px;
-      }
-    }
-  }
-
-  .status-panel {
-    background: #f8f9fa;
-    border-radius: 12px;
-    padding: 20px;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 15px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-
-    .status-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 15px;
+    .canvas-container {
       background: white;
-      border-radius: 8px;
-      border-left: 4px solid #007bff;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
 
-      span:first-child {
-        font-weight: 500;
-        color: #333;
-      }
-
-      span:last-child {
-        color: #666;
-        font-size: 14px;
-      }
-    }
-  }
-}
-
-// 响应式设计
-@media (max-width: 768px) {
-  .test-page {
-    padding: 15px;
-
-    .test-header {
-      h1 {
-        font-size: 2rem;
-      }
-    }
-
-    .control-panel {
-      flex-direction: column;
-      align-items: stretch;
-
-      .control-group {
-        justify-content: space-between;
-      }
-    }
-
-    .canvas-container {
       .drawing-container {
-        height: 400px;
+        width: 100%;
+        height: 600px;
+        border: 2px solid #e9ecef;
+        border-radius: 8px;
       }
     }
 
     .status-panel {
-      grid-template-columns: 1fr;
-    }
-  }
-}
-
-// 暗色主题支持
-@media (prefers-color-scheme: dark) {
-  .test-page {
-    background: #1a1a1a;
-    color: #e0e0e0;
-
-    .test-header {
-      h1 {
-        color: #e0e0e0;
-      }
-
-      p {
-        color: #b0b0b0;
-      }
-    }
-
-    .control-panel {
-      background: #2d2d2d;
-
-      .control-group {
-        label {
-          color: #e0e0e0;
-        }
-
-        select, input[type="range"] {
-          background: #3d3d3d;
-          border-color: #555;
-          color: #e0e0e0;
-        }
-      }
-    }
-
-    .canvas-container {
-      background: #2d2d2d;
-
-      .drawing-container {
-        background: #1a1a1a;
-        border-color: #555;
-      }
-    }
-
-    .status-panel {
-      background: #2d2d2d;
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      height: fit-content;
 
       .status-item {
-        background: #3d3d3d;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 0;
+        border-bottom: 1px solid #f1f3f4;
+
+        &:last-child {
+          border-bottom: none;
+        }
 
         span:first-child {
-          color: #e0e0e0;
+          font-weight: 600;
+          color: #495057;
         }
 
         span:last-child {
-          color: #b0b0b0;
+          color: #6c757d;
+          font-family: monospace;
         }
       }
+    }
+
+    .virtual-layer-panel {
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      margin-top: 20px;
+
+      h3 {
+        margin: 0 0 15px 0;
+        color: #2c3e50;
+        font-size: 1.1rem;
+        font-weight: 600;
+        border-bottom: 2px solid #8e44ad;
+        padding-bottom: 5px;
+      }
+
+      .virtual-layer-list {
+        max-height: 400px;
+        overflow-y: auto;
+
+        .virtual-layer-item {
+          background: #f8f9fa;
+          border: 1px solid #e9ecef;
+          border-radius: 8px;
+          padding: 12px;
+          margin-bottom: 8px;
+          transition: all 0.2s ease;
+
+          &:hover {
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+          }
+
+          &.active {
+            background: #e3f2fd;
+            border-color: #2196f3;
+          }
+
+          &.hidden {
+            opacity: 0.5;
+            background: #f5f5f5;
+          }
+
+          &.locked {
+            background: #fff3e0;
+            border-color: #ff9800;
+          }
+
+          .layer-info {
+            margin-bottom: 8px;
+
+            .layer-name {
+              font-weight: 600;
+              color: #2c3e50;
+              cursor: pointer;
+              display: flex;
+              align-items: center;
+              gap: 5px;
+
+              .active-indicator {
+                color: #ffc107;
+                font-size: 14px;
+              }
+
+              .lock-icon {
+                color: #ff9800;
+                font-size: 12px;
+              }
+            }
+
+            .layer-meta {
+              font-size: 12px;
+              color: #6c757d;
+              margin-top: 2px;
+            }
+          }
+
+          .layer-controls {
+            display: flex;
+            gap: 4px;
+
+            button {
+              padding: 4px 6px;
+              border: none;
+              border-radius: 4px;
+              cursor: pointer;
+              font-size: 10px;
+              transition: all 0.2s ease;
+
+              &:hover:not(:disabled) {
+                transform: scale(1.1);
+              }
+
+              &:disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+              }
+
+              &.btn-activate {
+                background: #28a745;
+                color: white;
+              }
+
+              &.btn-visibility {
+                background: #17a2b8;
+                color: white;
+              }
+
+              &.btn-lock {
+                background: #ffc107;
+                color: #212529;
+              }
+
+              &.btn-delete {
+                background: #dc3545;
+                color: white;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 响应式设计
+  @media (max-width: 1200px) {
+    .test-content {
+      grid-template-columns: 250px 1fr 250px;
+    }
+  }
+
+  @media (max-width: 900px) {
+    .test-content {
+      grid-template-columns: 1fr;
+      gap: 15px;
+    }
+
+    .control-panel, .status-panel, .virtual-layer-panel {
+      order: 1;
+    }
+
+    .canvas-container {
+      order: 2;
     }
   }
 } 

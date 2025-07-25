@@ -382,8 +382,68 @@ export class DrawBoard {
   private enableShortcuts(): void {
     if (this.shortcutManager) {
       this.shortcutManager.enable();
+      
+      // 注册默认快捷键
+      this.registerDefaultShortcuts();
+      
       // logger.debug('快捷键已启用'); // logger is not defined in this file
     }
+  }
+
+  /**
+   * 注册默认快捷键
+   */
+  private registerDefaultShortcuts(): void {
+    if (!this.shortcutManager) return;
+
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    logger.info(`🖥️ 注册快捷键 - 检测到操作系统: ${isMac ? 'Mac' : '其他'}`);
+
+    // 定义快捷键配置
+    const shortcutConfigs = [
+      // 撤销/重做
+      ...(isMac ? [
+        { key: 'Meta+Z', description: '撤销', handler: () => this.undo(), priority: 10 },
+        { key: 'Meta+Shift+Z', description: '重做', handler: () => this.redo(), priority: 10 }
+      ] : [
+        { key: 'Ctrl+Z', description: '撤销', handler: () => this.undo(), priority: 10 },
+        { key: 'Ctrl+Y', description: '重做', handler: () => this.redo(), priority: 10 },
+        { key: 'Ctrl+Shift+Z', description: '重做 (备用)', handler: () => this.redo(), priority: 10 }
+      ]),
+
+      // 删除
+      { key: 'Delete', description: '删除选中内容', handler: () => this.deleteSelection(), priority: 9 },
+      { key: 'Backspace', description: '删除选中内容', handler: () => this.deleteSelection(), priority: 9 },
+
+      // 复制
+      ...(isMac ? [
+        { key: 'Meta+C', description: '复制选中内容', handler: () => this.copySelection(), priority: 8 }
+      ] : [
+        { key: 'Ctrl+C', description: '复制选中内容', handler: () => this.copySelection(), priority: 8 }
+      ]),
+
+      // 全选
+      ...(isMac ? [
+        { key: 'Meta+A', description: '全选', handler: () => this.setTool('select'), priority: 7 }
+      ] : [
+        { key: 'Ctrl+A', description: '全选', handler: () => this.setTool('select'), priority: 7 }
+      ]),
+
+      // 取消选择
+      { key: 'Escape', description: '取消选择', handler: () => this.clearSelection(), priority: 6 },
+
+      // 保存
+      ...(isMac ? [
+        { key: 'Meta+S', description: '保存为图片', handler: () => this.saveAsImage(), priority: 5 },
+        { key: 'Meta+Shift+S', description: '另存为JPEG', handler: () => this.saveAsJPEG(), priority: 5 }
+      ] : [
+        { key: 'Ctrl+S', description: '保存为图片', handler: () => this.saveAsImage(), priority: 5 },
+        { key: 'Ctrl+Shift+S', description: '另存为JPEG', handler: () => this.saveAsJPEG(), priority: 5 }
+      ])
+    ];
+
+    const successCount = this.shortcutManager.registerBatch(shortcutConfigs);
+    logger.info(`✅ 已注册 ${successCount} 个默认快捷键 (${isMac ? 'Mac' : 'Windows/Linux'} 模式)`);
   }
 
   /**
@@ -408,14 +468,22 @@ export class DrawBoard {
     this.updateCursor();
   }
 
+  /**
+   * 处理绘制结束事件
+   */
   private async handleDrawEnd(event: DrawEvent): Promise<void> {
-    this.drawingHandler.handleDrawEnd(event);
-    
-    // 检查是否需要重新计算复杂度
-    await this.checkComplexityRecalculation();
-    
-    // 更新状态
-    this.stateHandler.emitStateChange();
+    try {
+      await this.drawingHandler.handleDrawEnd(event);
+      
+      // 如果当前是选择工具，同步图层数据
+      if (this.toolManager.getCurrentTool() === 'select') {
+        this.syncLayerDataToSelectTool();
+      }
+      
+      this.updateCursor();
+    } catch (error) {
+      logger.error('绘制结束事件处理失败', error);
+    }
   }
 
   // ============================================
@@ -429,12 +497,48 @@ export class DrawBoard {
   public async setTool(toolType: ToolType): Promise<void> {
     await this.toolManager.setCurrentTool(toolType);
     
+    // 切换到选择工具时，同步图层数据
+    if (toolType === 'select') {
+      this.syncLayerDataToSelectTool();
+    }
+    
     // 切换到复杂工具时检查复杂度
     if (['brush', 'pen'].includes(toolType)) {
       await this.checkComplexityRecalculation();
     }
     
     this.updateCursor();
+  }
+
+  /**
+   * 同步图层数据到选择工具
+   */
+  private syncLayerDataToSelectTool(): void {
+    try {
+      const currentTool = this.toolManager.getCurrentToolInstance();
+      if (currentTool && currentTool.getActionType() === 'select') {
+        // 获取当前所有actions
+        const allActions = this.historyManager.getAllActions();
+        
+        // 如果启用了虚拟图层，只获取当前活动图层的actions
+        let layerActions = allActions;
+        if (this.virtualLayerManager) {
+          const activeLayer = this.virtualLayerManager.getActiveVirtualLayer();
+          if (activeLayer) {
+            layerActions = allActions.filter((action: DrawAction) => 
+              action.virtualLayerId === activeLayer.id
+            );
+          }
+        }
+        
+        // 设置到选择工具
+        const selectTool = currentTool as unknown as { setLayerActions: (actions: DrawAction[]) => void };
+        selectTool.setLayerActions(layerActions);
+        logger.debug(`同步${layerActions.length}个actions到选择工具`);
+      }
+    } catch (error) {
+      logger.error('同步图层数据到选择工具失败', error);
+    }
   }
 
   /**
@@ -557,21 +661,79 @@ export class DrawBoard {
   // ============================================
 
   public async undo(): Promise<boolean> {
-    const action = this.historyManager.undo();
-    if (action) {
-      await this.drawingHandler.forceRedraw();
-      return true;
+    console.log('🔄 开始执行撤销操作...');
+    
+    // 检查是否可以撤销
+    const canUndo = this.canUndo();
+    console.log('🔄 是否可以撤销:', canUndo);
+    
+    if (!canUndo) {
+      console.log('❌ 无法撤销：没有可撤销的操作');
+      return false;
     }
-    return false;
+    
+    // 获取当前历史记录状态
+    const historyCount = this.historyManager.getHistoryCount();
+    const allActions = this.historyManager.getAllActions();
+    console.log('🔄 当前历史记录状态:', {
+      historyCount,
+      allActionsCount: allActions.length,
+      canUndo: this.canUndo(),
+      canRedo: this.canRedo()
+    });
+    
+    // 执行撤销
+    const action = this.historyManager.undo();
+    console.log('🔄 撤销结果:', {
+      action: action ? {
+        id: action.id,
+        type: action.type,
+        points: action.points?.length || 0
+      } : null
+    });
+    
+    if (action) {
+      console.log('✅ 撤销成功，开始重绘...');
+      await this.drawingHandler.forceRedraw();
+      console.log('✅ 重绘完成');
+      return true;
+    } else {
+      console.log('❌ 撤销失败：没有返回action');
+      return false;
+    }
   }
 
   public async redo(): Promise<boolean> {
-    const action = this.historyManager.redo();
-    if (action) {
-      await this.drawingHandler.forceRedraw();
-      return true;
+    console.log('🔄 开始执行重做操作...');
+    
+    // 检查是否可以重做
+    const canRedo = this.canRedo();
+    console.log('🔄 是否可以重做:', canRedo);
+    
+    if (!canRedo) {
+      console.log('❌ 无法重做：没有可重做的操作');
+      return false;
     }
-    return false;
+    
+    // 执行重做
+    const action = this.historyManager.redo();
+    console.log('🔄 重做结果:', {
+      action: action ? {
+        id: action.id,
+        type: action.type,
+        points: action.points?.length || 0
+      } : null
+    });
+    
+    if (action) {
+      console.log('✅ 重做成功，开始重绘...');
+      await this.drawingHandler.forceRedraw();
+      console.log('✅ 重绘完成');
+      return true;
+    } else {
+      console.log('❌ 重做失败：没有返回action');
+      return false;
+    }
   }
 
   public async clear(): Promise<void> {
@@ -595,7 +757,16 @@ export class DrawBoard {
    * 清除选择
    */
   public async clearSelection(): Promise<void> {
+    // 清除SelectionManager的选择
     this.selectionManager.clearSelection();
+    
+    // 清除SelectTool的选择
+    const currentTool = this.toolManager.getCurrentToolInstance();
+    if (currentTool && currentTool.getActionType() === 'select') {
+      const selectTool = currentTool as unknown as { clearSelection: () => void };
+      selectTool.clearSelection();
+    }
+    
     await this.drawingHandler.forceRedraw();
   }
 
@@ -603,29 +774,70 @@ export class DrawBoard {
    * 删除选择
    */
   public async deleteSelection(): Promise<void> {
-    if (!this.selectionManager.hasSelection()) return;
+    // 从SelectTool获取选中的actions
+    let selectedActions: DrawAction[] = [];
+    const currentTool = this.toolManager.getCurrentToolInstance();
+    if (currentTool && currentTool.getActionType() === 'select') {
+      const selectTool = currentTool as unknown as { getSelectedActions: () => DrawAction[] };
+      selectedActions = selectTool.getSelectedActions();
+    }
     
-    const selectedIds = this.selectionManager.getSelectedActionIdsForDeletion();
-    // HistoryManager移除动作的正确方法
-    selectedIds.forEach(id => {
-      this.historyManager.removeActionById(id);
-    });
-    this.selectionManager.clearSelection();
-    await this.drawingHandler.forceRedraw();
+    // 如果没有从SelectTool获取到，则从SelectionManager获取
+    if (selectedActions.length === 0 && this.selectionManager.hasSelection()) {
+      selectedActions = this.selectionManager.getSelectedActions().map(item => item.action);
+    }
+    
+    // 删除选中的actions
+    if (selectedActions.length > 0) {
+      selectedActions.forEach(action => {
+        this.historyManager.removeActionById(action.id);
+      });
+      
+      // 清除选择状态
+      this.selectionManager.clearSelection();
+      if (currentTool && currentTool.getActionType() === 'select') {
+        const selectTool = currentTool as unknown as { clearSelection: () => void };
+        selectTool.clearSelection();
+      }
+      
+      await this.drawingHandler.forceRedraw();
+    }
   }
 
   /**
    * 复制选择
    */
   public copySelection(): DrawAction[] {
-    if (!this.selectionManager.hasSelection()) return [];
-    return this.selectionManager.copySelectedActions();
+    // 优先从SelectTool获取
+    const currentTool = this.toolManager.getCurrentToolInstance();
+    if (currentTool && currentTool.getActionType() === 'select') {
+      const selectTool = currentTool as unknown as { copySelectedActions: () => DrawAction[] };
+      return selectTool.copySelectedActions();
+    }
+    
+    // 从SelectionManager获取
+    if (this.selectionManager.hasSelection()) {
+      return this.selectionManager.copySelectedActions();
+    }
+    
+    return [];
   }
 
   /**
    * 是否有选择
    */
   public hasSelection(): boolean {
+    // 检查SelectTool
+    const currentTool = this.toolManager.getCurrentToolInstance();
+    if (currentTool && currentTool.getActionType() === 'select') {
+      const selectTool = currentTool as unknown as { getSelectedActions: () => DrawAction[] };
+      const selectedActions = selectTool.getSelectedActions();
+      if (selectedActions.length > 0) {
+        return true;
+      }
+    }
+    
+    // 检查SelectionManager
     return this.selectionManager.hasSelection();
   }
 
@@ -633,6 +845,14 @@ export class DrawBoard {
    * 获取选择
    */
   public getSelectedActions(): DrawAction[] {
+    // 优先从SelectTool获取
+    const currentTool = this.toolManager.getCurrentToolInstance();
+    if (currentTool && currentTool.getActionType() === 'select') {
+      const selectTool = currentTool as unknown as { getSelectedActions: () => DrawAction[] };
+      return selectTool.getSelectedActions();
+    }
+    
+    // 从SelectionManager获取
     return this.selectionManager.getSelectedActions().map(item => item.action);
   }
 
@@ -818,6 +1038,20 @@ export class DrawBoard {
   }
 
   /**
+   * 获取快捷键管理器实例
+   */
+  public getShortcutManager(): ShortcutManager {
+    return this.shortcutManager;
+  }
+
+  /**
+   * 获取历史管理器实例
+   */
+  public getHistoryManager(): HistoryManager {
+    return this.historyManager;
+  }
+
+  /**
    * 获取复杂度管理器实例
    */
   public getComplexityManager(): ComplexityManager {
@@ -870,7 +1104,14 @@ export class DrawBoard {
    * 设置活动虚拟图层
    */
   public setActiveVirtualLayer(layerId: string): boolean {
-    return this.virtualLayerManager.setActiveVirtualLayer(layerId);
+    const success = this.virtualLayerManager.setActiveVirtualLayer(layerId);
+    
+    // 如果当前是选择工具，同步新图层的数据
+    if (success && this.toolManager.getCurrentTool() === 'select') {
+      this.syncLayerDataToSelectTool();
+    }
+    
+    return success;
   }
 
   /**
@@ -898,7 +1139,14 @@ export class DrawBoard {
    * 设置虚拟图层可见性
    */
   public setVirtualLayerVisible(layerId: string, visible: boolean): boolean {
-    return this.virtualLayerManager.setVirtualLayerVisible(layerId, visible);
+    const success = this.virtualLayerManager.setVirtualLayerVisible(layerId, visible);
+    
+    // 如果当前是选择工具，同步图层数据
+    if (success && this.toolManager.getCurrentTool() === 'select') {
+      this.syncLayerDataToSelectTool();
+    }
+    
+    return success;
   }
 
   /**
@@ -1052,5 +1300,78 @@ export class DrawBoard {
     if (this.complexityManager.shouldRecalculate()) {
       await this.recalculateComplexity();
     }
+  }
+
+  /**
+   * 获取选择功能调试信息
+   */
+  public getSelectionDebugInfo(): {
+    currentTool: ToolType;
+    hasSelection: boolean;
+    selectedActionsCount: number;
+    selectionManagerHasSelection: boolean;
+    selectToolDebugInfo?: {
+      allActionsCount: number;
+      selectedActionsCount: number;
+      isTransformMode: boolean;
+      isSelecting: boolean;
+      isDraggingAnchor: boolean;
+      anchorPointsCount: number;
+      boundsCacheSize: number;
+    };
+  } {
+    const currentTool = this.toolManager.getCurrentTool();
+    const hasSelection = this.hasSelection();
+    const selectedActions = this.getSelectedActions();
+    
+    let selectToolDebugInfo: {
+      allActionsCount: number;
+      selectedActionsCount: number;
+      isTransformMode: boolean;
+      isSelecting: boolean;
+      isDraggingAnchor: boolean;
+      anchorPointsCount: number;
+      boundsCacheSize: number;
+    } | undefined = undefined;
+    
+    const currentToolInstance = this.toolManager.getCurrentToolInstance();
+    if (currentToolInstance && currentToolInstance.getActionType() === 'select') {
+      const selectTool = currentToolInstance as unknown as { 
+        getDebugInfo: () => {
+          allActionsCount: number;
+          selectedActionsCount: number;
+          isTransformMode: boolean;
+          isSelecting: boolean;
+          isDraggingAnchor: boolean;
+          anchorPointsCount: number;
+          boundsCacheSize: number;
+        }
+      };
+      selectToolDebugInfo = selectTool.getDebugInfo();
+    }
+    
+    return {
+      currentTool,
+      hasSelection,
+      selectedActionsCount: selectedActions.length,
+      selectionManagerHasSelection: this.selectionManager.hasSelection(),
+      selectToolDebugInfo
+    };
+  }
+
+  /**
+   * 强制同步选择工具数据
+   */
+  public forceSyncSelectToolData(): void {
+    this.syncLayerDataToSelectTool();
+    
+    // 强制更新选择工具状态
+    const currentTool = this.toolManager.getCurrentToolInstance();
+    if (currentTool && currentTool.getActionType() === 'select') {
+      const selectTool = currentTool as unknown as { forceUpdate: () => void };
+      selectTool.forceUpdate();
+    }
+    
+    logger.debug('强制同步选择工具数据完成', this.getSelectionDebugInfo());
   }
 } 

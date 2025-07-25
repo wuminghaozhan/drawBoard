@@ -138,6 +138,42 @@ const SelectionDemo: React.FC = () => {
     showUsageTip();
   };
 
+  // 调试选择功能
+  const debugSelection = () => {
+    if (!drawBoardRef.current) return;
+    
+    const debugInfo = drawBoardRef.current.getSelectionDebugInfo();
+    console.log('选择功能调试信息:', debugInfo);
+    
+    alert(`选择功能调试信息:\n\n` +
+          `当前工具: ${debugInfo.currentTool}\n` +
+          `有选择: ${debugInfo.hasSelection}\n` +
+          `选中数量: ${debugInfo.selectedActionsCount}\n` +
+          `SelectionManager有选择: ${debugInfo.selectionManagerHasSelection}\n\n` +
+          `SelectTool调试信息:\n` +
+          `${debugInfo.selectToolDebugInfo ? 
+            `- 图层actions: ${debugInfo.selectToolDebugInfo.allActionsCount}\n` +
+            `- 选中actions: ${debugInfo.selectToolDebugInfo.selectedActionsCount}\n` +
+            `- 变换模式: ${debugInfo.selectToolDebugInfo.isTransformMode}\n` +
+            `- 正在选择: ${debugInfo.selectToolDebugInfo.isSelecting}\n` +
+            `- 拖拽锚点: ${debugInfo.selectToolDebugInfo.isDraggingAnchor}\n` +
+            `- 锚点数量: ${debugInfo.selectToolDebugInfo.anchorPointsCount}\n` +
+            `- 缓存大小: ${debugInfo.selectToolDebugInfo.boundsCacheSize}` :
+            '未获取到SelectTool信息'
+          }`
+    );
+  };
+
+  // 强制同步选择工具数据
+  const forceSyncSelectTool = () => {
+    if (!drawBoardRef.current) return;
+    
+    drawBoardRef.current.forceSyncSelectToolData();
+    updateState();
+    
+    alert('已强制同步选择工具数据');
+  };
+
   return (
     <div className="selection-demo">
       <div className="demo-header">
@@ -273,6 +309,18 @@ const SelectionDemo: React.FC = () => {
               className="demo-button clear"
             >
               清空画板
+            </button>
+          </div>
+
+          <div className="demo-controls">
+            <button onClick={addSampleShapes} className="demo-button">
+              📋 使用说明
+            </button>
+            <button onClick={debugSelection} className="demo-button">
+              🔍 调试选择
+            </button>
+            <button onClick={forceSyncSelectTool} className="demo-button">
+              🔄 同步数据
             </button>
           </div>
         </div>
