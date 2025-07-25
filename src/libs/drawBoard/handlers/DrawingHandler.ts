@@ -70,7 +70,7 @@ export class DrawingHandler {
       redrawThrottleMs: 16, // 约60fps
       maxPointsPerAction: 1000, // 最大点数限制
       enableErrorRecovery: true, // 启用错误恢复
-      geometricTools: ['rect', 'circle', 'line', 'polygon'], // 需要全量重绘的几何图形工具
+      geometricTools: ['rect', 'circle', 'line', 'polygon', 'select'], // 需要全量重绘的几何图形工具
       enableGeometricOptimization: true, // 是否启用几何图形优化
       ...config
     };

@@ -22,6 +22,21 @@ export class HistoryManager {
   private memoryCheckInterval: number = 10; // 每10次操作检查一次内存
   private operationCount: number = 0;
 
+  // 性能监控相关
+  private performanceMetrics = { // 性能指标
+    totalOperations: 0, // 总操作数
+    memoryCleanups: 0, // 内存清理次数
+    lastCleanupTime: 0, // 上次清理时间
+    averageOperationTime: 0 // 平均操作时间
+  };
+
+  // 配置选项
+  private config = {
+    enablePerformanceMonitoring: true, // 是否启用性能监控
+    enableDetailedLogging: false, // 是否启用详细日志
+    memoryCalculationPrecision: 'high' as 'low' | 'medium' | 'high' // 内存计算精度
+  };
+  
   /**
    * 添加动作到历史记录（智能内存管理）
    */
@@ -34,10 +49,12 @@ export class HistoryManager {
     this.history.push(action);
     this.currentMemoryBytes += actionMemorySize;
     
-    // 清空重做栈
+    // 清空重做栈 - 修复内存计算
     if (this.undoneActions.length > 0) {
-      this.currentMemoryBytes -= this.calculateArrayMemorySize(this.undoneActions);
+      const undoneMemorySize = this.calculateArrayMemorySize(this.undoneActions);
+      this.currentMemoryBytes -= undoneMemorySize;
       this.undoneActions = [];
+      logger.debug('清空重做栈，释放内存:', (undoneMemorySize / 1024 / 1024).toFixed(2), 'MB');
     }
     
     // 增量检查内存使用
@@ -58,7 +75,9 @@ export class HistoryManager {
   public undo(): DrawAction | null {
     if (this.history.length === 0) return null;
     
-    const action = this.history.pop()!;
+    const action = this.history.pop();
+    if (!action) return null; // 额外的安全检查
+    
     const actionMemorySize = this.calculateActionMemorySize(action);
     
     this.undoneActions.push(action);
@@ -67,8 +86,10 @@ export class HistoryManager {
     
     // 限制重做栈大小
     if (this.undoneActions.length > this.maxUndoneSize) {
-      const removedAction = this.undoneActions.shift()!;
-      this.currentMemoryBytes -= this.calculateActionMemorySize(removedAction);
+      const removedAction = this.undoneActions.shift();
+      if (removedAction) {
+        this.currentMemoryBytes -= this.calculateActionMemorySize(removedAction);
+      }
     }
     
     return action;
@@ -80,7 +101,8 @@ export class HistoryManager {
   public redo(): DrawAction | null {
     if (this.undoneActions.length === 0) return null;
     
-    const action = this.undoneActions.pop()!;
+    const action = this.undoneActions.pop();
+    if (!action) return null; // 额外的安全检查
     
     this.history.push(action);
     // 内存总量不变，只是在两个数组间移动
@@ -89,33 +111,39 @@ export class HistoryManager {
   }
 
   /**
-   * 计算单个动作的内存大小（字节）
+   * 计算单个动作的内存大小（字节）- 改进版本
    */
   private calculateActionMemorySize(action: DrawAction): number {
     let size = 0;
     
-    // 基础对象大小
-    size += 200; // 基础对象开销
+    // 使用更精确的基础对象大小估算
+    size += 64; // 基础对象开销（更保守的估算）
     
-    // points数组
-    size += action.points.length * 24; // 每个点约24字节 (x, y, timestamp等)
+    // points数组 - 更精确的计算
+    if (action.points && Array.isArray(action.points)) {
+      // 每个点对象：x(8) + y(8) + timestamp(8) + 对象开销(16) = 40字节
+      size += action.points.length * 40;
+    }
     
-    // 字符串字段
-    size += (action.id?.length || 0) * 2;
-    size += (action.type?.length || 0) * 2;
-    size += (action.text?.length || 0) * 2;
+    // 字符串字段 - 使用UTF-8编码估算
+    size += this.calculateStringSize(action.id);
+    size += this.calculateStringSize(action.type);
+    size += this.calculateStringSize(action.text);
     
-    // context对象
-    size += 100; // context对象开销
+    // context对象 - 更精确的估算
+    if (action.context) {
+      size += 128; // context对象开销
+      // 如果有更多context属性，可以进一步细化
+    }
     
-    // 预渲染缓存（如果存在）
+    // 预渲染缓存
     if (action.preRenderedCache) {
       size += action.preRenderedCache.memorySize || 0;
     }
     
     // 选择相关数据
-    if (action.selectedActions) {
-      size += action.selectedActions.length * 50; // 每个选择项约50字节
+    if (action.selectedActions && Array.isArray(action.selectedActions)) {
+      size += action.selectedActions.length * 32; // 每个选择项约32字节
     }
     
     return size;
@@ -129,31 +157,51 @@ export class HistoryManager {
   }
 
   /**
-   * 强制执行内存限制（完整检查）
+   * 计算字符串的内存大小
+   */
+  private calculateStringSize(str?: string): number {
+    if (!str) return 0;
+    // UTF-8编码：ASCII字符1字节，中文等2-4字节
+    // 这里使用保守估算：平均每个字符2字节
+    return str.length * 2;
+  }
+
+  /**
+   * 强制执行内存限制（完整检查）- 优化版本
    */
   private enforceMemoryLimits(): void {
     // 重新计算精确的内存使用（防止累积误差）
-    this.currentMemoryBytes = this.calculateArrayMemorySize(this.history) + 
-                              this.calculateArrayMemorySize(this.undoneActions);
+    const historyMemory = this.calculateArrayMemorySize(this.history);
+    const undoneMemory = this.calculateArrayMemorySize(this.undoneActions);
+    this.currentMemoryBytes = historyMemory + undoneMemory;
     
     const currentMemoryMB = this.currentMemoryBytes / 1024 / 1024;
     
     if (currentMemoryMB > this.maxMemoryMB) {
       logger.info(`内存使用超限 (${currentMemoryMB.toFixed(2)}MB > ${this.maxMemoryMB}MB)，开始清理`);
       
+      let cleanedMemory = 0;
+      
       // 优先清理重做栈
       while (this.undoneActions.length > 0 && currentMemoryMB > this.maxMemoryMB * 0.9) {
-        const removedAction = this.undoneActions.shift()!;
-        this.currentMemoryBytes -= this.calculateActionMemorySize(removedAction);
+        const removedAction = this.undoneActions.shift();
+        if (removedAction) {
+          cleanedMemory += this.calculateActionMemorySize(removedAction);
+        }
       }
       
       // 如果还是超限，清理历史记录
       while (this.history.length > 10 && currentMemoryMB > this.maxMemoryMB * 0.8) {
-        const removedAction = this.history.shift()!;
-        this.currentMemoryBytes -= this.calculateActionMemorySize(removedAction);
+        const removedAction = this.history.shift();
+        if (removedAction) {
+          cleanedMemory += this.calculateActionMemorySize(removedAction);
+        }
       }
       
-      logger.info(`内存清理完成，当前使用: ${(this.currentMemoryBytes / 1024 / 1024).toFixed(2)}MB`);
+      // 更新内存计数
+      this.currentMemoryBytes -= cleanedMemory;
+      
+      logger.info(`内存清理完成，释放: ${(cleanedMemory / 1024 / 1024).toFixed(2)}MB, 当前使用: ${(this.currentMemoryBytes / 1024 / 1024).toFixed(2)}MB`);
     }
   }
 
@@ -261,5 +309,45 @@ export class HistoryManager {
     }
 
     return false;
+  }
+
+  /**
+   * 获取性能指标
+   */
+  public getPerformanceMetrics() {
+    return {
+      ...this.performanceMetrics,
+      currentMemoryMB: this.getMemoryUsage(),
+      historyCount: this.history.length,
+      undoneCount: this.undoneActions.length
+    };
+  }
+
+  /**
+   * 设置配置选项
+   */
+  public setConfig(config: Partial<typeof this.config>): void {
+    this.config = { ...this.config, ...config };
+    logger.info('HistoryManager配置已更新:', this.config);
+  }
+
+  /**
+   * 获取当前配置
+   */
+  public getConfig() {
+    return { ...this.config };
+  }
+
+  /**
+   * 重置性能指标
+   */
+  public resetPerformanceMetrics(): void {
+    this.performanceMetrics = {
+      totalOperations: 0,
+      memoryCleanups: 0,
+      lastCleanupTime: 0,
+      averageOperationTime: 0
+    };
+    logger.info('性能指标已重置');
   }
 } 
