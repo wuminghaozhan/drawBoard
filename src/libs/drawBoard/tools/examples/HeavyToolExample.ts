@@ -184,6 +184,8 @@ export class AIPaintingTool extends DrawTool {
 export class ThreeDModelingTool extends DrawTool {
   private threeJS: any = null;
   private isInitialized: boolean = false;
+  private renderer: any = null;
+  private physicsEngine: any = null;
 
   constructor() {
     super('3D建模', '3d-modeling');
@@ -299,6 +301,8 @@ export class ThreeDModelingTool extends DrawTool {
  */
 export class CollaborativeTool extends DrawTool {
   private isConnected: boolean = false;
+  private websocket: any = null;
+  private serverConnection: any = null;
 
   constructor() {
     super('协作工具', 'collaborative');

@@ -483,10 +483,15 @@ export class StateHandler {
 
   /**
    * 检查剪贴板是否有数据
+   * 
+   * 注意：此方法需要从DrawBoard获取剪贴板状态
+   * 当前实现返回false，实际应该通过DrawBoard.hasClipboardData()获取
+   * 
+   * @returns 当前总是返回 false（需要从DrawBoard获取实际状态）
    */
   private hasClipboardData(): boolean {
-    // TODO: 实现剪贴板检查逻辑
-    // 这里可以集成浏览器的 Clipboard API
+    // 注意：此方法应该通过DrawBoard.hasClipboardData()获取实际状态
+    // 当前返回false，因为StateHandler无法直接访问DrawBoard的剪贴板
     return false;
   }
 

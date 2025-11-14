@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { DrawBoard } from '../../libs/drawBoard';
-import type { DrawBoardState } from '../../libs/drawBoard/handlers/StateHandler';
+import type { DrawBoardState } from '../../libs/drawBoard';
 import type { ControlPoint } from '../../libs/drawBoard/tools/transform/TransformTypes';
 import './style.scss';
 

@@ -41,7 +41,7 @@ export class ToolFactory {
     try {
       this.registerBuiltinTools();
     } catch (error) {
-      console.error('❌ ToolFactory 构造函数执行失败:', error);
+      logger.error('❌ ToolFactory 构造函数执行失败:', error);
       throw error;
     }
   }

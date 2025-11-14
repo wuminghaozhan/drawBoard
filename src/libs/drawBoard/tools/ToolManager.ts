@@ -18,6 +18,8 @@ export class ToolManager {
   private currentToolInstance: DrawTool | null = null;
   private toolFactory: ToolFactory;
   private loadingState: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+  // 防止工具切换竞态条件
+  private toolSwitchPromise: Promise<void> | null = null;
 
   constructor() {
     this.toolFactory = ToolFactory.getInstance();
@@ -31,12 +33,38 @@ export class ToolManager {
       logger.debug(`工具已是当前工具: ${toolType}`);
       return;
     }
-
+    
+    // 如果正在切换，等待完成
+    if (this.toolSwitchPromise) {
+      logger.debug('工具正在切换中，等待完成...');
+      await this.toolSwitchPromise;
+      // 再次检查，可能已经切换到目标工具
+      if (this.currentTool === toolType && this.currentToolInstance) {
+        logger.debug('工具已在等待期间切换完成');
+        return;
+      }
+    }
+    
+    // 创建新的切换Promise
+    this.toolSwitchPromise = this.doSetCurrentTool(toolType);
+    
+    try {
+      await this.toolSwitchPromise;
+    } finally {
+      this.toolSwitchPromise = null;
+    }
+  }
+  
+  /**
+   * 执行工具切换（内部方法）
+   */
+  private async doSetCurrentTool(toolType: ToolType): Promise<void> {
     try {
       this.loadingState = 'loading';
       logger.debug(`切换工具: ${this.currentTool} -> ${toolType}`);
       
       const tool = await this.toolFactory.createTool(toolType);
+      
       this.currentTool = toolType;
       this.currentToolInstance = tool;
       this.loadingState = 'ready';

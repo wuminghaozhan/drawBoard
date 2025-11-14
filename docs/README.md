@@ -1,0 +1,169 @@
+# 📚 DrawBoard 文档中心
+
+欢迎来到 DrawBoard 文档中心！这里包含了项目的所有技术文档和架构设计资料。
+
+## 🎯 核心文档
+
+### 📖 主要文档
+
+1. **[ARCHITECTURE.md](./ARCHITECTURE.md)** ⭐ **推荐**
+   - 完整的架构设计文档
+   - 系统架构、核心模块、设计模式
+   - 双层图层系统、性能优化
+   - **适合所有技术人员阅读**
+
+2. **[IMPLEMENTATION.md](./IMPLEMENTATION.md)**
+   - 关键实现细节
+   - 动态图层实现、选择工具实现
+   - 锚点交互规范
+
+3. **[FEATURES.md](./FEATURES.md)**
+   - 功能验证清单
+   - EDB文件解析支持
+   - 功能特性总结
+
+4. **[CODE_REVIEW.md](./CODE_REVIEW.md)**
+   - 代码审查报告
+   - 功能验证、冗余代码检查
+   - 潜在问题分析和修复记录
+
+
+## 📊 文档结构
+
+```
+docs/
+├── ARCHITECTURE.md              # ⭐ 架构设计文档（核心）
+├── IMPLEMENTATION.md            # 实现文档（核心）
+├── FEATURES.md                  # 功能文档（核心）
+├── CODE_REVIEW.md               # 代码审查报告（核心）
+├── README.md                     # 本文档（核心）
+├── guides/                       # 使用指南目录
+│   ├── README.md
+│   ├── QUICK_START_TRANSFORM.md
+│   ├── TEST_PAGE_GUIDE.md
+│   ├── SELECTION_USAGE_GUIDE.md
+│   ├── PLUGIN_SYSTEM_USAGE.md
+│   ├── PROTOCOL_PARSER_USAGE.md
+│   ├── CURSOR_STYLES.md
+│   └── MOBILE_ADAPTATION.md
+├── refactoring/                  # 重构文档目录
+│   ├── RESOURCE_MANAGER_REFACTORING.md
+│   └── ERROR_HANDLING_AND_RESOURCE_MANAGEMENT.md
+└── UML设计图/                    # UML设计图集合
+    ├── README.md
+    ├── 01_整体架构图.md
+    ├── 02_核心类图.md
+    ├── 03_交互时序图.md
+    ├── 04_性能优化架构图.md
+    ├── 05_工具系统架构图.md
+    ├── 06_模块重构对比图.md
+    └── 07_设计模式应用图.md
+```
+
+## 🎯 快速开始
+
+### 新手入门
+1. 阅读 [ARCHITECTURE.md](./ARCHITECTURE.md) 了解整体架构
+2. 查看 [FEATURES.md](./FEATURES.md) 了解功能特性
+3. 参考 [guides/](./guides/) 学习功能使用
+4. 查看 [UML设计图/](./UML设计图/) 了解详细设计
+
+### 开发者
+1. 阅读 [ARCHITECTURE.md](./ARCHITECTURE.md) 理解系统设计
+2. 阅读 [IMPLEMENTATION.md](./IMPLEMENTATION.md) 了解实现细节
+3. 查看 [CODE_REVIEW.md](./CODE_REVIEW.md) 了解代码质量
+4. 查看 [UML设计图/](./UML设计图/) 了解详细设计
+5. 参考 [guides/](./guides/) 学习功能扩展
+6. 对照源码理解实现细节
+
+### 架构师
+1. 完整阅读 [ARCHITECTURE.md](./ARCHITECTURE.md)
+2. 查看所有UML设计图
+3. 阅读 [IMPLEMENTATION.md](./IMPLEMENTATION.md) 了解实现架构
+4. 查看 [CODE_REVIEW.md](./CODE_REVIEW.md) 了解代码质量
+5. 查看 [refactoring/](./refactoring/) 了解重构历史
+
+## 📋 文档特点
+
+### ARCHITECTURE.md 包含内容
+
+- ✅ **系统架构** - 五层架构模型
+- ✅ **图层系统** - 双层图层系统（物理图层 + 虚拟图层）
+- ✅ **核心模块** - CanvasEngine、VirtualLayerManager、DrawBoard等
+- ✅ **设计模式** - 门面、单例、工厂、策略、观察者等
+- ✅ **性能优化** - 图层渲染缓存、离屏Canvas缓存、动态Draw层拆分
+- ✅ **动态图层** - 解决交互元素遮挡问题
+- ✅ **动态Draw层拆分** - 编辑选中图层时只重绘该图层，性能提升20-50倍
+
+### IMPLEMENTATION.md 包含内容
+
+- ✅ **动态图层实现** - 完整的实现细节和使用流程
+- ✅ **动态Draw层拆分** - 性能优化的核心实现
+- ✅ **选择工具实现** - 选择逻辑、图层切换处理
+- ✅ **锚点交互规范** - 不同图形类型的交互规范（圆形、矩形、文字、直线）
+- ✅ **锚点系统优化** - 距离计算检测、移动区域扩大、圆形精确控制
+- ✅ **多选场景** - 多选时的交互行为
+- ✅ **性能优化实现** - 离屏Canvas缓存、HistoryManager集成
+
+### FEATURES.md 包含内容
+
+- ✅ **功能验证清单** - 完整的功能验证列表
+- ✅ **EDB文件支持** - EDB文件解析能力
+- ✅ **功能特性总结** - 核心特性、高级特性、性能优化特性
+
+### CODE_REVIEW.md 包含内容
+
+- ✅ **功能验证** - 已实现功能验证
+- ✅ **冗余代码检查** - 已修复的冗余代码
+- ✅ **潜在问题分析** - 已修复的潜在问题
+- ✅ **修复记录** - 详细的修复过程和效果
+
+## 🔍 文档主题
+
+### 架构设计
+- 五层架构模型
+- 双层图层系统（物理图层 + 虚拟图层）
+- 模块化设计
+
+### 核心模块
+- **CanvasEngine** - 物理图层引擎
+- **VirtualLayerManager** - 虚拟图层管理器
+- **DrawBoard** - 主控制器
+- **DrawingHandler** - 绘制处理器
+
+### 设计模式
+- 门面模式、单例模式、工厂模式
+- 策略模式、观察者模式、命令模式
+- 处理器模式、缓存模式
+
+### 性能优化
+- 图层渲染缓存（性能提升80-90%）
+- 离屏Canvas缓存（历史动作>100个时自动启用，性能提升30-90%）
+- 动态Draw层拆分（编辑选中图层时只重绘该图层，性能提升20-50倍）
+- 智能缓存失效
+- 按需渲染机制
+- 锚点生成缓存（减少重复计算）
+
+## 📈 文档统计
+
+- **核心文档**: 4个主要文档（ARCHITECTURE、IMPLEMENTATION、FEATURES、CODE_REVIEW）
+- **设计图**: 7个专业UML图
+- **使用指南**: 8个指南文档
+- **重构文档**: 2个重构文档
+
+**文档特点：**
+- ✅ 核心文档完整，涵盖架构、实现、功能、审查
+- ✅ 所有文档与代码保持同步
+- ✅ 删除临时/分析文档，保留核心内容
+- ✅ 文档结构清晰，易于查找
+
+## 🔄 文档维护
+
+- **最后更新**: 2024
+- **维护者**: DrawBoard开发团队
+- **更新频率**: 随代码更新同步
+
+---
+
+**开始探索 DrawBoard 的架构设计！** 🚀
+

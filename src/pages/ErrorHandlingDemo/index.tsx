@@ -11,10 +11,7 @@ interface ErrorInfo {
 
 interface ResourceInfo {
   total: number;
-  byType: Record<string, number>;
-  destroyed: number;
-  active: number;
-  estimatedMemoryUsage: number;
+  hasResources: boolean;
 }
 
 export default function ErrorHandlingDemo() {
@@ -96,11 +93,11 @@ export default function ErrorHandlingDemo() {
         }, 1000);
         break;
       case DrawBoardErrorCode.CANVAS_ERROR:
-        // 尝试访问已销毁的Canvas
-        const canvas = drawBoardRef.current.getCanvas();
-        if (canvas) {
-          canvas.remove();
-        }
+        // 尝试访问已销毁的Canvas - 暂时注释掉，因为DrawBoard没有直接暴露getCanvas方法
+        // const canvas = drawBoardRef.current.getCanvas();
+        // if (canvas) {
+        //   canvas.remove();
+        // }
         break;
       default:
         // 触发通用错误
@@ -179,16 +176,8 @@ export default function ErrorHandlingDemo() {
                   <span className="stat-value">{resourceStats.total}</span>
                 </div>
                 <div className="stat-item">
-                  <span className="stat-label">活跃资源:</span>
-                  <span className="stat-value">{resourceStats.active}</span>
-                </div>
-                <div className="stat-item">
-                  <span className="stat-label">已销毁:</span>
-                  <span className="stat-value">{resourceStats.destroyed}</span>
-                </div>
-                <div className="stat-item">
-                  <span className="stat-label">内存使用:</span>
-                  <span className="stat-value">{(resourceStats.estimatedMemoryUsage / 1024).toFixed(1)}KB</span>
+                  <span className="stat-label">有资源:</span>
+                  <span className="stat-value">{resourceStats.hasResources ? '是' : '否'}</span>
                 </div>
               </div>
             )}

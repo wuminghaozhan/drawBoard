@@ -1,5 +1,6 @@
 import { DrawTool } from './DrawTool';
 import type { DrawAction } from './DrawTool';
+import { logger } from '../utils/Logger';
 
 export interface TextAction extends DrawAction {
   text?: string;
@@ -87,7 +88,7 @@ export class TextTool extends DrawTool {
 
       this.restoreContext(ctx, originalContext);
     } catch (error) {
-      console.error('TextTool绘制失败:', error);
+      logger.error('TextTool绘制失败:', error);
       // 尝试恢复上下文状态，使用默认值
       this.restoreContext(ctx, {
         font: TextTool.DEFAULT_CONFIG.fontFamily,
@@ -122,7 +123,7 @@ export class TextTool extends DrawTool {
       ctx.font = originalFont;
       return metrics;
     } catch (error) {
-      console.error('TextTool测量文字失败:', error);
+      logger.error('TextTool测量文字失败:', error);
       // 返回默认的TextMetrics对象
       return {
         width: 0,
@@ -178,7 +179,7 @@ export class TextTool extends DrawTool {
         height: metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent
       };
     } catch (error) {
-      console.error('TextTool计算边界框失败:', error);
+      logger.error('TextTool计算边界框失败:', error);
       return { x: 0, y: 0, width: 0, height: 0 };
     }
   }
@@ -244,7 +245,7 @@ export class TextTool extends DrawTool {
       }
       return true; // 如果不支持 FontFace API，假设字体可用
     } catch (error) {
-      console.warn(`字体 ${fontFamily} 不可用:`, error);
+        logger.warn(`字体 ${fontFamily} 不可用:`, error);
       return false;
     }
   }

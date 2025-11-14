@@ -20,6 +20,7 @@ export class HistoryManager {
   private maxMemoryMB: number = 50; // 最大内存限制50MB
   private currentMemoryBytes: number = 0;
   private memoryCheckInterval: number = 10; // 每10次操作检查一次内存
+  private readonly MEMORY_RECALCULATE_INTERVAL = 50; // 每50次操作重新计算内存，防止累积误差
   private operationCount: number = 0;
 
   // 性能监控相关
@@ -59,6 +60,12 @@ export class HistoryManager {
     
     // 增量检查内存使用
     this.operationCount++;
+    
+    // 定期重新计算内存，防止累积误差
+    if (this.operationCount % this.MEMORY_RECALCULATE_INTERVAL === 0) {
+      this.recalculateMemory();
+    }
+    
     if (this.operationCount % this.memoryCheckInterval === 0) {
       this.enforceMemoryLimits();
     } else {
@@ -67,6 +74,27 @@ export class HistoryManager {
     }
     
     logger.debug('历史记录数量:', this.history.length, '内存使用:', (this.currentMemoryBytes / 1024 / 1024).toFixed(2), 'MB');
+  }
+  
+  /**
+   * 重新计算内存使用（防止累积误差）
+   */
+  private recalculateMemory(): void {
+    const historyMemory = this.calculateArrayMemorySize(this.history);
+    const undoneMemory = this.calculateArrayMemorySize(this.undoneActions);
+    const oldMemory = this.currentMemoryBytes;
+    this.currentMemoryBytes = historyMemory + undoneMemory;
+    
+    const diff = Math.abs(this.currentMemoryBytes - oldMemory);
+    if (diff > 1024) { // 如果差异超过1KB，记录警告
+      logger.warn('HistoryManager: 内存计算误差较大', {
+        oldMemory: (oldMemory / 1024 / 1024).toFixed(2) + 'MB',
+        newMemory: (this.currentMemoryBytes / 1024 / 1024).toFixed(2) + 'MB',
+        diff: (diff / 1024).toFixed(2) + 'KB'
+      });
+    }
+    
+    logger.debug('内存使用已重新计算:', (this.currentMemoryBytes / 1024 / 1024).toFixed(2), 'MB');
   }
 
   /**
@@ -309,6 +337,92 @@ export class HistoryManager {
     }
 
     return false;
+  }
+
+  /**
+   * 更新动作（用于修改已存在的action，如拖拽锚点、变换等）
+   * @param updatedAction 更新后的action（必须包含相同的id）
+   * @returns 是否成功更新
+   */
+  public updateAction(updatedAction: DrawAction): boolean {
+    if (!updatedAction || !updatedAction.id) {
+      logger.warn('更新动作失败：action或id无效');
+      return false;
+    }
+
+    // 从历史记录中查找并更新
+    const historyIndex = this.history.findIndex(action => action.id === updatedAction.id);
+    if (historyIndex !== -1) {
+      const oldAction = this.history[historyIndex];
+      const oldMemorySize = this.calculateActionMemorySize(oldAction);
+      const newMemorySize = this.calculateActionMemorySize(updatedAction);
+      
+      // 更新action
+      this.history[historyIndex] = updatedAction;
+      
+      // 更新内存计数
+      this.currentMemoryBytes = this.currentMemoryBytes - oldMemorySize + newMemorySize;
+      
+      logger.debug('更新历史记录中的动作:', updatedAction.id);
+      return true;
+    }
+
+    // 从重做栈中查找并更新
+    const undoneIndex = this.undoneActions.findIndex(action => action.id === updatedAction.id);
+    if (undoneIndex !== -1) {
+      const oldAction = this.undoneActions[undoneIndex];
+      const oldMemorySize = this.calculateActionMemorySize(oldAction);
+      const newMemorySize = this.calculateActionMemorySize(updatedAction);
+      
+      // 更新action
+      this.undoneActions[undoneIndex] = updatedAction;
+      
+      // 更新内存计数
+      this.currentMemoryBytes = this.currentMemoryBytes - oldMemorySize + newMemorySize;
+      
+      logger.debug('更新重做栈中的动作:', updatedAction.id);
+      return true;
+    }
+
+    logger.warn('更新动作失败：未找到action:', updatedAction.id);
+    return false;
+  }
+
+  /**
+   * 批量更新动作（用于同时更新多个actions）
+   * @param updatedActions 更新后的actions数组
+   * @returns 成功更新的数量
+   */
+  public updateActions(updatedActions: DrawAction[]): number {
+    let successCount = 0;
+    for (const action of updatedActions) {
+      if (this.updateAction(action)) {
+        successCount++;
+      }
+    }
+    logger.debug(`批量更新动作: ${successCount}/${updatedActions.length} 成功`);
+    return successCount;
+  }
+
+  /**
+   * 根据ID获取action
+   * @param actionId action的ID
+   * @returns 找到的action，如果不存在返回null
+   */
+  public getActionById(actionId: string): DrawAction | null {
+    // 从历史记录中查找
+    const historyAction = this.history.find(action => action.id === actionId);
+    if (historyAction) {
+      return historyAction;
+    }
+
+    // 从重做栈中查找
+    const undoneAction = this.undoneActions.find(action => action.id === actionId);
+    if (undoneAction) {
+      return undoneAction;
+    }
+
+    return null;
   }
 
   /**

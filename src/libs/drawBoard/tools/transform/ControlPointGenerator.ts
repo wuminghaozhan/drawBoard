@@ -259,7 +259,7 @@ export class ControlPointGenerator {
    */
   public calculateResizePoints(
     startPoints: Point[], 
-    controlPoint: ControlPoint, 
+    _controlPoint: ControlPoint, 
     startBounds: ShapeBounds, 
     currentPoint: Point
   ): Point[] {

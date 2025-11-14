@@ -1,45 +1,57 @@
 import type { DrawAction } from '../tools/DrawTool';
 import { logger } from '../utils/Logger';
+import type { CanvasEngine } from './CanvasEngine';
+import type { HistoryManager } from '../history/HistoryManager';
 
 /**
  * 虚拟图层接口
  * 定义了一个虚拟图层的属性
  */
 export interface VirtualLayer {
-  id: string;
-  name: string;
-  visible: boolean;
-  opacity: number;
-  locked: boolean;
-  created: number;
-  modified: number;
+  id: string; // 虚拟图层ID
+  name: string; // 虚拟图层名称
+  visible: boolean; // 虚拟图层可见性
+  opacity: number; // 虚拟图层透明度
+  locked: boolean; // 虚拟图层锁定状态
+  created: number; // 虚拟图层创建时间
+  modified: number; // 虚拟图层修改时间
   actionIds: string[]; // 属于该虚拟图层的动作ID列表
   actionIdsSet: Set<string>; // 优化：使用Set进行快速查找
+  zIndex: number; // 图层顺序（z-index），数值越大越在上层
+  // 渲染缓存相关
+  cacheCanvas?: HTMLCanvasElement; // 离屏Canvas缓存
+  cacheCtx?: CanvasRenderingContext2D; // 缓存Canvas的上下文
+  cacheDirty: boolean; // 缓存是否过期（需要重新渲染）
+  cacheWidth: number; // 缓存Canvas宽度
+  cacheHeight: number; // 缓存Canvas高度
 }
+
+/**
+ * 虚拟图层模式
+ */
+export type VirtualLayerMode = 'grouped' | 'individual';
 
 /**
  * 虚拟图层管理器配置
  */
 export interface VirtualLayerConfig {
-  maxLayers?: number;
-  defaultLayerName?: string;
-  autoCreateLayer?: boolean;
+  /** 虚拟图层模式：'grouped' | 'individual' */
+  mode?: VirtualLayerMode;
+  maxLayers?: number; // 最大虚拟图层数量
+  defaultLayerName?: string; // 默认虚拟图层名称
   /** 每个图层最大动作数，默认为1000 */
   maxActionsPerLayer?: number;
-  /** 清理间隔，默认为100次操作 */
-  cleanupInterval?: number;
-  /** 缓存过期时间，默认为2000ms */
-  cacheExpirationTime?: number;
-  /** 是否启用异步清理，默认为true */
-  enableAsyncCleanup?: boolean;
+  /** 分组模式下的时间间隔阈值（毫秒），超过此时间创建新图层 */
+  timeThreshold?: number;
+  /** 分组模式下的工具类型变化是否创建新图层 */
+  createLayerOnToolChange?: boolean;
 }
 
 /**
  * 虚拟图层管理器
  * 
  * 功能特性：
- * - 将每个 DrawAction 视为虚拟图层
- * - 支持动作分组到虚拟图层
+ * - 支持两种虚拟图层模式：分组模式和独立模式
  * - 虚拟图层可见性/透明度/锁定控制
  * - 虚拟图层重命名/删除/合并
  * - 与 HistoryManager 协同工作
@@ -52,24 +64,28 @@ export interface VirtualLayerConfig {
  * 
  * 性能优化：
  * - 使用Set进行O(1)的动作ID查找
- * - 智能缓存策略，根据内存压力调整
- * - 异步清理机制，避免阻塞主线程
+ * - 智能缓存策略
  * - 批量操作优化
  */
 export class VirtualLayerManager {
-  private virtualLayers: Map<string, VirtualLayer> = new Map();
+  private virtualLayers: Map<string, VirtualLayer> = new Map(); // 虚拟图层Map
   private actionLayerMap: Map<string, string> = new Map(); // actionId -> layerId
-  private activeLayerId: string = '';
-  private maxLayers: number = 50;
-  private defaultLayerName: string = '虚拟图层';
-  private autoCreateLayer: boolean = true; // 是否自动创建图层
+  private activeLayerId: string = ''; // 活动虚拟图层ID
+  private mode: VirtualLayerMode = 'grouped'; // 虚拟图层模式
+  
+  // 配置参数
+  private maxLayers: number = 50; // 最大虚拟图层数量
+  private defaultLayerName: string = '图层'; // 默认虚拟图层名称
+  private maxActionsPerLayer: number = 1000; // 每个图层最大动作数
+  private timeThreshold: number = 5000; // 时间间隔阈值（毫秒）
+  private createLayerOnToolChange: boolean = true; // 工具类型变化是否创建新图层
   
   // 性能优化：缓存统计信息
   private statsCache: {
-    totalLayers: number;
-    visibleLayers: number;
-    lockedLayers: number;
-    totalActions: number;
+    totalLayers: number; // 总虚拟图层数量
+    visibleLayers: number; // 可见虚拟图层数量
+    lockedLayers: number; // 锁定虚拟图层数量
+    totalActions: number; // 总动作数量
     lastUpdate: number;
   } | null = null;
   
@@ -77,29 +93,53 @@ export class VirtualLayerManager {
   private visibleActionIdsCache: string[] | null = null;
   private visibleActionIdsCacheTime: number = 0;
   
-  // 清理配置
-  private maxActionsPerLayer: number = 1000; // 每个图层最大动作数
-  private cleanupInterval: number = 100; // 每100次操作清理一次
-  private operationCount: number = 0;
-  private cacheExpirationTime: number = 2000; // 缓存过期时间
-  private enableAsyncCleanup: boolean = true; // 是否启用异步清理
+  // 图层顺序管理
+  private nextZIndex: number = 0; // 下一个zIndex值
   
-  // 性能优化：批量操作支持
-  private pendingOperations: Array<() => void> = [];
-  private batchMode: boolean = false;
-  private batchTimeoutId: number | null = null;
+  // Canvas尺寸（用于创建缓存Canvas）
+  private canvasWidth: number = 0;
+  private canvasHeight: number = 0;
+  
+  // CanvasEngine引用（用于创建动态图层）
+  private canvasEngine?: CanvasEngine;
+  
+  // HistoryManager引用（用于获取动作数据）
+  private historyManager?: HistoryManager;
 
-  constructor(config: VirtualLayerConfig = {}) {
-    this.maxLayers = config.maxLayers || 50; // 最大图层数
-    this.defaultLayerName = config.defaultLayerName || '虚拟图层'; // 默认图层名称
-    this.autoCreateLayer = config.autoCreateLayer !== false; // 是否自动创建图层
-    this.maxActionsPerLayer = config.maxActionsPerLayer || 1000; // 每个图层最大动作数
-    this.cleanupInterval = config.cleanupInterval || 100; // 每100次操作清理一次
-    this.cacheExpirationTime = config.cacheExpirationTime || 2000; // 缓存过期时间
-    this.enableAsyncCleanup = config.enableAsyncCleanup !== false; // 是否启用异步清理
+  constructor(config: VirtualLayerConfig = {}, canvasEngine?: CanvasEngine) {
+    this.mode = config.mode || 'grouped';
+    this.maxLayers = config.maxLayers || 50;
+    this.defaultLayerName = config.defaultLayerName || '图层';
+    this.maxActionsPerLayer = config.maxActionsPerLayer || 1000;
+    this.timeThreshold = config.timeThreshold || 5000;
+    this.createLayerOnToolChange = config.createLayerOnToolChange !== false;
+    this.canvasEngine = canvasEngine;
     
     // 创建默认虚拟图层
     this.createDefaultLayer();
+    
+    logger.debug('VirtualLayerManager初始化完成', {
+      mode: this.mode,
+      maxLayers: this.maxLayers,
+      maxActionsPerLayer: this.maxActionsPerLayer,
+      hasCanvasEngine: !!this.canvasEngine
+    });
+  }
+
+  /**
+   * 设置CanvasEngine引用（用于动态图层管理）
+   */
+  public setCanvasEngine(canvasEngine: CanvasEngine): void {
+    this.canvasEngine = canvasEngine;
+    logger.debug('VirtualLayerManager已设置CanvasEngine引用');
+  }
+
+  /**
+   * 设置HistoryManager引用（用于获取动作数据）
+   */
+  public setHistoryManager(historyManager: HistoryManager): void {
+    this.historyManager = historyManager;
+    logger.debug('VirtualLayerManager已设置HistoryManager引用');
   }
 
   /**
@@ -131,8 +171,14 @@ export class VirtualLayerManager {
       created: now,
       modified: now,
       actionIds: [],
-      actionIdsSet: new Set<string>() // 优化：使用Set进行快速查找
+      actionIdsSet: new Set<string>(),
+      zIndex: this.nextZIndex++, // 分配zIndex
+      cacheDirty: true, // 新图层需要渲染
+      cacheWidth: this.canvasWidth,
+      cacheHeight: this.canvasHeight
     };
+    
+    // 初始化缓存Canvas（延迟创建，在需要时创建）
 
     this.virtualLayers.set(layerId, newLayer);
     logger.debug('创建虚拟图层:', newLayer.name, layerId);
@@ -158,35 +204,59 @@ export class VirtualLayerManager {
 
     // 将该图层的动作移动到默认图层
     const defaultLayer = this.getDefaultLayer();
-    // TODO：不理解为什么要放到默认图层，难道是怕删除图层后，动作找不到归属？
     if (defaultLayer && layer.actionIds.length > 0) {
-      // 优化：批量操作
-      this.batchOperation(() => {
         layer.actionIds.forEach(actionId => {
           this.actionLayerMap.set(actionId, defaultLayer.id);
           defaultLayer.actionIds.push(actionId);
-          defaultLayer.actionIdsSet.add(actionId); // 同步更新Set
+        defaultLayer.actionIdsSet.add(actionId);
         });
         defaultLayer.modified = Date.now();
-      });
     }
 
     // 删除图层
     this.virtualLayers.delete(layerId);
 
-    // 如果删除的是当前激活图层，切换到默认图层
+    // 如果删除的是当前激活图层，切换到默认图层并重新拆分draw层
     if (this.activeLayerId === layerId) {
+      const oldActiveLayerId = this.activeLayerId;
       this.activeLayerId = defaultLayer?.id || '';
+      
+      // 如果draw层已拆分，需要重新拆分（因为活动图层变化了）
+      if (this.canvasEngine && this.canvasEngine.isDrawLayerSplit() && defaultLayer) {
+        // 合并旧的draw层拆分
+        this.canvasEngine.mergeDrawLayers();
+        // 重新拆分draw层（使用新的活动图层）
+        const allLayers = this.getAllVirtualLayers();
+        const allLayerZIndices = allLayers.map(l => l.zIndex);
+        try {
+          this.canvasEngine.splitDrawLayer(defaultLayer.zIndex, allLayerZIndices);
+          logger.debug('删除活动图层后重新拆分draw层:', defaultLayer.name);
+        } catch (error) {
+          logger.error('重新拆分draw层失败:', error);
+        }
+      }
+      
+      logger.debug('删除活动图层，切换到默认图层:', oldActiveLayerId, '->', this.activeLayerId);
     }
 
+    this.invalidateCache();
     logger.debug('删除虚拟图层:', layer.name);
     return true;
   }
+
+  // 防止快速切换图层时的竞态条件
+  private layerSwitchInProgress: boolean = false;
 
   /**
    * 设置活动虚拟图层
    */
   public setActiveVirtualLayer(layerId: string): boolean {
+    // 防止并发切换
+    if (this.layerSwitchInProgress) {
+      logger.warn('图层切换正在进行中，忽略重复请求:', layerId);
+      return false;
+    }
+
     const layer = this.getVirtualLayer(layerId);
     if (!layer) {
       logger.warn('虚拟图层不存在:', layerId);
@@ -198,9 +268,118 @@ export class VirtualLayerManager {
       return false;
     }
 
-    this.activeLayerId = layerId;
+    // 如果切换到同一个图层，直接返回
+    if (this.activeLayerId === layerId) {
+      logger.debug('已激活该图层，无需重复切换:', layer.name);
+      return true;
+    }
+
+    this.layerSwitchInProgress = true;
+
+    try {
+      // 清除之前的动态图层和draw层拆分
+      if (this.activeLayerId && this.activeLayerId !== layerId) {
+        this.clearActiveLayerSelection();
+        // 合并之前的draw层拆分
+        if (this.canvasEngine) {
+          this.canvasEngine.mergeDrawLayers();
+        }
+      }
+
+      this.activeLayerId = layerId;
+    
+      // 创建动态图层用于交互元素
+      if (this.canvasEngine) {
+        try {
+          this.canvasEngine.getSelectionLayerForVirtualLayer(layer.zIndex);
+          logger.debug('为虚拟图层创建动态图层:', layer.name, 'zIndex:', layer.zIndex);
+        } catch (error) {
+          logger.error('创建动态图层失败:', error);
+        }
+        
+        // 拆分draw层以实现性能优化
+        try {
+          const allLayers = this.getAllVirtualLayers();
+          const allLayerZIndices = allLayers.map(l => l.zIndex);
+          const splitResult = this.canvasEngine.splitDrawLayer(layer.zIndex, allLayerZIndices);
+          logger.debug('拆分draw层完成:', layer.name, 'zIndex:', layer.zIndex, splitResult);
+          
+          // 拆分后需要初始化绘制bottom和top层的内容
+          // 注意：这里只标记需要重绘，实际绘制由DrawingHandler处理
+          // 因为DrawingHandler需要访问HistoryManager来获取动作数据
+          this.markLayersForInitialDraw(splitResult, layer.zIndex, allLayers);
+        } catch (error) {
+          logger.error('拆分draw层失败:', error);
+        }
+      }
+    } finally {
+      this.layerSwitchInProgress = false;
+    }
+    
     logger.debug('切换到虚拟图层:', layer.name);
     return true;
+  }
+
+  /**
+   * 清除活动图层的选择状态（删除动态图层）
+   */
+  private clearActiveLayerSelection(): void {
+    if (this.activeLayerId && this.canvasEngine) {
+      const layer = this.getVirtualLayer(this.activeLayerId);
+      if (layer) {
+        const dynamicLayerId = `selection-${layer.zIndex}`;
+        this.canvasEngine.removeDynamicLayer(dynamicLayerId);
+        logger.debug('清除虚拟图层的动态图层:', layer.name);
+      }
+    }
+  }
+
+  /**
+   * 清除活动图层（公共方法）
+   */
+  public clearActiveLayer(): void {
+    this.clearActiveLayerSelection();
+    // 合并draw层拆分
+    if (this.canvasEngine) {
+      this.canvasEngine.mergeDrawLayers();
+    }
+    this.activeLayerId = '';
+  }
+  
+  /**
+   * 标记需要初始绘制的图层（拆分draw层后调用）
+   * @param splitResult 拆分结果
+   * @param selectedZIndex 选中图层zIndex
+   * @param allLayers 所有图层
+   */
+  private markLayersForInitialDraw(
+    splitResult: { hasBottom: boolean; hasTop: boolean },
+    selectedZIndex: number,
+    allLayers: VirtualLayer[]
+  ): void {
+    // 标记bottom层需要绘制（如果有）
+    if (splitResult.hasBottom) {
+      const bottomLayers = allLayers.filter(l => l.zIndex < selectedZIndex);
+      for (const bottomLayer of bottomLayers) {
+        // 标记缓存过期，需要重新绘制
+        bottomLayer.cacheDirty = true;
+      }
+    }
+    
+    // 标记top层需要绘制（如果有）
+    if (splitResult.hasTop) {
+      const topLayers = allLayers.filter(l => l.zIndex > selectedZIndex);
+      for (const topLayer of topLayers) {
+        // 标记缓存过期，需要重新绘制
+        topLayer.cacheDirty = true;
+      }
+    }
+    
+    // 标记选中图层需要绘制
+    const selectedLayer = allLayers.find(l => l.zIndex === selectedZIndex);
+    if (selectedLayer) {
+      selectedLayer.cacheDirty = true;
+    }
   }
 
   /**
@@ -211,6 +390,14 @@ export class VirtualLayerManager {
   }
 
   /**
+   * 获取活动虚拟图层的zIndex
+   */
+  public getActiveVirtualLayerZIndex(): number | null {
+    const layer = this.getActiveVirtualLayer();
+    return layer ? layer.zIndex : null;
+  }
+
+  /**
    * 获取指定虚拟图层
    */
   public getVirtualLayer(layerId: string): VirtualLayer | null {
@@ -218,10 +405,60 @@ export class VirtualLayerManager {
   }
 
   /**
-   * 获取所有虚拟图层
+   * 销毁VirtualLayerManager，清理所有资源
+   */
+  public destroy(): void {
+    logger.debug('🗑️ 开始销毁VirtualLayerManager...');
+    
+    // 1. 清理所有动态图层
+    if (this.canvasEngine && this.activeLayerId) {
+      this.clearActiveLayerSelection();
+    }
+    
+    // 2. 清理所有图层缓存Canvas
+    for (const layer of this.virtualLayers.values()) {
+      if (layer.cacheCanvas) {
+        // 清理Canvas资源
+        layer.cacheCanvas.width = 0;
+        layer.cacheCanvas.height = 0;
+        layer.cacheCanvas = undefined;
+        layer.cacheCtx = undefined;
+      }
+    }
+    
+    // 3. 清理所有图层缓存（调用已有方法）
+    this.clearAllLayerCaches();
+    
+    // 4. 清理Map和Set
+    this.virtualLayers.clear();
+    this.actionLayerMap.clear();
+    
+    // 5. 清理统计缓存
+    this.statsCache = null;
+    this.visibleActionIdsCache = null;
+    this.visibleActionIdsCacheTime = 0;
+    
+    // 6. 清理CanvasEngine引用
+    this.canvasEngine = undefined;
+    
+    // 7. 重置状态
+    this.activeLayerId = '';
+    this.nextZIndex = 0;
+    this.canvasWidth = 0;
+    this.canvasHeight = 0;
+    
+    // 8. 使缓存失效
+    this.invalidateCache();
+    
+    logger.debug('✅ VirtualLayerManager已销毁');
+  }
+
+  /**
+   * 获取所有虚拟图层（按zIndex排序）
    */
   public getAllVirtualLayers(): VirtualLayer[] {
-    return Array.from(this.virtualLayers.values());
+    return Array.from(this.virtualLayers.values())
+      .sort((a, b) => a.zIndex - b.zIndex);
   }
 
   /**
@@ -240,7 +477,9 @@ export class VirtualLayerManager {
 
     layer.visible = visible;
     layer.modified = Date.now();
-    this.invalidateCache(); // 失效缓存
+    // 可见性变化不需要重新渲染缓存，只需要重绘
+    // 注意：实际重绘由DrawBoard根据draw层拆分状态决定
+    this.invalidateCache();
     logger.debug('设置虚拟图层可见性:', layer.name, visible);
     return true;
   }
@@ -254,7 +493,9 @@ export class VirtualLayerManager {
 
     layer.opacity = Math.max(0, Math.min(1, opacity));
     layer.modified = Date.now();
-    this.invalidateCache(); // 失效缓存
+    // 透明度变化不需要重新渲染缓存，只需要重绘
+    // 注意：实际重绘由DrawBoard根据draw层拆分状态决定
+    this.invalidateCache();
     logger.debug('设置虚拟图层透明度:', layer.name, layer.opacity);
     return true;
   }
@@ -268,7 +509,7 @@ export class VirtualLayerManager {
 
     layer.locked = locked;
     layer.modified = Date.now();
-    this.invalidateCache(); // 失效缓存
+    this.invalidateCache();
     logger.debug('设置虚拟图层锁定:', layer.name, locked);
     return true;
   }
@@ -283,13 +524,13 @@ export class VirtualLayerManager {
     const oldName = layer.name;
     layer.name = newName.trim() || oldName;
     layer.modified = Date.now();
-    this.invalidateCache(); // 失效缓存
+    this.invalidateCache();
     logger.debug('重命名虚拟图层:', oldName, '->', layer.name);
     return true;
   }
 
   /**
-   * 将动作分配到虚拟图层（优化版本）
+   * 将动作分配到虚拟图层
    */
   public assignActionToLayer(actionId: string, layerId: string): boolean {
     const layer = this.getVirtualLayer(layerId);
@@ -298,58 +539,6 @@ export class VirtualLayerManager {
       return false;
     }
 
-    // 优化：使用Set进行O(1)查找
-    const oldLayerId = this.actionLayerMap.get(actionId);
-    if (oldLayerId) {
-      const oldLayer = this.getVirtualLayer(oldLayerId);
-      if (oldLayer) {
-        // 优化：使用Set进行快速删除
-        if (oldLayer.actionIdsSet.has(actionId)) {
-          const index = oldLayer.actionIds.indexOf(actionId);
-          if (index > -1) {
-            oldLayer.actionIds.splice(index, 1);
-            oldLayer.actionIdsSet.delete(actionId); // 同步更新Set
-            oldLayer.modified = Date.now();
-          }
-        }
-      }
-    }
-
-    // 添加到新图层
-    this.actionLayerMap.set(actionId, layerId);
-    // 优化：使用Set进行快速检查
-    if (!layer.actionIdsSet.has(actionId)) {
-      layer.actionIds.push(actionId);
-      layer.actionIdsSet.add(actionId); // 同步更新Set
-      layer.modified = Date.now();
-    }
-
-    // 性能优化：增加操作计数并检查清理
-    this.operationCount++;
-    if (this.operationCount % this.cleanupInterval === 0) {
-      this.scheduleCleanup(); // 优化：异步清理
-    }
-
-    // 失效缓存
-    this.invalidateCache();
-
-    logger.debug('分配动作到虚拟图层:', actionId, '->', layer.name);
-    return true;
-  }
-
-  /**
-   * 批量分配动作到图层（新增优化方法）
-   */
-  public assignActionsToLayer(actionIds: string[], layerId: string): boolean {
-    const layer = this.getVirtualLayer(layerId);
-    if (!layer || layer.locked) {
-      logger.warn('无法分配动作：虚拟图层不存在或已锁定');
-      return false;
-    }
-
-    // 批量操作优化
-    this.batchOperation(() => {
-      for (const actionId of actionIds) {
         // 从原图层移除
         const oldLayerId = this.actionLayerMap.get(actionId);
         if (oldLayerId) {
@@ -360,6 +549,8 @@ export class VirtualLayerManager {
               oldLayer.actionIds.splice(index, 1);
               oldLayer.actionIdsSet.delete(actionId);
               oldLayer.modified = Date.now();
+          // 标记原图层缓存过期
+          this.markLayerCacheDirty(oldLayerId);
             }
           }
         }
@@ -369,14 +560,13 @@ export class VirtualLayerManager {
         if (!layer.actionIdsSet.has(actionId)) {
           layer.actionIds.push(actionId);
           layer.actionIdsSet.add(actionId);
-        }
-      }
       layer.modified = Date.now();
-    });
+      // 标记新图层缓存过期
+      this.markLayerCacheDirty(layerId);
+    }
 
-    // 失效缓存
     this.invalidateCache();
-    logger.debug(`批量分配 ${actionIds.length} 个动作到虚拟图层:`, layer.name);
+    logger.debug('分配动作到虚拟图层:', actionId, '->', layer.name);
     return true;
   }
 
@@ -397,30 +587,236 @@ export class VirtualLayerManager {
   }
 
   /**
-   * 处理新动作（自动分配到当前活动图层）
+   * 处理新动作（根据模式自动分配图层）
    */
   public handleNewAction(action: DrawAction): void {
-    // TODO：逻辑不一致：autoCreateLayer=false 时，动作不分配图层但仍在历史记录中
-    // TODO：用户体验混乱：用户可能期望禁用图层功能时完全禁用
-    // TODO：代码可读性差：这个检查的逻辑不够清晰，需要优化
-    if (!this.autoCreateLayer) return;
-
-    // 如果动作没有指定虚拟图层，自动分配到当前活动图层
-    if (!action.virtualLayerId) {
-      const activeLayer = this.getActiveVirtualLayer();
-      if (activeLayer) {
-        action.virtualLayerId = activeLayer.id;
-        action.layerName = activeLayer.name;
-        action.layerVisible = activeLayer.visible;
-        action.layerOpacity = activeLayer.opacity;
-        action.layerLocked = activeLayer.locked;
-        action.layerCreated = activeLayer.created;
-        action.layerModified = Date.now();
-
-        // 添加到图层
-        this.assignActionToLayer(action.id, activeLayer.id);
-      }
+    // 如果动作已经指定了虚拟图层，直接使用
+    if (action.virtualLayerId) {
+      this.assignActionToLayer(action.id, action.virtualLayerId);
+      return;
     }
+
+    // 优化：自动将未分配的动作分配到默认图层
+    const defaultLayer = this.getDefaultLayer();
+    if (defaultLayer) {
+      this.assignActionToLayer(action.id, defaultLayer.id);
+      // 更新动作的图层属性
+      action.virtualLayerId = defaultLayer.id;
+      action.layerName = defaultLayer.name;
+      action.layerVisible = defaultLayer.visible;
+      action.layerOpacity = defaultLayer.opacity;
+      action.layerLocked = defaultLayer.locked;
+      return;
+    }
+
+    // 根据模式处理新动作
+    if (this.mode === 'individual') {
+      this.handleIndividualMode(action);
+    } else {
+      this.handleGroupedMode(action);
+    }
+  }
+
+  /**
+   * 处理独立模式：为每个动作创建独立虚拟图层
+   */
+  private handleIndividualMode(action: DrawAction): void {
+    // 创建虚拟图层
+    const layer: VirtualLayer = {
+      id: `layer_${action.id}`,
+      name: `动作_${action.id.slice(0, 8)}`,
+      visible: true,
+      opacity: 1.0,
+      locked: false,
+      created: action.timestamp,
+      modified: action.timestamp,
+      actionIds: [action.id],
+      actionIdsSet: new Set([action.id]),
+      zIndex: this.nextZIndex++,
+      cacheDirty: true,
+      cacheWidth: this.canvasWidth,
+      cacheHeight: this.canvasHeight
+    };
+    
+    // 设置动作的图层属性
+    action.virtualLayerId = layer.id;
+    action.layerName = layer.name;
+    action.layerVisible = layer.visible;
+    action.layerOpacity = layer.opacity;
+    action.layerLocked = layer.locked;
+    action.layerCreated = layer.created;
+    action.layerModified = layer.modified;
+    
+    // 保存虚拟图层
+    this.virtualLayers.set(layer.id, layer);
+    this.actionLayerMap.set(action.id, layer.id);
+    
+    // 性能优化：限制最大图层数量
+    if (this.virtualLayers.size > this.maxLayers) {
+      this.mergeOldestLayers();
+    }
+    
+    logger.debug(`独立模式：为动作 ${action.id} 创建独立图层 ${layer.id}`);
+  }
+
+  /**
+   * 处理分组模式：将动作添加到现有虚拟图层或创建新图层
+   */
+  private handleGroupedMode(action: DrawAction): void {
+    let targetLayer = this.getActiveVirtualLayer();
+    
+    // 如果没有活动图层或需要创建新图层，则创建
+    if (!targetLayer || this.shouldCreateNewGroupedLayer(action)) {
+      targetLayer = this.createGroupedLayer(action);
+    }
+    
+    // 将动作添加到虚拟图层
+    targetLayer.actionIds.push(action.id);
+    targetLayer.actionIdsSet.add(action.id);
+    targetLayer.modified = action.timestamp;
+    
+    // 设置动作的图层属性
+    action.virtualLayerId = targetLayer.id;
+    action.layerName = targetLayer.name;
+    action.layerVisible = targetLayer.visible;
+    action.layerOpacity = targetLayer.opacity;
+    action.layerLocked = targetLayer.locked;
+    action.layerCreated = targetLayer.created;
+    action.layerModified = targetLayer.modified;
+    
+    // 更新映射关系
+    this.actionLayerMap.set(action.id, targetLayer.id);
+    
+    logger.debug(`分组模式：将动作 ${action.id} 添加到图层 ${targetLayer.id}`);
+  }
+
+  /**
+   * 判断是否需要创建新的分组图层
+   */
+  private shouldCreateNewGroupedLayer(action: DrawAction): boolean {
+    const activeLayer = this.getActiveVirtualLayer();
+    if (!activeLayer) return true;
+    
+    // 时间间隔超过阈值
+    const timeDiff = action.timestamp - activeLayer.modified;
+    if (timeDiff > this.timeThreshold) return true;
+    
+    // 工具类型变化
+    if (this.createLayerOnToolChange) {
+      const lastAction = this.getLastActionInLayer(activeLayer.id);
+      if (lastAction && lastAction.type !== action.type) return true;
+    }
+    
+    // 图层动作数量过多
+    if (activeLayer.actionIds.length >= this.maxActionsPerLayer) return true;
+    
+    return false;
+  }
+
+  /**
+   * 创建分组虚拟图层
+   */
+  private createGroupedLayer(action: DrawAction): VirtualLayer {
+    const layerId = this.generateLayerId();
+    const layerName = this.generateLayerName(action);
+    
+    const layer: VirtualLayer = {
+      id: layerId,
+      name: layerName,
+      visible: true,
+      opacity: 1.0,
+      locked: false,
+      created: action.timestamp,
+      modified: action.timestamp,
+      actionIds: [],
+      actionIdsSet: new Set(),
+      zIndex: this.nextZIndex++,
+      cacheDirty: true,
+      cacheWidth: this.canvasWidth,
+      cacheHeight: this.canvasHeight
+    };
+    
+    this.virtualLayers.set(layerId, layer);
+    this.activeLayerId = layerId;
+    
+    return layer;
+  }
+
+  /**
+   * 获取图层中最后一个动作
+   */
+  private getLastActionInLayer(layerId: string): DrawAction | null {
+    const layer = this.getVirtualLayer(layerId);
+    if (!layer || layer.actionIds.length === 0) return null;
+    
+    // 如果没有HistoryManager引用，返回null
+    if (!this.historyManager) {
+      logger.debug('VirtualLayerManager: HistoryManager未设置，无法获取动作数据');
+      return null;
+    }
+    
+    // 获取图层中最后一个动作ID
+    const lastActionId = layer.actionIds[layer.actionIds.length - 1];
+    
+    // 从HistoryManager获取动作
+    const action = this.historyManager.getActionById(lastActionId);
+    if (action) {
+      logger.debug('获取图层最后一个动作:', layerId, 'actionId:', lastActionId);
+    } else {
+      logger.debug('图层最后一个动作不存在:', layerId, 'actionId:', lastActionId);
+    }
+    
+    return action || null;
+  }
+
+  /**
+   * 生成图层名称
+   */
+  private generateLayerName(action: DrawAction): string {
+    const toolNames: Record<string, string> = {
+      'pen': '画笔',
+      'line': '直线',
+      'rect': '矩形',
+      'circle': '圆形',
+      'polygon': '多边形',
+      'text': '文字',
+      'select': '选择',
+      'transform': '变换',
+      'eraser': '橡皮擦'
+    };
+    
+    const toolName = toolNames[action.type] || action.type;
+    const timestamp = new Date(action.timestamp).toLocaleTimeString();
+    return `${toolName}_${timestamp}`;
+  }
+
+  /**
+   * 合并最旧的图层（性能优化）
+   */
+  private mergeOldestLayers(): void {
+    const layers = Array.from(this.virtualLayers.values())
+      .sort((a, b) => a.created - b.created);
+    
+    if (layers.length <= 1) return;
+    
+    // 合并前两个最旧的图层
+    const oldestLayer = layers[0];
+    const secondOldestLayer = layers[1];
+    
+    // 将第二个图层的动作移动到第一个图层
+    secondOldestLayer.actionIds.forEach(actionId => {
+      this.actionLayerMap.set(actionId, oldestLayer.id);
+      oldestLayer.actionIds.push(actionId);
+      oldestLayer.actionIdsSet.add(actionId);
+    });
+    
+    // 删除第二个图层
+    this.virtualLayers.delete(secondOldestLayer.id);
+    
+    // 更新第一个图层的修改时间
+    oldestLayer.modified = Date.now();
+    
+    logger.debug(`合并图层: ${secondOldestLayer.name} -> ${oldestLayer.name}`);
   }
 
   /**
@@ -440,7 +836,7 @@ export class VirtualLayerManager {
   }
 
   /**
-   * 获取虚拟图层统计信息（优化版本）
+   * 获取虚拟图层统计信息
    */
   public getVirtualLayerStats(): {
     totalLayers: number;
@@ -448,11 +844,9 @@ export class VirtualLayerManager {
     lockedLayers: number;
     totalActions: number;
   } {
-    // 优化：智能缓存策略，根据内存压力调整缓存时间
     const now = Date.now();
-    const cacheTime = this.getCacheExpirationTime();
     
-    if (this.statsCache && (now - this.statsCache.lastUpdate) < cacheTime) {
+    if (this.statsCache && (now - this.statsCache.lastUpdate) < 2000) {
       return {
         totalLayers: this.statsCache.totalLayers,
         visibleLayers: this.statsCache.visibleLayers,
@@ -490,13 +884,12 @@ export class VirtualLayerManager {
   }
 
   /**
-   * 获取所有可见动作ID（性能优化版本）
+   * 获取所有可见动作ID
    */
   public getVisibleActionIds(): string[] {
     const now = Date.now();
-    const cacheTime = this.getCacheExpirationTime();
     
-    if (this.visibleActionIdsCache && (now - this.visibleActionIdsCacheTime) < cacheTime) {
+    if (this.visibleActionIdsCache && (now - this.visibleActionIdsCacheTime) < 2000) {
       return [...this.visibleActionIdsCache];
     }
 
@@ -516,120 +909,11 @@ export class VirtualLayerManager {
   }
 
   /**
-   * 批量操作支持（新增优化方法）
-   */
-  public startBatchOperation(): void {
-    this.batchMode = true;
-    this.pendingOperations = [];
-  }
-
-  public endBatchOperation(): void {
-    this.batchMode = false;
-    
-    // 执行所有待处理的操作
-    for (const operation of this.pendingOperations) {
-      operation();
-    }
-    this.pendingOperations = [];
-    
-    // 失效缓存
-    this.invalidateCache();
-  }
-
-  /**
-   * 批量操作内部方法
-   */
-  private batchOperation(operation: () => void): void {
-    if (this.batchMode) {
-      this.pendingOperations.push(operation);
-    } else {
-      operation();
-    }
-  }
-
-  /**
-   * 智能缓存过期时间（新增优化方法）
-   */
-  private getCacheExpirationTime(): number {
-    // 根据内存压力调整缓存时间
-    if (typeof performance !== 'undefined' && 'memory' in performance) {
-      const memory = (performance as Performance & { memory: { usedJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
-      const memoryPressure = memory.usedJSHeapSize / memory.jsHeapSizeLimit;
-      
-      // 内存压力大时，减少缓存时间
-      if (memoryPressure > 0.8) {
-        return 500; // 500ms
-      } else if (memoryPressure > 0.6) {
-        return 1000; // 1s
-      }
-    }
-    
-    return this.cacheExpirationTime;
-  }
-
-  /**
    * 失效缓存
    */
   private invalidateCache(): void {
     this.statsCache = null;
     this.visibleActionIdsCache = null;
-  }
-
-  /**
-   * 异步清理调度（优化版本）
-   */
-  private scheduleCleanup(): void {
-    if (!this.enableAsyncCleanup) {
-      this.performCleanup();
-      return;
-    }
-
-    // 使用requestIdleCallback或setTimeout进行异步清理
-    if (typeof requestIdleCallback !== 'undefined') {
-      requestIdleCallback(() => this.performCleanup(), { timeout: 1000 });
-    } else {
-      setTimeout(() => this.performCleanup(), 0);
-    }
-  }
-
-  /**
-   * 执行清理操作（优化版本）
-   */
-  private performCleanup(): void {
-    // 清理过大的图层
-    for (const layer of this.virtualLayers.values()) {
-      if (layer.actionIds.length > this.maxActionsPerLayer) {
-        // 保留最新的动作，删除旧的
-        const excessCount = layer.actionIds.length - this.maxActionsPerLayer;
-        const removedIds = layer.actionIds.splice(0, excessCount);
-        
-        // 同步更新Set
-        for (const id of removedIds) {
-          layer.actionIdsSet.delete(id);
-        }
-        
-        layer.modified = Date.now();
-        logger.debug(`清理图层 ${layer.name}，删除了 ${excessCount} 个旧动作`);
-      }
-    }
-
-    // 清理孤立的动作映射（动作已不存在但映射还在）
-    const validActionIds = new Set<string>();
-    for (const layer of this.virtualLayers.values()) {
-      layer.actionIds.forEach(id => validActionIds.add(id));
-    }
-
-    let cleanedCount = 0;
-    for (const [actionId] of this.actionLayerMap) {
-      if (!validActionIds.has(actionId)) {
-        this.actionLayerMap.delete(actionId);
-        cleanedCount++;
-      }
-    }
-
-    if (cleanedCount > 0) {
-      logger.debug(`清理了 ${cleanedCount} 个孤立的动作映射`);
-    }
   }
 
   /**
@@ -647,21 +931,433 @@ export class VirtualLayerManager {
   }
 
   /**
-   * 销毁虚拟图层管理器
+   * 获取当前虚拟图层模式
    */
-  public destroy(): void {
-    // 清理批量操作
-    if (this.batchTimeoutId) {
-      clearTimeout(this.batchTimeoutId);
-      this.batchTimeoutId = null;
+  public getMode(): VirtualLayerMode {
+    return this.mode;
+  }
+
+  /**
+   * 设置虚拟图层模式
+   */
+  public setMode(mode: VirtualLayerMode): void {
+    if (this.mode === mode) return;
+    
+    logger.info(`切换虚拟图层模式: ${this.mode} -> ${mode}`);
+    
+    if (mode === 'individual') {
+      this.convertToIndividualMode();
+    } else {
+      this.convertToGroupedMode();
     }
     
+    this.mode = mode;
+    this.invalidateCache();
+  }
+
+  /**
+   * 转换为独立模式：将分组图层拆分为独立图层
+   */
+  private convertToIndividualMode(): void {
+    // 获取所有动作ID
+    const allActionIds = Array.from(this.actionLayerMap.keys());
+    
+    // 清空现有虚拟图层和缓存
+    this.clearAllLayerCaches();
     this.virtualLayers.clear();
     this.actionLayerMap.clear();
-    this.activeLayerId = '';
-    this.pendingOperations = [];
-    this.batchMode = false;
     
-    logger.debug('虚拟图层管理器已销毁');
+    // 为每个动作创建独立虚拟图层
+    for (const actionId of allActionIds) {
+      // 这里需要从外部获取动作数据来创建图层
+      // 实际实现中需要从HistoryManager获取DrawAction
+      const layer: VirtualLayer = {
+        id: `layer_${actionId}`,
+        name: `动作_${actionId.slice(0, 8)}`,
+        visible: true,
+        opacity: 1.0,
+        locked: false,
+        created: Date.now(),
+        modified: Date.now(),
+        actionIds: [actionId],
+        actionIdsSet: new Set([actionId]),
+        zIndex: this.nextZIndex++,
+        cacheDirty: true,
+        cacheWidth: this.canvasWidth,
+        cacheHeight: this.canvasHeight
+      };
+      
+      this.virtualLayers.set(layer.id, layer);
+      this.actionLayerMap.set(actionId, layer.id);
+    }
+    
+    // 设置第一个图层为活动图层
+    const firstLayer = this.virtualLayers.values().next().value;
+    if (firstLayer) {
+      this.activeLayerId = firstLayer.id;
+    }
+    
+    logger.info(`已转换为独立模式，创建了 ${this.virtualLayers.size} 个独立图层`);
   }
+
+  /**
+   * 转换为分组模式：将独立图层合并为分组图层
+   */
+  private convertToGroupedMode(): void {
+    // 获取所有动作ID
+    const allActionIds = Array.from(this.actionLayerMap.keys());
+    
+    // 清空现有虚拟图层
+    this.virtualLayers.clear();
+    this.actionLayerMap.clear();
+    
+    // 创建默认图层
+    const defaultLayer = this.createVirtualLayer('默认图层');
+    this.activeLayerId = defaultLayer.id;
+    
+    // 将所有动作分配到默认图层
+    for (const actionId of allActionIds) {
+      this.assignActionToLayer(actionId, defaultLayer.id);
+    }
+    
+    logger.info(`已转换为分组模式，所有动作分配到默认图层`);
+  }
+
+  /**
+   * 获取虚拟图层配置
+   */
+  public getConfig(): VirtualLayerConfig {
+    return {
+      mode: this.mode,
+      maxLayers: this.maxLayers,
+      defaultLayerName: this.defaultLayerName,
+      maxActionsPerLayer: this.maxActionsPerLayer,
+      timeThreshold: this.timeThreshold,
+      createLayerOnToolChange: this.createLayerOnToolChange
+    };
+  }
+
+  /**
+   * 更新虚拟图层配置
+   */
+  public updateConfig(config: Partial<VirtualLayerConfig>): void {
+    if (config.mode !== undefined) {
+      this.setMode(config.mode);
+    }
+    if (config.maxLayers !== undefined) {
+      this.maxLayers = config.maxLayers;
+    }
+    if (config.defaultLayerName !== undefined) {
+      this.defaultLayerName = config.defaultLayerName;
+    }
+    if (config.maxActionsPerLayer !== undefined) {
+      this.maxActionsPerLayer = config.maxActionsPerLayer;
+    }
+    if (config.timeThreshold !== undefined) {
+      this.timeThreshold = config.timeThreshold;
+    }
+    if (config.createLayerOnToolChange !== undefined) {
+      this.createLayerOnToolChange = config.createLayerOnToolChange;
+    }
+    
+    logger.info('虚拟图层配置已更新');
+  }
+
+  // ============================================
+  // 缓存管理方法
+  // ============================================
+
+  /**
+   * 设置Canvas尺寸（用于创建缓存Canvas）
+   */
+  public setCanvasSize(width: number, height: number): void {
+    if (this.canvasWidth === width && this.canvasHeight === height) {
+      return; // 尺寸未变化，无需更新
+    }
+
+    this.canvasWidth = width;
+    this.canvasHeight = height;
+
+    // 更新所有图层的缓存尺寸并标记为过期
+    for (const layer of this.virtualLayers.values()) {
+      layer.cacheWidth = width;
+      layer.cacheHeight = height;
+      layer.cacheDirty = true;
+      
+      // 如果缓存Canvas存在但尺寸不匹配，清理它
+      if (layer.cacheCanvas && 
+          (layer.cacheCanvas.width !== width || layer.cacheCanvas.height !== height)) {
+        this.clearLayerCache(layer.id);
+      }
+    }
+
+    logger.debug('Canvas尺寸已更新:', { width, height });
+  }
+
+  /**
+   * 创建或更新图层缓存Canvas
+   */
+  public createLayerCache(layerId: string, width: number, height: number): HTMLCanvasElement | null {
+    const layer = this.getVirtualLayer(layerId);
+    if (!layer) return null;
+
+    // 如果缓存Canvas已存在且尺寸匹配，直接返回
+    if (layer.cacheCanvas && 
+        layer.cacheCanvas.width === width && 
+        layer.cacheCanvas.height === height &&
+        !layer.cacheDirty) {
+      return layer.cacheCanvas;
+    }
+
+    // 创建新的离屏Canvas
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    
+    if (!ctx) {
+      logger.error('无法创建图层缓存Canvas的上下文');
+      return null;
+    }
+
+    // 保存缓存
+    layer.cacheCanvas = canvas;
+    layer.cacheCtx = ctx;
+    layer.cacheWidth = width;
+    layer.cacheHeight = height;
+    layer.cacheDirty = true; // 标记为需要渲染
+
+    logger.debug('创建图层缓存Canvas:', layer.name, { width, height });
+    return canvas;
+  }
+
+  /**
+   * 获取图层缓存Canvas（如果不存在则创建）
+   */
+  public getLayerCache(layerId: string): HTMLCanvasElement | null {
+    const layer = this.getVirtualLayer(layerId);
+    if (!layer) return null;
+
+    if (!layer.cacheCanvas || layer.cacheDirty) {
+      // 如果缓存不存在或已过期，创建新的
+      return this.createLayerCache(layerId, layer.cacheWidth || this.canvasWidth, layer.cacheHeight || this.canvasHeight);
+    }
+
+    return layer.cacheCanvas;
+  }
+
+  /**
+   * 标记图层缓存为过期（需要重新渲染）
+   */
+  public markLayerCacheDirty(layerId: string): void {
+    const layer = this.getVirtualLayer(layerId);
+    if (layer) {
+      layer.cacheDirty = true;
+    this.invalidateCache();
+    }
+  }
+
+  /**
+   * 标记图层缓存为有效（已渲染完成）
+   */
+  public markLayerCacheValid(layerId: string): void {
+    const layer = this.getVirtualLayer(layerId);
+    if (layer) {
+      layer.cacheDirty = false;
+    }
+  }
+
+  /**
+   * 清理图层缓存
+   */
+  public clearLayerCache(layerId: string): void {
+    const layer = this.getVirtualLayer(layerId);
+    if (layer) {
+      if (layer.cacheCanvas) {
+        // 清理Canvas内容
+        const ctx = layer.cacheCtx;
+        if (ctx) {
+          ctx.clearRect(0, 0, layer.cacheCanvas.width, layer.cacheCanvas.height);
+        }
+      }
+      layer.cacheDirty = true;
+      logger.debug('清理图层缓存:', layer.name);
+    }
+  }
+
+  /**
+   * 清理所有图层缓存
+   */
+  public clearAllLayerCaches(): void {
+    for (const layer of this.virtualLayers.values()) {
+      this.clearLayerCache(layer.id);
+    }
+    logger.debug('清理所有图层缓存');
+  }
+
+  // ============================================
+  // 图层顺序管理方法
+  // ============================================
+
+  /**
+   * 调整图层顺序（移动到指定位置）
+   * @param layerId - 要移动的图层ID
+   * @param newIndex - 新的位置索引（0为最底层）
+   * @returns 是否成功
+   */
+  public reorderLayer(layerId: string, newIndex: number): boolean {
+    const layer = this.getVirtualLayer(layerId);
+    if (!layer) {
+      logger.warn('图层不存在:', layerId);
+      return false;
+    }
+
+    const allLayers = this.getAllVirtualLayers();
+    if (newIndex < 0 || newIndex >= allLayers.length) {
+      logger.warn('无效的图层索引:', newIndex);
+      return false;
+    }
+
+    // 获取目标位置的zIndex
+    const targetLayer = allLayers[newIndex];
+    if (!targetLayer) return false;
+
+    // 如果目标位置就是当前位置，无需移动
+    if (targetLayer.id === layerId) {
+      return true;
+    }
+
+    // 保存旧的动态图层信息（如果该图层是活动图层）
+    const wasActive = this.activeLayerId === layerId;
+    const oldZIndex = layer.zIndex;
+    const oldDynamicLayerId = wasActive ? `selection-${oldZIndex}` : null;
+
+    // 重新分配zIndex
+    // 策略：将目标位置及其之后的所有图层zIndex+1，然后将当前图层设置为目标zIndex
+    const targetZIndex = targetLayer.zIndex;
+    
+    // 如果向上移动（newIndex < currentIndex）
+    const currentIndex = allLayers.findIndex(l => l.id === layerId);
+    if (currentIndex < 0) return false;
+
+    if (newIndex < currentIndex) {
+      // 向上移动：将目标位置到当前位置之间的图层zIndex+1
+      for (let i = newIndex; i < currentIndex; i++) {
+        const affectedLayer = allLayers[i];
+        const oldZIndex = affectedLayer.zIndex;
+        affectedLayer.zIndex++;
+        // 如果受影响图层是活动图层，更新动态图层
+        if (this.activeLayerId === affectedLayer.id && this.canvasEngine) {
+          this.updateDynamicLayerForLayer(affectedLayer, oldZIndex);
+        }
+      }
+      layer.zIndex = targetZIndex;
+    } else {
+      // 向下移动：将当前位置到目标位置之间的图层zIndex-1
+      for (let i = currentIndex + 1; i <= newIndex; i++) {
+        const affectedLayer = allLayers[i];
+        const oldZIndex = affectedLayer.zIndex;
+        affectedLayer.zIndex--;
+        // 如果受影响图层是活动图层，更新动态图层
+        if (this.activeLayerId === affectedLayer.id && this.canvasEngine) {
+          this.updateDynamicLayerForLayer(affectedLayer, oldZIndex);
+        }
+      }
+      layer.zIndex = targetZIndex;
+    }
+
+    // 如果移动的图层是活动图层，更新动态图层和draw层拆分
+    if (wasActive && this.canvasEngine && oldDynamicLayerId) {
+      // 删除旧的动态图层
+      this.canvasEngine.removeDynamicLayer(oldDynamicLayerId);
+      // 创建新的动态图层
+      const newZIndex = layer.zIndex * 10 + 5;
+      const newDynamicLayerId = `selection-${layer.zIndex}`;
+      this.canvasEngine.createDynamicLayer(newDynamicLayerId, newZIndex);
+      logger.debug('更新活动图层的动态图层zIndex:', layer.name, 'newZIndex:', layer.zIndex);
+      
+      // 重新拆分draw层（因为选中图层的位置变化了）
+      const allLayers = this.getAllVirtualLayers();
+      const allLayerZIndices = allLayers.map(l => l.zIndex);
+      try {
+        this.canvasEngine.splitDrawLayer(layer.zIndex, allLayerZIndices);
+        logger.debug('重新拆分draw层:', layer.name, 'newZIndex:', layer.zIndex);
+      } catch (error) {
+        logger.error('重新拆分draw层失败:', error);
+        // 如果拆分失败，合并draw层以确保状态一致
+        this.canvasEngine.mergeDrawLayers();
+      }
+    }
+
+    // 标记缓存过期（因为顺序变化需要重绘）
+    this.markLayerCacheDirty(layerId);
+    this.invalidateCache();
+
+    logger.debug('图层顺序已调整:', layer.name, `位置: ${newIndex}`);
+    return true;
+  }
+
+  /**
+   * 更新图层的动态图层（用于图层顺序变化时）
+   * 注意：此方法在zIndex已经更新后调用，所以需要传入旧的zIndex
+   */
+  private updateDynamicLayerForLayer(layer: VirtualLayer, oldZIndex: number): void {
+    if (!this.canvasEngine) return;
+    
+    const oldDynamicLayerId = `selection-${oldZIndex}`;
+    const newZIndex = layer.zIndex * 10 + 5;
+    const newDynamicLayerId = `selection-${layer.zIndex}`;
+    
+    // 删除旧的动态图层
+    this.canvasEngine.removeDynamicLayer(oldDynamicLayerId);
+    
+    // 创建新的动态图层
+    this.canvasEngine.createDynamicLayer(newDynamicLayerId, newZIndex);
+    
+    logger.debug('更新图层的动态图层:', layer.name, 'oldZIndex:', oldZIndex, 'newZIndex:', layer.zIndex);
+  }
+
+  /**
+   * 将图层移到最上层
+   */
+  public moveLayerToTop(layerId: string): boolean {
+    const allLayers = this.getAllVirtualLayers();
+    const maxIndex = allLayers.length - 1;
+    return this.reorderLayer(layerId, maxIndex);
+  }
+
+  /**
+   * 将图层移到最下层
+   */
+  public moveLayerToBottom(layerId: string): boolean {
+    return this.reorderLayer(layerId, 0);
+  }
+
+  /**
+   * 将图层上移一层
+   */
+  public moveLayerUp(layerId: string): boolean {
+    const allLayers = this.getAllVirtualLayers();
+    const currentIndex = allLayers.findIndex(l => l.id === layerId);
+    if (currentIndex < 0 || currentIndex >= allLayers.length - 1) {
+      return false; // 已经在最上层
+    }
+    return this.reorderLayer(layerId, currentIndex + 1);
+  }
+
+  /**
+   * 将图层下移一层
+   */
+  public moveLayerDown(layerId: string): boolean {
+    const allLayers = this.getAllVirtualLayers();
+    const currentIndex = allLayers.findIndex(l => l.id === layerId);
+    if (currentIndex <= 0) {
+      return false; // 已经在最下层
+    }
+    return this.reorderLayer(layerId, currentIndex - 1);
+  }
+
+  /**
+   * 销毁虚拟图层管理器
+   */
 } 

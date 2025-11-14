@@ -82,14 +82,14 @@ export class ShortcutManager {
     
     // Mac用户提示
     if (this.isMac && e.ctrlKey && e.code === 'KeyZ' && !e.shiftKey) {
-      console.log('💡 Mac用户提示: 请使用 Cmd+Z 进行撤销操作');
+      logger.info('💡 Mac用户提示: 请使用 Cmd+Z 进行撤销操作');
       e.preventDefault();
       e.stopPropagation();
       return;
     }
     
     if (this.isMac && e.ctrlKey && e.code === 'KeyY') {
-      console.log('💡 Mac用户提示: 请使用 Cmd+Shift+Z 进行重做操作');
+      logger.info('💡 Mac用户提示: 请使用 Cmd+Shift+Z 进行重做操作');
       e.preventDefault();
       e.stopPropagation();
       return;

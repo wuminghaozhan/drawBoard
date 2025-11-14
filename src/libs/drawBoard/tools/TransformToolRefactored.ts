@@ -1,6 +1,6 @@
 import { DrawTool } from './DrawTool';
 import type { DrawAction } from './DrawTool';
-import type { Point } from '../core/CanvasEngine';
+import type { Point, CanvasEngine } from '../core/CanvasEngine';
 import { ControlPointGenerator } from './transform/ControlPointGenerator';
 import { 
   ControlPointType, 
@@ -39,6 +39,10 @@ export class TransformToolRefactored extends DrawTool {
   // 使用模块化组件
   private controlPointGenerator: ControlPointGenerator;
 
+  // 动态图层支持
+  private canvasEngine?: CanvasEngine;
+  private selectedLayerZIndex?: number | null;
+
   constructor() {
     super('变换', 'transform');
     
@@ -56,6 +60,35 @@ export class TransformToolRefactored extends DrawTool {
     });
     
     this.setupKeyboardListeners();
+  }
+
+  /**
+   * 设置CanvasEngine和选中图层zIndex（用于动态图层）
+   */
+  public setCanvasEngine(canvasEngine: CanvasEngine, selectedLayerZIndex?: number | null): void {
+    this.canvasEngine = canvasEngine;
+    this.selectedLayerZIndex = selectedLayerZIndex;
+  }
+
+  /**
+   * 获取用于绘制交互元素的Canvas上下文
+   * 如果选中图层存在，使用动态图层；否则使用interaction层
+   */
+  private getInteractionContext(): CanvasRenderingContext2D {
+    if (this.canvasEngine && this.selectedLayerZIndex !== null && this.selectedLayerZIndex !== undefined) {
+      try {
+        return this.canvasEngine.getSelectionLayerForVirtualLayer(this.selectedLayerZIndex);
+      } catch (error) {
+        // 回退到interaction层
+        return this.canvasEngine.getInteractionLayer();
+      }
+    }
+    
+    if (this.canvasEngine) {
+      return this.canvasEngine.getInteractionLayer();
+    }
+    
+    throw new Error('CanvasEngine未设置');
   }
 
   /**
@@ -286,11 +319,20 @@ export class TransformToolRefactored extends DrawTool {
   public draw(ctx: CanvasRenderingContext2D): void {
     if (!this.selectedAction) return;
 
+    // 获取交互层上下文（动态图层或interaction层）
+    let interactionCtx: CanvasRenderingContext2D;
+    try {
+      interactionCtx = this.getInteractionContext();
+    } catch {
+      // 如果无法获取交互层，使用传入的ctx（兼容性）
+      interactionCtx = ctx;
+    }
+
     // 绘制选择高亮
-    this.drawSelectionHighlight(ctx);
+    this.drawSelectionHighlight(interactionCtx);
     
     // 绘制控制点
-    this.drawControlPoints(ctx);
+    this.drawControlPoints(interactionCtx);
   }
 
   /**

@@ -36,6 +36,8 @@ const Navigation: React.FC = () => {
         { path: '/protocol', label: '📋 协议解析', description: 'EDB文件格式解析' },
         { path: '/edb', label: '📁 EDB演示', description: 'EDB文件处理演示' },
         { path: '/virtual-layer', label: '📄 虚拟图层', description: '虚拟图层管理演示' },
+        { path: '/virtual-layer-mode', label: '🎛️ 图层模式', description: '单图层/多图层模式切换' },
+        { path: '/functional', label: '🔧 函数式编程', description: '混合架构演示' },
       ]
     },
     {

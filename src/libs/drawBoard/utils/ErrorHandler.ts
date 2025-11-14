@@ -83,8 +83,8 @@ export class DrawBoardError extends Error {
     this.timestamp = Date.now();
     
     // 确保stack trace正确
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, DrawBoardError);
+    if ((Error as any).captureStackTrace) {
+      (Error as any).captureStackTrace(this, DrawBoardError);
     }
   }
 
@@ -370,7 +370,7 @@ export const DefaultRecoveryStrategies: ErrorRecoveryStrategy[] = [
   {
     code: DrawBoardErrorCode.TOOL_LOADING_FAILED,
     priority: 1,
-    recovery: async (error: DrawBoardError) => {
+    recovery: async (_error: DrawBoardError) => {
       logger.info('尝试使用基础工具作为恢复策略');
       // 这里可以尝试加载基础工具作为备选
       return true;
@@ -381,7 +381,7 @@ export const DefaultRecoveryStrategies: ErrorRecoveryStrategy[] = [
   {
     code: DrawBoardErrorCode.MEMORY_LIMIT_EXCEEDED,
     priority: 2,
-    recovery: async (error: DrawBoardError) => {
+    recovery: async (_error: DrawBoardError) => {
       logger.info('尝试清理缓存以恢复内存');
       // 这里可以触发缓存清理
       return true;
@@ -392,7 +392,7 @@ export const DefaultRecoveryStrategies: ErrorRecoveryStrategy[] = [
   {
     code: DrawBoardErrorCode.CANVAS_ERROR,
     priority: 3,
-    recovery: async (error: DrawBoardError) => {
+    recovery: async (_error: DrawBoardError) => {
       logger.info('尝试重新创建Canvas');
       // 这里可以尝试重新创建Canvas
       return true;

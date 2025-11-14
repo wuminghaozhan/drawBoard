@@ -3,6 +3,7 @@ import type { CanvasEngine } from '../core/CanvasEngine';
 import type { HistoryManager } from '../history/HistoryManager';
 import type { DrawAction } from '../tools/DrawTool';
 import type { VirtualLayerManager } from '../core/VirtualLayerManager';
+import type { VirtualLayer } from '../core/VirtualLayerManager';
 import type { DrawEvent } from '../events/EventManager';
 import type { Point } from '../core/CanvasEngine';
 import { logger } from '../utils/Logger';
@@ -45,10 +46,19 @@ export class DrawingHandler {
   // 重绘调度标志
   private redrawScheduled: boolean = false;
   private lastRedrawTime: number = 0;
+  
+  // 初始化draw层的锁（防止并发初始化）
+  private initializingDrawLayers: boolean = false;
 
   // 性能优化：缓存已绘制的动作
   private cachedActions: Set<string> = new Set();
   private lastCachedActionCount: number = 0;
+  
+  // 性能优化：离屏Canvas缓存（用于几何图形重绘）
+  private offscreenCanvas?: HTMLCanvasElement;
+  private offscreenCtx?: CanvasRenderingContext2D;
+  private offscreenCacheDirty: boolean = true;
+  private readonly OFFSCREEN_CACHE_THRESHOLD = 100; // 历史动作超过100个时使用离屏缓存
 
   constructor(
     canvasEngine: CanvasEngine,
@@ -79,12 +89,32 @@ export class DrawingHandler {
   }
 
   /**
+   * 标记离屏缓存过期（当历史动作发生变化时调用）
+   */
+  public invalidateOffscreenCache(): void {
+    this.offscreenCacheDirty = true;
+    logger.debug('离屏缓存已标记为过期');
+  }
+
+  /**
    * 处理绘制开始事件
    */
   public async handleDrawStart(event: DrawEvent): Promise<void> {
     try {
+      // 选择工具不通过DrawingHandler处理，直接返回
+      if (this.toolManager.getCurrentTool() === 'select') {
+        logger.debug('选择工具跳过DrawingHandler处理');
+        return;
+      }
+
       if (this.isDrawing) {
         logger.warn('绘制已在进行中，忽略新的绘制开始事件');
+        return;
+      }
+      
+      // 检查事件有效性
+      if (!event || !event.point) {
+        logger.warn('DrawingHandler: 无效的绘制开始事件', event);
         return;
       }
 
@@ -108,7 +138,12 @@ export class DrawingHandler {
       this.onStateChange();
     } catch (error) {
       logger.error('绘制开始事件处理失败', error);
+      // 尝试恢复状态
+      this.isDrawing = false;
+      this.currentAction = null;
       this.handleError(error);
+      // 重新抛出，让上层知道处理失败
+      throw error;
     }
   }
 
@@ -172,6 +207,9 @@ export class DrawingHandler {
       
       // 将当前动作添加到缓存
       this.cachedActions.add(this.currentAction.id);
+      
+      // 标记离屏缓存过期（新动作已添加到历史记录）
+      this.offscreenCacheDirty = true;
       
       logger.debug('结束绘制', {
         actionId: this.currentAction.id,
@@ -294,6 +332,7 @@ export class DrawingHandler {
     } catch (error) {
       logger.error('增量重绘失败', error);
       // 增量重绘失败时，回退到全量重绘
+      this.offscreenCacheDirty = true; // 标记缓存过期
       this.scheduleFullRedraw();
     }
   }
@@ -313,37 +352,113 @@ export class DrawingHandler {
 
   /**
    * 执行几何图形重绘（重绘历史动作 + 当前动作）
+   * 性能优化：如果历史动作很多，使用离屏Canvas缓存
    */
   private async performGeometricRedraw(ctx: CanvasRenderingContext2D): Promise<void> {
     try {
-      // 清空画布
-      ctx.clearRect(0, 0, this.canvasEngine.getCanvas().width, this.canvasEngine.getCanvas().height);
-      
-      // 获取所有历史动作
       const allActions = this.historyManager.getAllActions();
+      const historyCount = allActions.length;
+      const canvas = this.canvasEngine.getCanvas();
+      const canvasWidth = canvas.width;
+      const canvasHeight = canvas.height;
       
-      // 按虚拟图层分组绘制历史动作
-      if (this.virtualLayerManager) {
-        await this.drawActionsByVirtualLayers(ctx, allActions);
-      } else {
-        // 兼容模式：直接绘制所有历史动作
-        for (const action of allActions) {
-          await this.drawAction(ctx, action);
+      // 如果历史动作很多，使用离屏Canvas缓存优化性能
+      if (historyCount > this.OFFSCREEN_CACHE_THRESHOLD && this.config.enableGeometricOptimization) {
+        // 初始化离屏Canvas
+        if (!this.offscreenCanvas || this.offscreenCacheDirty) {
+          this.initializeOffscreenCanvas(canvasWidth, canvasHeight);
         }
-      }
+        
+        // 如果缓存过期，重新绘制历史动作到离屏Canvas
+        if (this.offscreenCacheDirty) {
+          await this.drawAllHistoryActionsToOffscreen();
+          this.offscreenCacheDirty = false;
+        }
+        
+        // 清空主画布
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        
+        // 将离屏Canvas绘制到主Canvas
+        ctx.drawImage(this.offscreenCanvas!, 0, 0);
+        
+        // 绘制当前动作到主Canvas
+        if (this.currentAction && this.currentAction.points.length > 0) {
+          await this.drawAction(ctx, this.currentAction);
+        }
+        
+        logger.debug('几何图形重绘完成（使用离屏缓存）', {
+          historyActions: historyCount,
+          currentAction: this.currentAction?.id,
+          offscreenCacheUsed: true
+        });
+      } else {
+        // 历史动作较少，直接绘制（原有逻辑）
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        
+        // 按虚拟图层分组绘制历史动作
+        if (this.virtualLayerManager) {
+          await this.drawActionsByVirtualLayers(ctx, allActions);
+        } else {
+          // 兼容模式：直接绘制所有历史动作
+          for (const action of allActions) {
+            await this.drawAction(ctx, action);
+          }
+        }
 
-      // 绘制当前动作
-      if (this.currentAction && this.currentAction.points.length > 0) {
-        await this.drawAction(ctx, this.currentAction);
+        // 绘制当前动作
+        if (this.currentAction && this.currentAction.points.length > 0) {
+          await this.drawAction(ctx, this.currentAction);
+        }
+        
+        logger.debug('几何图形重绘完成', {
+          historyActions: historyCount,
+          currentAction: this.currentAction?.id,
+          offscreenCacheUsed: false
+        });
       }
-      
-      logger.debug('几何图形重绘完成', {
-        historyActions: allActions.length,
-        currentAction: this.currentAction?.id
-      });
     } catch (error) {
       logger.error('几何图形重绘失败', error);
       throw error;
+    }
+  }
+
+  /**
+   * 初始化离屏Canvas
+   */
+  private initializeOffscreenCanvas(width: number, height: number): void {
+    if (!this.offscreenCanvas) {
+      this.offscreenCanvas = document.createElement('canvas');
+      this.offscreenCtx = this.offscreenCanvas.getContext('2d')!;
+    }
+    
+    // 如果尺寸变化，更新离屏Canvas尺寸
+    if (this.offscreenCanvas.width !== width || this.offscreenCanvas.height !== height) {
+      this.offscreenCanvas.width = width;
+      this.offscreenCanvas.height = height;
+      this.offscreenCacheDirty = true; // 尺寸变化，需要重新绘制
+    }
+  }
+
+  /**
+   * 将所有历史动作绘制到离屏Canvas
+   */
+  private async drawAllHistoryActionsToOffscreen(): Promise<void> {
+    if (!this.offscreenCtx) return;
+    
+    const allActions = this.historyManager.getAllActions();
+    const canvas = this.offscreenCanvas!;
+    
+    // 清空离屏Canvas
+    this.offscreenCtx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // 按虚拟图层分组绘制历史动作
+    if (this.virtualLayerManager) {
+      await this.drawActionsByVirtualLayers(this.offscreenCtx, allActions);
+    } else {
+      // 兼容模式：直接绘制所有历史动作
+      for (const action of allActions) {
+        await this.drawAction(this.offscreenCtx, action);
+      }
     }
   }
 
@@ -361,9 +476,185 @@ export class DrawingHandler {
   }
 
   /**
-   * 重绘Canvas（全量重绘）
+   * 重绘Canvas（全量重绘或只重绘选中图层）
    */
   private async redrawCanvas(): Promise<void> {
+    try {
+      // 检查draw层是否已拆分
+      if (this.canvasEngine.isDrawLayerSplit() && this.virtualLayerManager) {
+        const selectedLayerZIndex = this.canvasEngine.getSelectedLayerZIndex();
+        if (selectedLayerZIndex !== null) {
+          // 检查是否需要初始化bottom和top层（只在首次拆分时初始化）
+          if (!this.canvasEngine.isDrawLayersInitialized()) {
+            // 防止并发初始化：如果正在初始化，等待完成
+            if (this.initializingDrawLayers) {
+              // 等待初始化完成（最多等待1秒）
+              const maxWait = 1000;
+              const startTime = Date.now();
+              while (this.initializingDrawLayers && (Date.now() - startTime) < maxWait) {
+                await new Promise(resolve => setTimeout(resolve, 10));
+              }
+              // 如果超时或初始化失败，回退到全量重绘
+              if (!this.canvasEngine.isDrawLayersInitialized()) {
+                logger.warn('等待初始化超时或失败，回退到全量重绘');
+                await this.redrawCanvasFull();
+                return;
+              }
+            } else {
+              // 开始初始化
+              this.initializingDrawLayers = true;
+              try {
+                // 拆分draw层时，需要初始化绘制bottom和top层（如果存在）
+                await this.initializeSplitDrawLayers(selectedLayerZIndex);
+                // 标记已初始化
+                this.canvasEngine.markDrawLayersInitialized();
+              } catch (error) {
+                logger.error('初始化draw层失败', error);
+                // 初始化失败，合并draw层并回退到全量重绘
+                this.canvasEngine.mergeDrawLayers();
+                await this.redrawCanvasFull();
+                return;
+              } finally {
+                this.initializingDrawLayers = false;
+              }
+            }
+          }
+          
+          // 只重绘选中图层
+          await this.redrawSelectedLayerOnly(selectedLayerZIndex);
+          return;
+        }
+      }
+
+      // 未拆分或无法获取选中图层，使用全量重绘
+      await this.redrawCanvasFull();
+    } catch (error) {
+      logger.error('重绘Canvas失败', error);
+      this.handleError(error);
+    }
+  }
+  
+  /**
+   * 初始化拆分后的draw层（绘制bottom和top层的内容）
+   * @param selectedLayerZIndex 选中图层的zIndex
+   */
+  private async initializeSplitDrawLayers(selectedLayerZIndex: number): Promise<void> {
+    if (!this.virtualLayerManager) return;
+    
+    const allLayers = this.virtualLayerManager.getAllVirtualLayers();
+    const allActions = this.historyManager.getAllActions();
+    
+    // 创建动作ID到动作的映射
+    const actionMap = new Map<string, DrawAction>();
+    for (const action of allActions) {
+      actionMap.set(action.id, action);
+    }
+    
+    // 绘制bottom层（如果有）
+    const bottomCtx = this.canvasEngine.getBottomLayersDrawContext();
+    if (bottomCtx) {
+      // 标记正在使用
+      this.canvasEngine.markDrawLayerInUse('draw-bottom');
+      try {
+        const bottomLayers = allLayers.filter(l => l.zIndex < selectedLayerZIndex);
+        bottomCtx.clearRect(0, 0, bottomCtx.canvas.width, bottomCtx.canvas.height);
+      
+      for (const layer of bottomLayers) {
+        // 边界检查：图层可能在使用过程中被删除
+        if (!layer || !layer.visible || layer.locked) continue;
+        
+        // 验证图层是否仍然存在（防止在绘制过程中被删除）
+        if (this.virtualLayerManager && !this.virtualLayerManager.getVirtualLayer(layer.id)) {
+          logger.warn(`图层在绘制过程中被删除，跳过: ${layer.id}`);
+          continue;
+        }
+        
+        const originalGlobalAlpha = bottomCtx.globalAlpha;
+        bottomCtx.globalAlpha = layer.opacity;
+        
+        // 使用缓存渲染
+        const cacheCanvas = this.virtualLayerManager?.getLayerCache(layer.id);
+        if (cacheCanvas && !layer.cacheDirty) {
+          bottomCtx.drawImage(cacheCanvas, 0, 0);
+        } else {
+          // 重新渲染到缓存
+          const layerCache = this.virtualLayerManager?.getLayerCache(layer.id);
+          if (layerCache && layer.cacheCtx) {
+            layer.cacheCtx.clearRect(0, 0, layerCache.width, layerCache.height);
+            for (const actionId of layer.actionIds) {
+              const action = actionMap.get(actionId);
+              if (action) {
+                await this.drawAction(layer.cacheCtx, action);
+              }
+            }
+            this.virtualLayerManager?.markLayerCacheValid(layer.id);
+            bottomCtx.drawImage(layerCache, 0, 0);
+          }
+        }
+        
+        bottomCtx.globalAlpha = originalGlobalAlpha;
+      }
+      } finally {
+        // 取消标记
+        this.canvasEngine.unmarkDrawLayerInUse('draw-bottom');
+      }
+    }
+    
+    // 绘制top层（如果有）
+    const topCtx = this.canvasEngine.getTopLayersDrawContext();
+    if (topCtx) {
+      // 标记正在使用
+      this.canvasEngine.markDrawLayerInUse('draw-top');
+      try {
+        const topLayers = allLayers.filter(l => l.zIndex > selectedLayerZIndex);
+        topCtx.clearRect(0, 0, topCtx.canvas.width, topCtx.canvas.height);
+      
+      for (const layer of topLayers) {
+        // 边界检查：图层可能在使用过程中被删除
+        if (!layer || !layer.visible || layer.locked) continue;
+        
+        // 验证图层是否仍然存在（防止在绘制过程中被删除）
+        if (this.virtualLayerManager && !this.virtualLayerManager.getVirtualLayer(layer.id)) {
+          logger.warn(`图层在绘制过程中被删除，跳过: ${layer.id}`);
+          continue;
+        }
+        
+        const originalGlobalAlpha = topCtx.globalAlpha;
+        topCtx.globalAlpha = layer.opacity;
+        
+        // 使用缓存渲染
+        const cacheCanvas = this.virtualLayerManager?.getLayerCache(layer.id);
+        if (cacheCanvas && !layer.cacheDirty) {
+          topCtx.drawImage(cacheCanvas, 0, 0);
+        } else {
+          // 重新渲染到缓存
+          const layerCache = this.virtualLayerManager?.getLayerCache(layer.id);
+          if (layerCache && layer.cacheCtx) {
+            layer.cacheCtx.clearRect(0, 0, layerCache.width, layerCache.height);
+            for (const actionId of layer.actionIds) {
+              const action = actionMap.get(actionId);
+              if (action) {
+                await this.drawAction(layer.cacheCtx, action);
+              }
+            }
+            this.virtualLayerManager?.markLayerCacheValid(layer.id);
+            topCtx.drawImage(layerCache, 0, 0);
+          }
+        }
+        
+        topCtx.globalAlpha = originalGlobalAlpha;
+      }
+      } finally {
+        // 取消标记
+        this.canvasEngine.unmarkDrawLayerInUse('draw-top');
+      }
+    }
+  }
+
+  /**
+   * 全量重绘Canvas（所有图层）
+   */
+  private async redrawCanvasFull(): Promise<void> {
     try {
       const canvas = this.canvasEngine.getCanvas();
       const ctx = canvas.getContext('2d');
@@ -381,6 +672,8 @@ export class DrawingHandler {
       if (allActions.length !== this.lastCachedActionCount) {
         this.updateActionCache(allActions);
         this.lastCachedActionCount = allActions.length;
+        // 历史动作数量变化，标记离屏缓存过期
+        this.offscreenCacheDirty = true;
       }
       
       // 按虚拟图层分组绘制
@@ -398,6 +691,11 @@ export class DrawingHandler {
         await this.drawAction(ctx, this.currentAction);
       }
 
+      // 如果是选择工具，绘制选择框和锚点
+      if (this.toolManager.getCurrentTool() === 'select') {
+        await this.drawSelectToolUI();
+      }
+
       logger.debug('全量重绘完成', {
         totalActions: allActions.length,
         currentAction: this.currentAction?.id
@@ -405,6 +703,356 @@ export class DrawingHandler {
     } catch (error) {
       logger.error('全量重绘失败', error);
       this.handleError(error);
+    }
+  }
+
+  /**
+   * 在指定上下文中重绘图层列表（公共逻辑）
+   * @param ctx Canvas上下文（可能为null）
+   * @param layers 要绘制的图层列表
+   * @param allActions 所有动作
+   * @param layerType 图层类型（用于日志）
+   */
+  private async redrawLayersInContext(
+    ctx: CanvasRenderingContext2D | null,
+    layers: VirtualLayer[],
+    allActions: DrawAction[],
+    layerType: 'bottom' | 'top'
+  ): Promise<void> {
+    if (!ctx) {
+      // 如果没有上下文，说明不需要重绘
+      return;
+    }
+
+    if (!this.virtualLayerManager) {
+      await this.redrawCanvasFull();
+      return;
+    }
+
+    // 标记draw层正在使用
+    const layerId = layerType === 'bottom' ? 'draw-bottom' : 'draw-top';
+    this.canvasEngine.markDrawLayerInUse(layerId);
+    
+    try {
+
+    // 创建动作ID到动作的映射
+    const actionMap = new Map<string, DrawAction>();
+    for (const action of allActions) {
+      actionMap.set(action.id, action);
+    }
+
+    // 清空层
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    // 绘制所有图层
+    for (const layer of layers) {
+      // 边界检查：图层可能在使用过程中被删除
+      if (!layer || !layer.visible || layer.locked) continue;
+
+      // 验证图层是否仍然存在（防止在绘制过程中被删除）
+      if (this.virtualLayerManager && !this.virtualLayerManager.getVirtualLayer(layer.id)) {
+        logger.warn(`图层在绘制过程中被删除，跳过: ${layer.id}`);
+        continue;
+      }
+
+      const originalGlobalAlpha = ctx.globalAlpha;
+      ctx.globalAlpha = layer.opacity;
+
+      // 使用缓存渲染
+      const cacheCanvas = this.virtualLayerManager?.getLayerCache(layer.id);
+      if (cacheCanvas && !layer.cacheDirty) {
+        ctx.drawImage(cacheCanvas, 0, 0);
+      } else {
+        // 重新渲染到缓存
+        const layerCache = this.virtualLayerManager?.getLayerCache(layer.id);
+        if (layerCache && layer.cacheCtx) {
+          layer.cacheCtx.clearRect(0, 0, layerCache.width, layerCache.height);
+          for (const actionId of layer.actionIds) {
+            const action = actionMap.get(actionId);
+            if (action) {
+              await this.drawAction(layer.cacheCtx, action);
+            }
+          }
+          this.virtualLayerManager?.markLayerCacheValid(layer.id);
+          ctx.drawImage(layerCache, 0, 0);
+        }
+      }
+
+      ctx.globalAlpha = originalGlobalAlpha;
+    }
+
+    logger.debug(`重绘${layerType}层完成`, { layerCount: layers.length });
+    } finally {
+      // 取消标记
+      this.canvasEngine.unmarkDrawLayerInUse(layerId);
+    }
+  }
+
+  /**
+   * 重绘bottom层（下层图层）
+   * @param selectedLayerZIndex 选中图层的zIndex（用于确定哪些图层属于bottom层）
+   */
+  public async redrawBottomLayers(selectedLayerZIndex: number): Promise<void> {
+    if (!this.virtualLayerManager) {
+      await this.redrawCanvasFull();
+      return;
+    }
+
+    try {
+      const allLayers = this.virtualLayerManager.getAllVirtualLayers();
+      const bottomLayers = allLayers.filter(l => l.zIndex < selectedLayerZIndex);
+      const allActions = this.historyManager.getAllActions();
+      const bottomCtx = this.canvasEngine.getBottomLayersDrawContext();
+
+      await this.redrawLayersInContext(bottomCtx, bottomLayers, allActions, 'bottom');
+    } catch (error) {
+      logger.error('重绘bottom层失败', error);
+      await this.redrawCanvasFull();
+    }
+  }
+
+  /**
+   * 重绘top层（上层图层）
+   * @param selectedLayerZIndex 选中图层的zIndex（用于确定哪些图层属于top层）
+   */
+  public async redrawTopLayers(selectedLayerZIndex: number): Promise<void> {
+    if (!this.virtualLayerManager) {
+      await this.redrawCanvasFull();
+      return;
+    }
+
+    try {
+      const allLayers = this.virtualLayerManager.getAllVirtualLayers();
+      const topLayers = allLayers.filter(l => l.zIndex > selectedLayerZIndex);
+      const allActions = this.historyManager.getAllActions();
+      const topCtx = this.canvasEngine.getTopLayersDrawContext();
+
+      await this.redrawLayersInContext(topCtx, topLayers, allActions, 'top');
+    } catch (error) {
+      logger.error('重绘top层失败', error);
+      await this.redrawCanvasFull();
+    }
+  }
+
+  /**
+   * 只重绘选中的图层（性能优化）
+   * @param selectedLayerZIndex 选中图层的zIndex
+   */
+  private async redrawSelectedLayerOnly(selectedLayerZIndex: number): Promise<void> {
+    if (!this.virtualLayerManager) {
+      // 没有虚拟图层管理器，回退到全量重绘
+      await this.redrawCanvasFull();
+      return;
+    }
+
+    try {
+      // 获取选中图层的draw层上下文
+      const selectedCtx = this.canvasEngine.getSelectedLayerDrawContext();
+      if (!selectedCtx) {
+        // 如果没有动态draw层，回退到全量重绘
+        logger.warn('无法获取选中图层的draw层上下文，回退到全量重绘');
+        await this.redrawCanvasFull();
+        return;
+      }
+
+      // 标记draw层正在使用
+      this.canvasEngine.markDrawLayerInUse('draw-selected');
+      
+      try {
+        // 获取选中图层
+      const allLayers = this.virtualLayerManager.getAllVirtualLayers();
+      const selectedLayer = allLayers.find(layer => layer.zIndex === selectedLayerZIndex);
+      
+      if (!selectedLayer) {
+        logger.warn('未找到选中图层，可能已被删除，回退到全量重绘', {
+          selectedLayerZIndex,
+          availableLayers: allLayers.map(l => ({ id: l.id, zIndex: l.zIndex }))
+        });
+        // 如果选中图层不存在，可能需要合并draw层
+        if (this.canvasEngine.isDrawLayerSplit()) {
+          this.canvasEngine.mergeDrawLayers();
+        }
+        await this.redrawCanvasFull();
+        return;
+      }
+      
+      // 验证图层是否仍然存在（防止在绘制过程中被删除）
+      if (!this.virtualLayerManager.getVirtualLayer(selectedLayer.id)) {
+        logger.warn('选中图层在绘制过程中被删除，回退到全量重绘', {
+          layerId: selectedLayer.id,
+          zIndex: selectedLayerZIndex
+        });
+        await this.redrawCanvasFull();
+        return;
+      }
+
+      // 清空选中图层的draw层
+      const canvas = selectedCtx.canvas;
+      selectedCtx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 只绘制选中图层的内容
+      const actionMap = new Map<string, DrawAction>();
+      const allActions = this.historyManager.getAllActions();
+      for (const action of allActions) {
+        if (action.virtualLayerId === selectedLayer.id) {
+          actionMap.set(action.id, action);
+        }
+      }
+
+      // 设置图层透明度
+      const originalGlobalAlpha = selectedCtx.globalAlpha;
+      selectedCtx.globalAlpha = selectedLayer.opacity;
+
+      // 使用缓存渲染
+      const cacheCanvas = this.virtualLayerManager.getLayerCache(selectedLayer.id);
+      
+      if (cacheCanvas && !selectedLayer.cacheDirty) {
+        // 缓存有效，直接使用缓存
+        selectedCtx.drawImage(cacheCanvas, 0, 0);
+      } else {
+        // 缓存无效或不存在，需要重新渲染
+        const layerCache = this.virtualLayerManager.getLayerCache(selectedLayer.id);
+        if (layerCache) {
+          const cacheCtx = selectedLayer.cacheCtx;
+          if (cacheCtx) {
+            // 清空缓存Canvas
+            cacheCtx.clearRect(0, 0, layerCache.width, layerCache.height);
+            
+            // 在缓存Canvas上绘制该图层的所有动作
+            for (const actionId of selectedLayer.actionIds) {
+              const action = actionMap.get(actionId);
+              if (action) {
+                await this.drawAction(cacheCtx, action);
+              }
+            }
+            
+            // 标记缓存为有效
+            this.virtualLayerManager.markLayerCacheValid(selectedLayer.id);
+            
+            // 将缓存绘制到选中图层的draw层
+            selectedCtx.drawImage(layerCache, 0, 0);
+          }
+        } else {
+          // 如果无法创建缓存，回退到直接绘制
+          for (const actionId of selectedLayer.actionIds) {
+            const action = actionMap.get(actionId);
+            if (action) {
+              await this.drawAction(selectedCtx, action);
+            }
+          }
+        }
+      }
+      
+      // 恢复透明度
+      selectedCtx.globalAlpha = originalGlobalAlpha;
+
+      // 绘制当前动作（如果属于选中图层）
+      if (this.currentAction && 
+          this.currentAction.virtualLayerId === selectedLayer.id &&
+          this.currentAction.points.length > 0) {
+        await this.drawAction(selectedCtx, this.currentAction);
+      }
+
+        logger.debug('只重绘选中图层完成', {
+          layerId: selectedLayer.id,
+          layerName: selectedLayer.name,
+          actionCount: selectedLayer.actionIds.length
+        });
+      } catch (error) {
+        logger.error('只重绘选中图层失败', error);
+        // 出错时回退到全量重绘
+        await this.redrawCanvasFull();
+      } finally {
+        // 取消标记
+        this.canvasEngine.unmarkDrawLayerInUse('draw-selected');
+      }
+    } catch (error) {
+      logger.error('重绘选中图层失败', error);
+      await this.redrawCanvasFull();
+    }
+  }
+
+  /**
+   * 绘制选择工具的UI（选择框、锚点等）
+   */
+  private async drawSelectToolUI(): Promise<void> {
+    try {
+      const currentTool = this.toolManager.getCurrentToolInstance();
+      if (!currentTool || currentTool.getActionType() !== 'select') {
+        return;
+      }
+
+      const selectTool = currentTool as unknown as {
+        getCurrentSelectionBounds: () => { x: number; y: number; width: number; height: number } | null;
+        getSelectedActions: () => DrawAction[];
+        isSelecting: boolean;
+        selectionStartPoint: Point | null;
+        draw: (ctx: CanvasRenderingContext2D, action: DrawAction) => void;
+      };
+
+      // 获取交互层上下文（使用动态图层或interaction层）
+      let interactionCtx: CanvasRenderingContext2D;
+      try {
+        // 尝试获取动态图层（如果选中了图层）
+        if (this.virtualLayerManager) {
+          const activeLayer = this.virtualLayerManager.getActiveVirtualLayer();
+          if (activeLayer && this.canvasEngine) {
+            interactionCtx = this.canvasEngine.getSelectionLayerForVirtualLayer(activeLayer.zIndex);
+          } else {
+            interactionCtx = this.canvasEngine.getInteractionLayer();
+          }
+        } else {
+          interactionCtx = this.canvasEngine.getInteractionLayer();
+        }
+      } catch {
+        interactionCtx = this.canvasEngine.getInteractionLayer();
+      }
+      
+      // 清空交互层
+      interactionCtx.clearRect(0, 0, interactionCtx.canvas.width, interactionCtx.canvas.height);
+
+      // 如果有选中的actions，绘制锚点（通过draw方法）
+      const selectedActions = selectTool.getSelectedActions();
+      if (selectedActions.length > 0) {
+        // 创建一个临时的SelectAction用于绘制锚点
+        const tempAction: DrawAction = {
+          id: 'temp-selection',
+          type: 'select',
+          points: [],
+          context: {
+            strokeStyle: '#000000',
+            lineWidth: 1,
+            fillStyle: '#000000'
+          },
+          timestamp: Date.now()
+        };
+        selectTool.draw(interactionCtx, tempAction as any);
+      }
+
+      // 如果正在框选，绘制选择框
+      if (selectTool.isSelecting && selectTool.selectionStartPoint) {
+        const bounds = selectTool.getCurrentSelectionBounds();
+        if (bounds && bounds.width > 5 && bounds.height > 5) {
+          // 创建一个临时的SelectAction用于绘制选择框
+          const tempAction: DrawAction = {
+            id: 'temp-selection-box',
+            type: 'select',
+            points: [
+              { x: bounds.x, y: bounds.y },
+              { x: bounds.x + bounds.width, y: bounds.y + bounds.height }
+            ],
+            context: {
+              strokeStyle: '#000000',
+              lineWidth: 1,
+              fillStyle: '#000000'
+            },
+            timestamp: Date.now()
+          };
+          selectTool.draw(interactionCtx, tempAction as any);
+        }
+      }
+    } catch (error) {
+      logger.error('绘制选择工具UI失败', error);
     }
   }
 
@@ -420,7 +1068,7 @@ export class DrawingHandler {
   }
 
   /**
-   * 按虚拟图层绘制动作
+   * 按虚拟图层绘制动作（使用缓存优化）
    */
   private async drawActionsByVirtualLayers(ctx: CanvasRenderingContext2D, actions: DrawAction[]): Promise<void> {
     if (!this.virtualLayerManager) return;
@@ -431,13 +1079,18 @@ export class DrawingHandler {
       actionMap.set(action.id, action);
     }
 
-    // 获取所有虚拟图层
+    // 获取Canvas尺寸（用于创建缓存）
+    const canvas = ctx.canvas;
+    const canvasWidth = canvas.width;
+    const canvasHeight = canvas.height;
+    
+    // 更新虚拟图层管理器的Canvas尺寸
+    this.virtualLayerManager.setCanvasSize(canvasWidth, canvasHeight);
+
+    // 获取所有虚拟图层（已按zIndex排序）
     const virtualLayers = this.virtualLayerManager.getAllVirtualLayers();
     
-    // 按图层顺序绘制（创建时间排序）
-    const sortedLayers = virtualLayers.sort((a, b) => a.created - b.created);
-    
-    for (const layer of sortedLayers) {
+    for (const layer of virtualLayers) {
       // 跳过不可见图层
       if (!layer.visible) continue;
       
@@ -448,11 +1101,43 @@ export class DrawingHandler {
       const originalGlobalAlpha = ctx.globalAlpha;
       ctx.globalAlpha = layer.opacity;
       
-      // 绘制该图层的所有动作
-      for (const actionId of layer.actionIds) {
-        const action = actionMap.get(actionId); // 使用Map查找，O(1)复杂度
-        if (action) {
-          await this.drawAction(ctx, action);
+      // 使用缓存渲染
+      const cacheCanvas = this.virtualLayerManager.getLayerCache(layer.id);
+      
+      if (cacheCanvas && !layer.cacheDirty) {
+        // 缓存有效，直接使用缓存
+        ctx.drawImage(cacheCanvas, 0, 0);
+      } else {
+        // 缓存无效或不存在，需要重新渲染
+        const layerCache = this.virtualLayerManager.getLayerCache(layer.id);
+        if (layerCache) {
+          const cacheCtx = layer.cacheCtx;
+          if (cacheCtx) {
+            // 清空缓存Canvas
+            cacheCtx.clearRect(0, 0, layerCache.width, layerCache.height);
+            
+            // 在缓存Canvas上绘制该图层的所有动作
+            for (const actionId of layer.actionIds) {
+              const action = actionMap.get(actionId);
+              if (action) {
+                await this.drawAction(cacheCtx, action);
+              }
+            }
+            
+            // 标记缓存为有效
+            this.virtualLayerManager.markLayerCacheValid(layer.id);
+            
+            // 将缓存绘制到主Canvas
+            ctx.drawImage(layerCache, 0, 0);
+          }
+        } else {
+          // 如果无法创建缓存，回退到直接绘制
+          for (const actionId of layer.actionIds) {
+            const action = actionMap.get(actionId);
+            if (action) {
+              await this.drawAction(ctx, action);
+            }
+          }
         }
       }
       
@@ -460,10 +1145,19 @@ export class DrawingHandler {
       ctx.globalAlpha = originalGlobalAlpha;
     }
     
-    // 绘制未分配到任何图层的动作
+    // 优化：未分配的动作应该已经自动分配到默认图层，这里不再单独处理
+    // 如果仍有未分配的动作，说明是旧数据，直接绘制
     const unassignedActions = actions.filter(action => !action.virtualLayerId);
-    for (const action of unassignedActions) {
-      await this.drawAction(ctx, action);
+    if (unassignedActions.length > 0) {
+      logger.warn(`发现 ${unassignedActions.length} 个未分配的动作，将自动分配到默认图层`);
+      // 自动分配到默认图层
+      const defaultLayer = this.virtualLayerManager.getActiveVirtualLayer();
+      if (defaultLayer) {
+        for (const action of unassignedActions) {
+          this.virtualLayerManager.assignActionToLayer(action.id, defaultLayer.id);
+          action.virtualLayerId = defaultLayer.id;
+        }
+      }
     }
   }
 
@@ -555,8 +1249,34 @@ export class DrawingHandler {
   /**
    * 强制重绘（用于外部调用）
    */
+  // 防止重绘任务堆积
+  private isRedrawing: boolean = false;
+  private pendingRedraw: boolean = false;
+
   public async forceRedraw(): Promise<void> {
-    await this.redrawCanvas();
+    // 如果正在重绘，标记为待重绘，避免重复调用
+    if (this.isRedrawing) {
+      this.pendingRedraw = true;
+      return;
+    }
+
+    this.isRedrawing = true;
+    this.pendingRedraw = false;
+
+    try {
+      await this.redrawCanvas();
+      
+      // 循环处理所有待重绘请求，确保不丢失
+      while (this.pendingRedraw) {
+        this.pendingRedraw = false;
+        await this.redrawCanvas();
+      }
+    } catch (error) {
+      logger.error('强制重绘失败', error);
+      this.pendingRedraw = false; // 出错时清除标志
+    } finally {
+      this.isRedrawing = false;
+    }
   }
 
   /**

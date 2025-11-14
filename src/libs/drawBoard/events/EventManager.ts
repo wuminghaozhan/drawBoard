@@ -118,17 +118,25 @@ export class EventManager {
   private safeEmitEvent(event: DrawEvent): void {
     if (!this.isDuplicateEvent(event)) {
       this.lastProcessedEvent = event;
+      logger.debug('EventManager: 分发事件', { type: event.type, point: event.point });
       this.emit(event.type, event);
     } else {
-      logger.debug('检测到重复事件，已过滤:', event.type, event.point);
+      logger.debug('EventManager: 检测到重复事件，已过滤:', event.type, event.point);
     }
   }
 
   private handleMouseDown(e: MouseEvent): void {
+    logger.debug('EventManager: handleMouseDown 被调用', { 
+      button: e.button, 
+      clientX: e.clientX, 
+      clientY: e.clientY 
+    });
+    
     const now = Date.now();
     
     // 防止快速重复点击
     if (now - this.lastMouseDownTime < this.minEventInterval) {
+      logger.debug('EventManager: 事件被过滤（时间间隔太短）');
       return;
     }
     
@@ -136,13 +144,15 @@ export class EventManager {
     
     this.isPointerDown = true;
     
+    const point = this.getMousePoint(e);
     const event: DrawEvent = {
       type: 'mousedown',
-      point: this.getMousePoint(e),
+      point: point,
       timestamp: now
     };
     
-    logger.debug('Mouse down point:', event.point);
+    logger.debug('EventManager: Mouse down point:', point);
+    logger.debug('EventManager: 准备分发事件，注册的处理器数量:', this.handlers.get('mousedown')?.length || 0);
 
     this.safeEmitEvent(event);
   }
@@ -267,12 +277,47 @@ export class EventManager {
    */
   private getMousePoint(e: MouseEvent): Point {
     const rect = this.canvas.getBoundingClientRect();
+    
+    // 检查rect有效性
+    if (rect.width <= 0 || rect.height <= 0) {
+      logger.warn('EventManager: Canvas rect无效', rect);
+      return { x: 0, y: 0, timestamp: Date.now() };
+    }
+    
+    // 检查canvas尺寸
+    if (this.canvas.width <= 0 || this.canvas.height <= 0) {
+      logger.warn('EventManager: Canvas尺寸无效', {
+        width: this.canvas.width,
+        height: this.canvas.height
+      });
+      return { x: 0, y: 0, timestamp: Date.now() };
+    }
+    
     const scaleX = this.canvas.width / rect.width;
     const scaleY = this.canvas.height / rect.height;
     
+    // 检查缩放比例有效性
+    if (!isFinite(scaleX) || !isFinite(scaleY)) {
+      logger.warn('EventManager: 缩放比例无效', { scaleX, scaleY, rect, canvas: { width: this.canvas.width, height: this.canvas.height } });
+      return { x: 0, y: 0, timestamp: Date.now() };
+    }
+    
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    
+    // 检查计算结果有效性
+    if (!isFinite(x) || !isFinite(y)) {
+      logger.warn('EventManager: 计算出的坐标无效', { x, y, clientX: e.clientX, clientY: e.clientY });
+      return { x: 0, y: 0, timestamp: Date.now() };
+    }
+    
+    // 限制在画布范围内（可选，但建议限制）
+    const clampedX = Math.max(0, Math.min(this.canvas.width, x));
+    const clampedY = Math.max(0, Math.min(this.canvas.height, y));
+    
     return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY,
+      x: clampedX,
+      y: clampedY,
       timestamp: Date.now()
     };
   }
@@ -283,12 +328,47 @@ export class EventManager {
    */
   private getTouchPoint(touch: Touch): Point {
     const rect = this.canvas.getBoundingClientRect();
+    
+    // 检查rect有效性
+    if (rect.width <= 0 || rect.height <= 0) {
+      logger.warn('EventManager: Canvas rect无效', rect);
+      return { x: 0, y: 0, timestamp: Date.now() };
+    }
+    
+    // 检查canvas尺寸
+    if (this.canvas.width <= 0 || this.canvas.height <= 0) {
+      logger.warn('EventManager: Canvas尺寸无效', {
+        width: this.canvas.width,
+        height: this.canvas.height
+      });
+      return { x: 0, y: 0, timestamp: Date.now() };
+    }
+    
     const scaleX = this.canvas.width / rect.width;
     const scaleY = this.canvas.height / rect.height;
     
+    // 检查缩放比例有效性
+    if (!isFinite(scaleX) || !isFinite(scaleY)) {
+      logger.warn('EventManager: 缩放比例无效', { scaleX, scaleY, rect, canvas: { width: this.canvas.width, height: this.canvas.height } });
+      return { x: 0, y: 0, timestamp: Date.now() };
+    }
+    
+    const x = (touch.clientX - rect.left) * scaleX;
+    const y = (touch.clientY - rect.top) * scaleY;
+    
+    // 检查计算结果有效性
+    if (!isFinite(x) || !isFinite(y)) {
+      logger.warn('EventManager: 计算出的坐标无效', { x, y, clientX: touch.clientX, clientY: touch.clientY });
+      return { x: 0, y: 0, timestamp: Date.now() };
+    }
+    
+    // 限制在画布范围内
+    const clampedX = Math.max(0, Math.min(this.canvas.width, x));
+    const clampedY = Math.max(0, Math.min(this.canvas.height, y));
+    
     return {
-      x: (touch.clientX - rect.left) * scaleX,
-      y: (touch.clientY - rect.top) * scaleY,
+      x: clampedX,
+      y: clampedY,
       timestamp: Date.now()
     };
   }
@@ -324,17 +404,32 @@ export class EventManager {
    */
   private emit(eventType: EventType, event: DrawEvent): void {
     const handlers = this.handlers.get(eventType);
-    if (handlers) {
-      handlers.forEach((handler, index) => {
-        try {
-          handler(event);
-        } catch (error) {
-          logger.error(`事件处理器执行失败 (${eventType}) [${index}]:`, error);
-          // 可选：移除有问题的处理器以防止重复错误
-          // handlers.splice(index, 1);
-        }
-      });
+    
+    if (!handlers || handlers.length === 0) {
+      logger.debug('EventManager: 没有找到事件处理器', { eventType });
+      return;
     }
+    
+    logger.debug('EventManager: emit 被调用', { 
+      eventType, 
+      handlersCount: handlers.length,
+      point: event.point 
+    });
+    
+    // 创建副本，避免在迭代过程中修改原数组
+    const handlersCopy = [...handlers];
+    
+    handlersCopy.forEach((handler, index) => {
+      try {
+        logger.debug(`EventManager: 执行处理器 [${index}]`, { eventType });
+        handler(event);
+        logger.debug(`EventManager: 处理器 [${index}] 执行完成`);
+      } catch (error) {
+        logger.error(`事件处理器执行失败 (${eventType}) [${index}]:`, error);
+        // 不在这里移除，避免影响其他处理器
+        // 可以考虑添加错误计数，超过阈值后移除
+      }
+    });
   }
 
   /**

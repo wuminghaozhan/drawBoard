@@ -76,8 +76,8 @@ export class StrokeCalculator {
     if (!this.config.enablePressure) return 0.5;
 
     const windowSize = 5; // 分析窗口大小
-    const startIndex = Math.max(0, index - windowSize);
-    const endIndex = Math.min(points.length - 1, index + windowSize);
+    // const startIndex = Math.max(0, index - windowSize);
+    // const endIndex = Math.min(points.length - 1, index + windowSize);
     
     // 计算局部平均距离（点密度的倒数）
     const localAvgDistance = this.calculateLocalAverageDistance(points, index, windowSize);

@@ -83,7 +83,7 @@ export class Logger {
       // 如果有错误处理器，尝试记录错误
       if (this.errorHandler && args[0] instanceof Error) {
         try {
-          this.errorHandler.recordError(args[0] as Error);
+          (this.errorHandler as any).recordError(args[0] as Error);
         } catch (e) {
           // 避免错误处理器本身出错导致无限循环
           console.error('Error handler failed:', e);
