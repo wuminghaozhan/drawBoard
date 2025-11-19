@@ -19,13 +19,9 @@ const SelectionDemo: React.FC = () => {
 
   useEffect(() => {
     if (containerRef.current && !drawBoardRef.current) {
-      console.log('=== SelectionDemo 开始初始化画板 ===');
-      console.log('容器元素:', containerRef.current);
-      console.log('容器尺寸:', containerRef.current.offsetWidth, 'x', containerRef.current.offsetHeight);
       
       // 确保容器有尺寸
       if (containerRef.current.offsetWidth === 0 || containerRef.current.offsetHeight === 0) {
-        console.warn('容器尺寸为0，设置默认尺寸');
         containerRef.current.style.width = '100%';
         containerRef.current.style.height = '100%';
         containerRef.current.style.minHeight = '400px';
@@ -37,8 +33,6 @@ const SelectionDemo: React.FC = () => {
           enableShortcuts: true
         });
 
-        console.log('=== DrawBoard 创建成功 ===');
-        console.log('DrawBoard 实例:', drawBoardRef.current);
 
         // 设置初始状态
         drawBoardRef.current.setTool(currentTool);
@@ -52,7 +46,6 @@ const SelectionDemo: React.FC = () => {
           showUsageTip();
         }, 1000);
 
-        console.log('=== SelectionDemo 初始化完成 ===');
       } catch (error) {
         console.error('=== DrawBoard 初始化失败 ===', error);
       }
@@ -60,7 +53,6 @@ const SelectionDemo: React.FC = () => {
 
     return () => {
       if (drawBoardRef.current) {
-        console.log('=== 清理 DrawBoard ===');
         drawBoardRef.current.destroy();
         drawBoardRef.current = null;
       }
@@ -143,7 +135,6 @@ const SelectionDemo: React.FC = () => {
     if (!drawBoardRef.current) return;
     
     const debugInfo = drawBoardRef.current.getSelectionDebugInfo();
-    console.log('选择功能调试信息:', debugInfo);
     
     alert(`选择功能调试信息:\n\n` +
           `当前工具: ${debugInfo.currentTool}\n` +

@@ -7,6 +7,7 @@ import type { VirtualLayer } from '../core/VirtualLayerManager';
 import type { DrawEvent } from '../events/EventManager';
 import type { Point } from '../core/CanvasEngine';
 import { logger } from '../utils/Logger';
+import { MemoryMonitor } from '../utils/MemoryMonitor';
 
 /**
  * 绘制处理器配置接口
@@ -59,6 +60,10 @@ export class DrawingHandler {
   private offscreenCtx?: CanvasRenderingContext2D;
   private offscreenCacheDirty: boolean = true;
   private readonly OFFSCREEN_CACHE_THRESHOLD = 100; // 历史动作超过100个时使用离屏缓存
+  
+  // 智能内存管理
+  private memoryMonitor: MemoryMonitor;
+  private readonly MAX_MEMORY_USAGE = 0.8; // 80%内存使用率阈值
 
   constructor(
     canvasEngine: CanvasEngine,
@@ -84,6 +89,10 @@ export class DrawingHandler {
       enableGeometricOptimization: true, // 是否启用几何图形优化
       ...config
     };
+
+    // 初始化内存监控器
+    this.memoryMonitor = new MemoryMonitor();
+    this.memoryMonitor.setMaxMemoryUsage(this.MAX_MEMORY_USAGE);
 
     logger.debug('DrawingHandler初始化完成', this.config);
   }
@@ -362,8 +371,11 @@ export class DrawingHandler {
       const canvasWidth = canvas.width;
       const canvasHeight = canvas.height;
       
+      // 检查是否应该使用离屏缓存（智能内存管理）
+      const shouldUseCache = this.shouldUseOffscreenCache(historyCount);
+      
       // 如果历史动作很多，使用离屏Canvas缓存优化性能
-      if (historyCount > this.OFFSCREEN_CACHE_THRESHOLD && this.config.enableGeometricOptimization) {
+      if (shouldUseCache) {
         // 初始化离屏Canvas
         if (!this.offscreenCanvas || this.offscreenCacheDirty) {
           this.initializeOffscreenCanvas(canvasWidth, canvasHeight);
@@ -419,6 +431,43 @@ export class DrawingHandler {
     } catch (error) {
       logger.error('几何图形重绘失败', error);
       throw error;
+    }
+  }
+
+  /**
+   * 检查是否应该使用离屏缓存（智能内存管理）
+   */
+  private shouldUseOffscreenCache(historyCount: number): boolean {
+    // 检查内存使用率
+    if (this.memoryMonitor.isMemoryUsageHigh()) {
+      // 内存紧张，禁用缓存
+      if (this.offscreenCanvas) {
+        this.cleanupOffscreenCanvas();
+      }
+      return false;
+    }
+    
+    // 检查历史动作数量
+    if (historyCount < this.OFFSCREEN_CACHE_THRESHOLD) {
+      return false;
+    }
+    
+    // 检查是否启用几何图形优化
+    return this.config.enableGeometricOptimization;
+  }
+
+  /**
+   * 清理离屏Canvas（内存紧张时调用）
+   */
+  private cleanupOffscreenCanvas(): void {
+    if (this.offscreenCanvas) {
+      if (this.offscreenCtx) {
+        this.offscreenCtx.clearRect(0, 0, this.offscreenCanvas.width, this.offscreenCanvas.height);
+      }
+      this.offscreenCanvas = undefined;
+      this.offscreenCtx = undefined;
+      this.offscreenCacheDirty = true;
+      logger.debug('离屏Canvas已清理（内存紧张）');
     }
   }
 

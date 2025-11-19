@@ -340,6 +340,5 @@ export class SelectionManager {
     this.cachedSelectionBox = null;
     this.cachedHandleSize = 0;
     
-    console.log('🗑️ SelectionManager destroyed');
   }
 } 

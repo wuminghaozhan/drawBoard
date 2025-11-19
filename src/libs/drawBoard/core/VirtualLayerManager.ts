@@ -1,6 +1,6 @@
 import type { DrawAction } from '../tools/DrawTool';
 import { logger } from '../utils/Logger';
-import type { CanvasEngine } from './CanvasEngine';
+import { CanvasEngine } from './CanvasEngine';
 import type { HistoryManager } from '../history/HistoryManager';
 
 /**
@@ -1271,7 +1271,7 @@ export class VirtualLayerManager {
       // 删除旧的动态图层
       this.canvasEngine.removeDynamicLayer(oldDynamicLayerId);
       // 创建新的动态图层
-      const newZIndex = layer.zIndex * 10 + 5;
+      const newZIndex = CanvasEngine.calculateDynamicLayerZIndex(layer.zIndex);
       const newDynamicLayerId = `selection-${layer.zIndex}`;
       this.canvasEngine.createDynamicLayer(newDynamicLayerId, newZIndex);
       logger.debug('更新活动图层的动态图层zIndex:', layer.name, 'newZIndex:', layer.zIndex);
@@ -1305,7 +1305,7 @@ export class VirtualLayerManager {
     if (!this.canvasEngine) return;
     
     const oldDynamicLayerId = `selection-${oldZIndex}`;
-    const newZIndex = layer.zIndex * 10 + 5;
+    const newZIndex = CanvasEngine.calculateDynamicLayerZIndex(layer.zIndex);
     const newDynamicLayerId = `selection-${layer.zIndex}`;
     
     // 删除旧的动态图层

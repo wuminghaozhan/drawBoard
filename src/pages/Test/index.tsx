@@ -53,7 +53,6 @@ const Test: React.FC = () => {
 
       // 检查是否已经初始化
       if (initRef.initialized || drawBoardRef.current) {
-        console.log('DrawBoard already initialized or initializing');
         return;
       }
 
@@ -72,7 +71,6 @@ const Test: React.FC = () => {
           enableShortcuts: true
         });
 
-        console.log('DrawBoard initialized successfully');
         
         // 监听状态变化
         drawBoardRef.current.onStateChange((state) => {
@@ -84,14 +82,12 @@ const Test: React.FC = () => {
         
         // 初始化默认工具
         drawBoardRef.current.initializeDefaultTools().then(() => {
-          console.log('Default tools loaded');
           
           // 设置初始工具和颜色
           if (drawBoardRef.current) {
             drawBoardRef.current.setTool(drawData.tool);
             drawBoardRef.current.setColor(drawData.color);
             drawBoardRef.current.setLineWidth(drawData.lineWidth);
-            console.log('Initial tool settings applied');
             
             // 更新虚拟图层状态
             updateVirtualLayerState();
@@ -108,12 +104,9 @@ const Test: React.FC = () => {
 
     initDrawBoard();
     setTimeout(() => {
-      console.log('___111', drawBoardRef.current?.getShortcuts());
       // 测试快捷键功能
       if (drawBoardRef.current) {
         const shortcuts = drawBoardRef.current.getShortcuts();
-        console.log('快捷键数量:', shortcuts.length);
-        console.log('快捷键列表:', shortcuts);
       }
     }, 4000);
 
@@ -145,7 +138,6 @@ const Test: React.FC = () => {
   const clearCanvas = () => {
     if (drawBoardRef.current) {
       drawBoardRef.current.clear();
-      console.log('Canvas cleared');
     }
   };
 
@@ -179,7 +171,6 @@ const Test: React.FC = () => {
       const interval = setInterval(() => {
         if (index < cursors.length) {
           drawBoardRef.current!.setCursor(cursors[index]);
-          console.log(`测试光标: ${cursors[index]}`);
           index++;
         } else {
           clearInterval(interval);
@@ -201,7 +192,6 @@ const Test: React.FC = () => {
   const getComplexityStats = () => {
     if (drawBoardRef.current) {
       const stats = drawBoardRef.current.getComplexityStats();
-      console.log('复杂度统计:', stats);
       alert(`复杂度统计:\n总复杂度: ${stats.totalComplexity}\n平均复杂度: ${stats.averageComplexity.toFixed(1)}\n重新计算次数: ${stats.recalculationCount}`);
     }
   };
@@ -215,17 +205,8 @@ const Test: React.FC = () => {
     const toolNames = toolManager.getToolNames();
     const stats = toolManager.getStats();
     
-    console.log('可用工具类型:', availableTools);
-    console.log('工具名称:', toolNames);
-    console.log('工具统计:', stats);
     
     // 添加更详细的调试信息
-    console.log('=== ToolFactory 调试信息 ===');
-    console.log('ToolManager 实例:', toolManager);
-    console.log('ToolFactory 统计:', stats);
-    console.log('已注册的工具类型数量:', availableTools.length);
-    console.log('当前工具:', stats.currentTool);
-    console.log('加载状态:', stats.loadingState);
     
     alert(`可用工具类型: ${availableTools.join(', ')}\n\n工具统计:\n- 当前工具: ${stats.currentTool}\n- 加载状态: ${stats.loadingState}\n- 可用工具数: ${stats.availableTools}\n- 缓存工具数: ${stats.cachedTools}`);
   };
@@ -365,7 +346,6 @@ const Test: React.FC = () => {
   const showCanvasLayersInfo = () => {
     const info = getCanvasLayersInfo();
     if (info) {
-      console.log('Canvas层信息:', info);
       alert(`Canvas层信息:\n\n` +
             `背景层:\n- 可见: ${info.background.visible}\n- 尺寸: ${info.background.width}x${info.background.height}\n\n` +
             `绘制层:\n- 可见: ${info.draw.visible}\n- 尺寸: ${info.draw.width}x${info.draw.height}\n\n` +
@@ -383,7 +363,6 @@ const Test: React.FC = () => {
     }
 
     const shortcuts = drawBoardRef.current.getShortcuts();
-    console.log('快捷键列表:', shortcuts);
     
     if (shortcuts.length === 0) {
       alert('没有注册的快捷键');
@@ -562,7 +541,6 @@ ${shortcuts.map(s => `  ${s.key}: ${s.description} (优先级: ${s.priority || 0
                   if (drawBoardRef.current) {
                     drawBoardRef.current.setTool('rect');
                     drawBoardRef.current.setColor('#ff0000');
-                    console.log('已切换到矩形工具，请在画布上绘制');
                   }
                 }, 100);
               }} className="btn btn-test-layer">

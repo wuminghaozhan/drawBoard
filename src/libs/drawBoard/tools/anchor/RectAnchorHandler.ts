@@ -1,22 +1,24 @@
 import type { DrawAction } from '../DrawTool';
 import type { Point } from '../../core/CanvasEngine';
-import type { AnchorPoint, AnchorType, Bounds, ShapeAnchorHandler } from './AnchorTypes';
+import type { AnchorPoint, AnchorType, Bounds } from './AnchorTypes';
 import { logger } from '../../utils/Logger';
 import { BoundsValidator } from '../../utils/BoundsValidator';
+import { BaseAnchorHandler } from './BaseAnchorHandler';
+import { AnchorUtils } from '../../utils/AnchorUtils';
+import { ShapeUtils } from '../../utils/ShapeUtils';
 
 /**
  * 矩形锚点处理器
  * 实现矩形图形的锚点生成和拖拽处理
  */
-export class RectAnchorHandler implements ShapeAnchorHandler {
-  private readonly anchorSize: number = 8;
+export class RectAnchorHandler extends BaseAnchorHandler {
   
   /**
    * 生成矩形锚点
    */
   public generateAnchors(action: DrawAction, bounds: Bounds): AnchorPoint[] {
     const anchors: AnchorPoint[] = [];
-    const halfSize = this.anchorSize / 2;
+    const halfSize = AnchorUtils.DEFAULT_ANCHOR_SIZE / 2;
     const { x, y, width, height } = bounds;
     
     // 计算中心点
@@ -265,70 +267,17 @@ export class RectAnchorHandler implements ShapeAnchorHandler {
   }
   
   /**
-   * 处理矩形移动
+   * 计算矩形中心点（矩形特殊实现：使用边界框中心或点集中心）
    */
-  public handleMove(
-    action: DrawAction,
-    deltaX: number,
-    deltaY: number,
-    canvasBounds?: { width: number; height: number }
-  ): DrawAction | null {
-    if (!isFinite(deltaX) || !isFinite(deltaY)) {
-      return null;
+  public calculateCenterPoint(action: DrawAction): Point {
+    // 先尝试从边界框计算（如果有的话）
+    const bounds = this.calculateBounds(action);
+    if (bounds.width > 0 && bounds.height > 0) {
+      return ShapeUtils.getBoundsCenter(bounds);
     }
     
-    const newPoints = action.points.map(point => {
-      const newPoint = {
-        x: point.x + deltaX,
-        y: point.y + deltaY,
-        timestamp: point.timestamp
-      };
-      
-      // 使用统一的边界验证器限制点在画布范围内
-      if (canvasBounds) {
-        const canvasBoundsType = {
-          x: 0,
-          y: 0,
-          width: canvasBounds.width,
-          height: canvasBounds.height
-        };
-        return BoundsValidator.clampPointToCanvas(newPoint, canvasBoundsType);
-      }
-      
-      return newPoint;
-    });
-    
-    return {
-      ...action,
-      points: newPoints
-    };
-  }
-  
-  /**
-   * 计算矩形中心点
-   */
-  public calculateCenterPoint(action: DrawAction, bounds?: Bounds): Point {
-    if (bounds) {
-      return {
-        x: bounds.x + bounds.width / 2,
-        y: bounds.y + bounds.height / 2
-      };
-    }
-    
-    // 如果没有提供bounds，从points计算
-    if (action.points.length >= 2) {
-      const minX = Math.min(...action.points.map(p => p.x));
-      const maxX = Math.max(...action.points.map(p => p.x));
-      const minY = Math.min(...action.points.map(p => p.y));
-      const maxY = Math.max(...action.points.map(p => p.y));
-      
-      return {
-        x: (minX + maxX) / 2,
-        y: (minY + maxY) / 2
-      };
-    }
-    
-    return { x: 0, y: 0 };
+    // 否则使用基类的通用实现
+    return super.calculateCenterPoint(action);
   }
 }
 

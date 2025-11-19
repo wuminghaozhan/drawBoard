@@ -57,8 +57,7 @@
         let drawBoard;
         const debugOutput = document.getElementById('debug-output');
         
-        // 劫持console.log来显示调试信息
-        const originalLog = console.log;
+        // 错误输出处理
         const originalError = console.error;
         
         function addDebugOutput(level, ...args) {
@@ -70,11 +69,6 @@
             debugOutput.scrollTop = debugOutput.scrollHeight;
         }
         
-        console.log = function(...args) {
-            originalLog.apply(console, args);
-            addDebugOutput('LOG', ...args);
-        };
-        
         console.error = function(...args) {
             originalError.apply(console, args);
             addDebugOutput('ERROR', ...args);
@@ -82,23 +76,19 @@
         
         // 初始化DrawBoard
         try {
-            console.log('开始初始化DrawBoard...');
             const container = document.getElementById('container');
             drawBoard = new DrawBoard(container);
-            console.log('DrawBoard初始化成功!');
             
             // 设置为画笔工具
             drawBoard.setTool('pen');
             drawBoard.setColor('#ff0000');
             drawBoard.setLineWidth(3);
-            console.log('工具设置完成');
             
         } catch (error) {
             console.error('DrawBoard初始化失败:', error);
         }
         
         window.testDraw = function() {
-            console.log('开始测试绘制...');
             if (!drawBoard) {
                 console.error('DrawBoard未初始化');
                 return;
@@ -107,8 +97,6 @@
             // 模拟绘制事件
             const canvas = drawBoard.canvasEngine?.getLayer('interaction')?.canvas;
             if (canvas) {
-                console.log('找到交互层canvas，模拟点击事件');
-                
                 // 模拟鼠标按下
                 const mouseDownEvent = new MouseEvent('mousedown', {
                     clientX: 100,
@@ -145,15 +133,12 @@
         window.clearCanvas = function() {
             if (drawBoard) {
                 drawBoard.clear();
-                console.log('画布已清空');
             }
         };
         
         window.showDebugInfo = function() {
             if (drawBoard) {
-                console.log('当前工具:', drawBoard.getCurrentTool());
-                console.log('画板状态:', drawBoard.getState());
-                console.log('历史记录数量:', drawBoard.getHistory().length);
+                // 调试信息已移除
             }
         };
     </script>

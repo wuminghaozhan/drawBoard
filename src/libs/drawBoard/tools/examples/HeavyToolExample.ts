@@ -28,17 +28,13 @@ export class AIPaintingTool extends DrawTool {
 
     try {
       // 模拟加载大型AI模型
-      console.log('🔄 正在加载AI模型...');
       await this.loadAIModel();
       
       // 模拟初始化GPU上下文
-      console.log('🔄 正在初始化GPU上下文...');
       await this.initializeGPU();
       
       this.isInitialized = true;
-      console.log('✅ AI模型初始化完成');
     } catch (error) {
-      console.warn('⚠️ AI模型初始化失败，启用降级模式', error);
       this.fallbackMode = true;
       this.isInitialized = true;
     }
@@ -198,7 +194,6 @@ export class ThreeDModelingTool extends DrawTool {
     if (this.isInitialized) return;
 
     try {
-      console.log('🔄 正在初始化3D引擎...');
       
       // 模拟加载Three.js
       await this.loadThreeJS();
@@ -207,7 +202,6 @@ export class ThreeDModelingTool extends DrawTool {
       await this.initializePhysics();
       
       this.isInitialized = true;
-      console.log('✅ 3D引擎初始化完成');
     } catch (error) {
       console.error('3D引擎初始化失败', error);
       throw error;
@@ -315,7 +309,6 @@ export class CollaborativeTool extends DrawTool {
     if (this.isConnected) return;
 
     try {
-      console.log('🔄 正在连接协作服务器...');
       
       // 模拟建立WebSocket连接
       await this.connectToServer();
@@ -324,7 +317,6 @@ export class CollaborativeTool extends DrawTool {
       await this.syncServerState();
       
       this.isConnected = true;
-      console.log('✅ 协作连接建立完成');
     } catch (error) {
       console.error('协作连接失败', error);
       throw error;
@@ -338,8 +330,6 @@ export class CollaborativeTool extends DrawTool {
     await new Promise(resolve => setTimeout(resolve, 1000));
     
     this.websocket = {
-      send: (data: any) => console.log('发送数据:', data),
-      onmessage: (event: any) => console.log('接收数据:', event)
     };
     
     this.serverConnection = {
@@ -353,7 +343,6 @@ export class CollaborativeTool extends DrawTool {
    */
   private async syncServerState(): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, 500));
-    console.log('服务器状态同步完成');
   }
 
   /**
@@ -448,5 +437,4 @@ export function registerHeavyTools(drawBoard: any): void {
     }
   );
 
-  console.log('重量级工具注册完成');
 } 

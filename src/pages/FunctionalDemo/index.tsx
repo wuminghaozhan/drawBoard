@@ -58,7 +58,6 @@ const FunctionalDemo: React.FC = () => {
     if (!preset) return;
 
     // 这里可以应用预设配置
-    console.log('应用预设:', preset);
     setCurrentPreset(presetName);
   };
 
@@ -73,7 +72,6 @@ const FunctionalDemo: React.FC = () => {
     ];
 
     const processed = drawBoard.processDrawData(samplePoints);
-    console.log('处理后的绘制数据:', processed);
   };
 
   // 创建状态快照
@@ -81,7 +79,6 @@ const FunctionalDemo: React.FC = () => {
     if (!drawBoard) return;
 
     const snapshot = drawBoard.createSnapshot();
-    console.log('状态快照:', snapshot);
   };
 
   // 使用管道处理数据
@@ -90,7 +87,6 @@ const FunctionalDemo: React.FC = () => {
 
     const data = { name: 'test', value: 42 };
     const result = drawBoard.processDataWithPipeline(data);
-    console.log('管道处理结果:', result);
   };
 
   // 记忆化计算
@@ -99,7 +95,6 @@ const FunctionalDemo: React.FC = () => {
 
     const result1 = drawBoard.memoizedCalculation(5);
     const result2 = drawBoard.memoizedCalculation(5); // 应该从缓存获取
-    console.log('记忆化计算结果:', result1, result2);
   };
 
   return (

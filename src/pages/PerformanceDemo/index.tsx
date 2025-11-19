@@ -26,7 +26,6 @@ const PerformanceDemo: React.FC = () => {
   // 初始化画板
   useEffect(() => {
     if (containerRef.current && !drawBoardRef.current) {
-      console.log('=== 初始化性能演示画板 ===');
       
       drawBoardRef.current = new DrawBoard(containerRef.current, {
         maxHistorySize: 200,

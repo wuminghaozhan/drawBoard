@@ -348,6 +348,13 @@ export class CanvasEngine {
     return this.layers.get('draw')!.ctx;
   }
 
+  /**
+   * 获取容器元素
+   */
+  public getContainer(): HTMLDivElement {
+    return this.container;
+  }
+
 
 
   public setLayerVisible(name: string, visible: boolean): void {
@@ -386,6 +393,25 @@ export class CanvasEngine {
   // ============================================
   // 动态图层管理（用于选中虚拟图层的交互元素）
   // ============================================
+
+  // 动态图层 zIndex 计算常量（优化版）
+  private static readonly BASE_ZINDEX = 100; // interaction层基础zIndex
+  private static readonly MAX_DYNAMIC_LAYER_ZINDEX = 1000; // 最大zIndex限制
+  private static readonly ZINDEX_STEP = 2; // zIndex步长
+
+  /**
+   * 计算动态图层的zIndex（优化版）
+   * 公式：BASE_ZINDEX + virtualLayerZIndex * ZINDEX_STEP
+   * 例如：虚拟图层zIndex=0 → 动态图层zIndex=100
+   *      虚拟图层zIndex=1 → 动态图层zIndex=102
+   *      虚拟图层zIndex=2 → 动态图层zIndex=104
+   * @param virtualLayerZIndex 虚拟图层的zIndex
+   * @returns 计算后的zIndex（不超过最大值）
+   */
+  public static calculateDynamicLayerZIndex(virtualLayerZIndex: number): number {
+    const calculatedZIndex = CanvasEngine.BASE_ZINDEX + virtualLayerZIndex * CanvasEngine.ZINDEX_STEP;
+    return Math.min(calculatedZIndex, CanvasEngine.MAX_DYNAMIC_LAYER_ZINDEX);
+  }
 
   /**
    * 创建动态图层（用于选中图层的交互元素）
@@ -486,7 +512,7 @@ export class CanvasEngine {
 
   /**
    * 获取选中图层的交互层Canvas上下文
-   * 如果不存在则创建，zIndex位于虚拟图层和上一层之间
+   * 如果不存在则创建，zIndex位于虚拟图层和上一层之间（使用优化后的计算公式）
    * @param virtualLayerZIndex 虚拟图层的zIndex
    * @returns Canvas上下文
    */
@@ -495,10 +521,8 @@ export class CanvasEngine {
     let layer = this.dynamicLayers.get(layerId);
 
     if (!layer) {
-      // 计算zIndex：位于虚拟图层和上一层之间
-      // 假设虚拟图层zIndex为整数，我们使用 zIndex + 0.5
-      // 但CSS zIndex必须是整数，所以使用 zIndex * 10 + 5
-      const zIndex = virtualLayerZIndex * 10 + 5;
+      // 使用优化后的zIndex计算公式：BASE_ZINDEX + virtualLayerZIndex * ZINDEX_STEP
+      const zIndex = CanvasEngine.calculateDynamicLayerZIndex(virtualLayerZIndex);
       layer = this.createDynamicLayer(layerId, zIndex);
     }
 

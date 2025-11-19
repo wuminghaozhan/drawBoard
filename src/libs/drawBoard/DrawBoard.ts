@@ -346,18 +346,8 @@ export class DrawBoard {
       this.setStrokeConfig(config.strokeConfig);
     }
 
-    // 初始化处理器
-    this.initializeHandlers();
-
-    // 绑定事件
-    this.bindEvents();
-
-    // 启用快捷键
-    if (config.enableShortcuts !== false) {
-      this.enableShortcuts();
-    }
-
-    logger.info('=== DrawBoard 初始化完成 ===');
+    // 注意：initializeHandlers() 和 bindEvents() 在构造函数中调用
+    // 这里不再重复调用，避免重复初始化和事件绑定
   }
 
   private initializeHandlers(): void {
@@ -399,13 +389,34 @@ export class DrawBoard {
    * 📊 状态管理：通过 StateHandler 管理和通知状态变化
    * 🔧 工具调度：根据当前工具类型调用相应的绘制逻辑
   */
+  // 保存绑定后的函数引用，以便后续解绑
+  private boundEventHandlers = {
+    handleDrawStart: (event: DrawEvent) => this.handleDrawStart(event),
+    handleDrawMove: (event: DrawEvent) => this.handleDrawMove(event),
+    handleDrawEnd: (event: DrawEvent) => this.handleDrawEnd(event),
+  };
+
   private bindEvents(): void {
-    this.eventManager.on('mousedown', this.handleDrawStart.bind(this));
-    this.eventManager.on('mousemove', this.handleDrawMove.bind(this));
-    this.eventManager.on('mouseup', this.handleDrawEnd.bind(this));
-    this.eventManager.on('touchstart', this.handleDrawStart.bind(this));
-    this.eventManager.on('touchmove', this.handleDrawMove.bind(this));
-    this.eventManager.on('touchend', this.handleDrawEnd.bind(this));
+    this.eventManager.on('mousedown', this.boundEventHandlers.handleDrawStart);
+    this.eventManager.on('mousemove', this.boundEventHandlers.handleDrawMove);
+    this.eventManager.on('mouseup', this.boundEventHandlers.handleDrawEnd);
+    this.eventManager.on('touchstart', this.boundEventHandlers.handleDrawStart);
+    this.eventManager.on('touchmove', this.boundEventHandlers.handleDrawMove);
+    this.eventManager.on('touchend', this.boundEventHandlers.handleDrawEnd);
+  }
+
+  /**
+   * 解绑事件处理器
+   */
+  private unbindEvents(): void {
+    if (this.eventManager) {
+      this.eventManager.off('mousedown', this.boundEventHandlers.handleDrawStart);
+      this.eventManager.off('mousemove', this.boundEventHandlers.handleDrawMove);
+      this.eventManager.off('mouseup', this.boundEventHandlers.handleDrawEnd);
+      this.eventManager.off('touchstart', this.boundEventHandlers.handleDrawStart);
+      this.eventManager.off('touchmove', this.boundEventHandlers.handleDrawMove);
+      this.eventManager.off('touchend', this.boundEventHandlers.handleDrawEnd);
+    }
   }
 
 
@@ -471,8 +482,31 @@ export class DrawBoard {
         { key: 'Ctrl+A', description: '全选', handler: () => this.selectAll(), priority: 7 }
       ]),
 
-      // 取消选择
-      { key: 'Escape', description: '取消选择', handler: () => this.clearSelection(), priority: 6 },
+      // 取消选择 / 取消拖拽
+      { 
+        key: 'Escape', 
+        description: '取消选择/取消拖拽', 
+        handler: () => {
+          // 如果正在拖拽，取消拖拽；否则取消选择
+          const currentTool = this.toolManager.getCurrentToolInstance();
+          if (currentTool && currentTool.getActionType() === 'select') {
+            const selectTool = currentTool as unknown as { cancelDrag: () => void };
+            if (selectTool.cancelDrag) {
+              const wasDragging = selectTool.cancelDrag();
+              if (wasDragging) {
+                // 如果取消了拖拽，触发重绘
+                this.drawingHandler.forceRedraw().catch(error => {
+                  logger.error('重绘失败', error);
+                });
+                return;
+              }
+            }
+          }
+          // 否则取消选择
+          this.clearSelection();
+        }, 
+        priority: 6 
+      },
 
       // 保存
       ...(isMac ? [
@@ -552,12 +586,14 @@ export class DrawBoard {
         
         const selectTool = currentTool as unknown as { 
           handleMouseMove: (point: Point) => DrawAction | DrawAction[] | null;
-          updateHoverAnchor?: (point: Point) => void;
+          updateHoverAnchor?: (point: Point) => boolean | void;
         };
         
-        // 更新悬停锚点（用于光标更新）
+        // 更新悬停锚点（用于光标更新和hover状态显示）
+        let hoverChanged = false;
         if (selectTool.updateHoverAnchor) {
-          selectTool.updateHoverAnchor(event.point);
+          const result = selectTool.updateHoverAnchor(event.point);
+          hoverChanged = result === true; // 如果返回true，表示hover状态变化
         }
         
         const updatedActions = selectTool.handleMouseMove(event.point);
@@ -565,9 +601,9 @@ export class DrawBoard {
         // 节流重绘（避免过于频繁的重绘）
         const now = Date.now();
         if (now - this.lastSelectToolRedrawTime >= this.SELECT_TOOL_REDRAW_INTERVAL) {
-          // 如果返回了更新后的actions（拖拽中），触发重绘
+          // 如果hover状态变化或拖拽中，都需要重绘
           // 注意：在拖拽过程中，不要更新HistoryManager，只在mouseUp时更新
-          if (updatedActions) {
+          if (updatedActions || hoverChanged) {
             // 只重绘，不更新历史记录（避免拖拽过程中的频繁更新）
             this.drawingHandler.forceRedraw().catch(error => {
               logger.error('重绘失败', error);
@@ -1248,6 +1284,11 @@ export class DrawBoard {
    * 更新鼠标样式
    */
   private updateCursor(): void {
+    // 检查工具管理器是否已初始化
+    if (!this.toolManager) {
+      return; // 如果未初始化，直接返回
+    }
+    
     const currentTool = this.toolManager.getCurrentTool();
     
     // 如果是选择工具，从选择工具获取光标样式
@@ -1260,9 +1301,16 @@ export class DrawBoard {
         // 注意：这里无法获取当前鼠标位置，所以不传point参数
         // 光标更新会在handleDrawMove中通过updateHoverAnchor更新
         const cursor = selectTool.getCurrentCursor();
-        this.cursorHandler.setCursor(cursor);
+        if (this.cursorHandler) {
+          this.cursorHandler.setCursor(cursor);
+        }
         return;
       }
+    }
+    
+    // 检查 canvasEngine 和 drawingHandler 是否已初始化
+    if (!this.canvasEngine || !this.drawingHandler || !this.cursorHandler) {
+      return; // 如果未初始化，直接返回
     }
     
     const lineWidth = this.canvasEngine.getContext().lineWidth;
@@ -1860,61 +1908,64 @@ export class DrawBoard {
     try {
       logger.info('🗑️ 开始销毁DrawBoard实例...');
       
-      // 1. 停止所有事件监听
+      // 1. 解绑事件处理器（在销毁 EventManager 之前）
+      this.unbindEvents();
+      
+      // 2. 停止所有事件监听
       if (this.eventManager) {
         this.eventManager.destroy();
         logger.debug('✅ EventManager已销毁');
       }
       
-      // 2. 清理快捷键
+      // 3. 清理快捷键
       if (this.shortcutManager && typeof this.shortcutManager.destroy === 'function') {
         this.shortcutManager.destroy();
         logger.debug('✅ ShortcutManager已销毁');
       }
       
-      // 3. 清理CanvasEngine
+      // 4. 清理CanvasEngine
       if (this.canvasEngine) {
         this.canvasEngine.destroy();
         logger.debug('✅ CanvasEngine已销毁');
       }
       
-      // 4. 清理VirtualLayerManager
+      // 5. 清理VirtualLayerManager
       if (this.virtualLayerManager && typeof this.virtualLayerManager.destroy === 'function') {
         this.virtualLayerManager.destroy();
         logger.debug('✅ VirtualLayerManager已销毁');
       }
       
-      // 5. 清理DrawingHandler（如果有dispose方法）
+      // 6. 清理DrawingHandler（如果有dispose方法）
       if (this.drawingHandler && 'dispose' in this.drawingHandler && typeof this.drawingHandler.dispose === 'function') {
         this.drawingHandler.dispose();
         logger.debug('✅ DrawingHandler已清理');
       }
       
-      // 6. 清理CursorHandler（如果有dispose方法）
+      // 7. 清理CursorHandler（如果有dispose方法）
       if (this.cursorHandler && 'dispose' in this.cursorHandler && typeof this.cursorHandler.dispose === 'function') {
         this.cursorHandler.dispose();
         logger.debug('✅ CursorHandler已清理');
       }
       
-      // 7. 清理StateHandler（如果有dispose方法）
+      // 8. 清理StateHandler（如果有dispose方法）
       if (this.stateHandler && 'dispose' in this.stateHandler && typeof this.stateHandler.dispose === 'function') {
         this.stateHandler.dispose();
         logger.debug('✅ StateHandler已清理');
       }
       
-      // 8. 销毁所有资源管理器
+      // 9. 销毁所有资源管理器
       if (this.resourceManager) {
         await this.resourceManager.destroy();
         logger.debug('✅ ResourceManager已销毁');
       }
       
-      // 9. 从静态单例映射中移除实例
+      // 10. 从静态单例映射中移除实例
       if (this.container) {
         DrawBoard.instances.delete(this.container);
         logger.debug('✅ DrawBoard instance removed from static registry');
       }
       
-      // 10. 清理所有引用
+      // 11. 清理所有引用
       this.container = null as unknown as HTMLElement;
       this.canvasEngine = null as unknown as CanvasEngine;
       this.toolManager = null as unknown as ToolManager;
@@ -1959,6 +2010,11 @@ export class DrawBoard {
    * 检查是否需要重新计算复杂度
    */
   private async checkComplexityRecalculation(): Promise<void> {
+    // 检查复杂度管理器是否已初始化
+    if (!this.complexityManager) {
+      return; // 如果未初始化，直接返回
+    }
+    
     // 委托给复杂度管理器检查
     if (this.complexityManager.shouldRecalculate()) {
       await this.recalculateComplexity();

@@ -21,7 +21,6 @@ export class EDBParser {
     const items: EDBItem[] = [];
     const resources: EDBResource[] = [];
 
-    console.log(`开始解析图元数据，从位置: ${this.parser.tell()}`);
     
     // 解析图元数据
     let itemCount = 0;
@@ -29,40 +28,30 @@ export class EDBParser {
     
     while (this.parser.hasMore() && itemCount < maxItems) {
       const beforeItemOffset = this.parser.tell();
-      console.log(`准备解析第${itemCount + 1}个图元，位置: ${beforeItemOffset}`);
       
       try {
         const item = this.parseItem();
         if (item) {
           items.push(item);
-          console.log(`成功解析图元 #${itemCount + 1}, 类型: ${item.type}`);
           
           // 检查是否还有更多数据可以解析
           if (this.parser.hasMore()) {
-            console.log(`还有更多数据，继续解析下一个图元`);
-            console.log(`当前位置: ${this.parser.tell()}, 剩余字节: ${this.parser.remaining()}`);
           } else {
-            console.log(`没有更多数据，停止解析`);
-            console.log(`最终位置: ${this.parser.tell()}, 总字节: ${this.parser.getBuffer().byteLength}`);
             break;
           }
         } else {
-          console.log(`图元 #${itemCount + 1} 解析失败，跳过`);
           // 如果解析失败，尝试移动到下一个可能的位置
           const afterItemOffset = this.parser.tell();
           if (afterItemOffset <= beforeItemOffset) {
             // 如果没有前进，强制前进1字节
             this.parser.seek(beforeItemOffset + 1);
-            console.log(`强制前进到位置: ${this.parser.tell()}`);
           }
         }
       } catch (error) {
-        console.log(`解析图元 #${itemCount + 1} 时发生错误: ${error}`);
         // 尝试移动到下一个可能的位置
         const currentOffset = this.parser.tell();
         if (currentOffset <= beforeItemOffset) {
           this.parser.seek(beforeItemOffset + 1);
-          console.log(`错误后强制前进到位置: ${this.parser.tell()}`);
         }
       }
       
@@ -70,16 +59,13 @@ export class EDBParser {
       
       // 检查是否已经解析了足够多的图元
       if (items.length >= header.itemNum) {
-        console.log(`已解析 ${items.length} 个图元，达到预期数量 ${header.itemNum}`);
         break;
       }
     }
 
-    console.log(`图元解析完成，共解析 ${items.length} 个图元`);
 
     // 解析资源数据（如果有）
     if (header.resourceNum && header.resourceNum > 0) {
-      console.log(`开始解析资源数据，预期数量: ${header.resourceNum}`);
       
       let resourceCount = 0;
       while (this.parser.hasMore() && resourceCount < header.resourceNum) {
@@ -87,16 +73,13 @@ export class EDBParser {
           const resource = this.parseResource();
           if (resource) {
             resources.push(resource);
-            console.log(`成功解析资源 #${resourceCount + 1}`);
           }
         } catch (error) {
-          console.log(`解析资源 #${resourceCount + 1} 时发生错误: ${error}`);
         }
         resourceCount++;
       }
     }
 
-    console.log(`解析完成，图元: ${items.length}, 资源: ${resources.length}`);
 
     const result = {
       header,
@@ -105,7 +88,6 @@ export class EDBParser {
     };
 
     // 分析解析结果
-    console.log(`\n开始分析解析结果...`);
     EDBAnalyzer.analyzeDocument(result);
 
     return result;
@@ -149,14 +131,11 @@ export class EDBParser {
    */
   private parseHeader(): EDBHeader {
     const startOffset = this.parser.tell();
-    console.log(`开始解析文件头，起始偏移: ${startOffset}`);
     
     // 先检测文件格式
     const formatInfo = this.detectFileFormat();
-    console.log(`检测到文件格式: 版本=${formatInfo.version}, 新格式=${formatInfo.isNewFormat}`);
     
     const idLength = this.parser.readUint32();
-    console.log(`ID长度: ${idLength}`);
     
     // 验证ID长度
     if (idLength > 1000 || idLength < 0) {
@@ -164,15 +143,12 @@ export class EDBParser {
     }
     
     const docId = this.parser.readString(idLength);
-    console.log(`文档ID: "${docId}"`);
     
     const version = this.parser.readUint16();
-    console.log(`版本号: ${version}`);
 
     let header: EDBHeader;
 
     if (formatInfo.isNewFormat) {
-      console.log('使用新版本格式解析');
       // 新版本格式
       const zipped = this.parser.readUint8();
       const pageNum = this.parser.readUint16();
@@ -183,22 +159,18 @@ export class EDBParser {
       
       // 在读取客户端版本长度之前，检查当前位置
       const beforeClientVersionOffset = this.parser.tell();
-      console.log(`读取客户端版本长度前的位置: ${beforeClientVersionOffset}`);
       
       // 基于调试信息，尝试读取为uint8而不是uint32
       const clientVersionLength = this.parser.readUint8();
-      console.log(`客户端版本长度(作为uint8): ${clientVersionLength}`);
       
       // 检查客户端版本长度的合理性
       if (clientVersionLength > 100 || clientVersionLength < 0) {
-        console.log(`客户端版本长度异常，尝试其他数据类型...`);
         
         // 尝试重新定位到正确位置
         this.parser.seek(beforeClientVersionOffset);
         
         // 尝试读取为其他数据类型
         const asUint16 = this.parser.readUint16();
-        console.log(`作为uint16: ${asUint16}`);
         
         if (asUint16 > 0 && asUint16 < 1000) {
           // 使用uint16
@@ -250,7 +222,6 @@ export class EDBParser {
         };
       }
     } else {
-      console.log('使用旧版本格式解析');
       // 旧版本格式
       const pageNum = this.parser.readUint16();
       const itemNum = this.parser.readUint32();
@@ -261,22 +232,18 @@ export class EDBParser {
       
       // 在读取客户端版本长度之前，检查当前位置
       const beforeClientVersionOffset = this.parser.tell();
-      console.log(`读取客户端版本长度前的位置: ${beforeClientVersionOffset}`);
       
       // 基于调试信息，尝试读取为uint8而不是uint32
       const clientVersionLength = this.parser.readUint8();
-      console.log(`客户端版本长度(作为uint8): ${clientVersionLength}`);
       
       // 检查客户端版本长度的合理性
       if (clientVersionLength > 100 || clientVersionLength < 0) {
-        console.log(`客户端版本长度异常，尝试其他数据类型...`);
         
         // 尝试重新定位到正确位置
         this.parser.seek(beforeClientVersionOffset);
         
         // 尝试读取为其他数据类型
         const asUint16 = this.parser.readUint16();
-        console.log(`作为uint16: ${asUint16}`);
         
         if (asUint16 > 0 && asUint16 < 1000) {
           // 使用uint16
@@ -341,7 +308,6 @@ export class EDBParser {
       }
     }
 
-    console.log(`文件头解析完成，当前偏移: ${this.parser.tell()}`);
     return header;
   }
 
@@ -389,10 +355,8 @@ export class EDBParser {
     }
 
     const currentOffset = this.parser.tell();
-    console.log(`开始解析图元，位置: ${currentOffset}`);
     
     const type = this.parser.readUint8();
-    console.log(`图元类型: ${type}`);
     
     // 尝试不同的数据长度读取方式
     let dataLength: number;
@@ -403,22 +367,18 @@ export class EDBParser {
     try {
       // 检查剩余字节数，用于验证数据长度的合理性
       const remainingBytes = this.parser.remaining();
-      console.log(`剩余字节数: ${remainingBytes}`);
       
       // 首先尝试读取为uint32
       dataLength = this.parser.readUint32();
-      console.log(`数据长度(作为uint32): ${dataLength}`);
       
       // 验证数据长度的合理性
       if (dataLength > remainingBytes || dataLength < 0 || dataLength > 1000000) {
-        console.log(`数据长度异常，尝试其他数据类型...`);
         
         // 重新定位到数据长度位置
         this.parser.seek(currentOffset + 1);
         
         // 尝试读取为uint16
         dataLength = this.parser.readUint16();
-        console.log(`数据长度(作为uint16): ${dataLength}`);
         usedDataType = 'uint16';
         
         if (dataLength > remainingBytes || dataLength < 0 || dataLength > 100000) {
@@ -427,11 +387,9 @@ export class EDBParser {
           
           // 尝试读取为uint8
           dataLength = this.parser.readUint8();
-          console.log(`数据长度(作为uint8): ${dataLength}`);
           usedDataType = 'uint8';
           
           if (dataLength > remainingBytes || dataLength < 0 || dataLength > 10000) {
-            console.log(`所有数据类型都无效，尝试使用剩余字节数作为数据长度`);
             // 如果所有尝试都失败，使用剩余字节数作为数据长度
             this.parser.seek(currentOffset + 1);
             dataLength = remainingBytes;
@@ -454,7 +412,6 @@ export class EDBParser {
         actualDataLength = dataLength - 1; // 只减去type(1)
       }
       
-      console.log(`实际数据长度: ${actualDataLength}`);
       
       // 根据使用的数据类型调整版本读取位置
       if (usedDataType === 'uint16') {
@@ -468,11 +425,9 @@ export class EDBParser {
       }
       
       version = this.parser.readUint8();
-      console.log(`图元版本: ${version}`);
       
       // 验证版本号的合理性
       if (version > 100) {
-        console.log(`版本号异常，尝试重新定位...`);
         
         // 重新定位到版本位置
         if (usedDataType === 'uint32') {
@@ -486,11 +441,9 @@ export class EDBParser {
         }
         
         version = this.parser.readUint8();
-        console.log(`重新读取的版本号: ${version}`);
       }
       
     } catch (error) {
-      console.log(`解析图元头部失败: ${error}`);
       return null;
     }
 
@@ -505,47 +458,27 @@ export class EDBParser {
     try {
       // 使用文件头的版本信息，而不是图元的版本信息
       const fileVersion = 50; // 从文件头检测到的版本
-      console.log(`使用文件版本: ${fileVersion} 解析图元属性`);
       
       if (fileVersion >= 50) {
         // 新版本格式
-        console.log(`解析新版本图元属性，当前位置: ${this.parser.tell()}`);
         itemId = this.parser.readUint16();
-        console.log(`itemId: ${itemId}`);
         zvalue = this.parser.readInt32();
-        console.log(`zvalue: ${zvalue}`);
         status = this.parser.readUint32();
-        console.log(`status: ${status}`);
         rotate = this.parser.readFloat32();
-        console.log(`rotate: ${rotate}`);
         scaleX = this.parser.readFloat32();
-        console.log(`scaleX: ${scaleX}`);
         scaleY = this.parser.readFloat32();
-        console.log(`scaleY: ${scaleY}`);
         creatorUID = 0; // 新版本不包含creatorUID
-        console.log(`新版本属性解析完成，当前位置: ${this.parser.tell()}`);
       } else {
         // 旧版本格式
-        console.log(`解析旧版本图元属性，当前位置: ${this.parser.tell()}`);
         itemId = this.parser.readString(16);
-        console.log(`itemId: "${itemId}"`);
         creatorUID = this.parser.readUint64();
-        console.log(`creatorUID: ${creatorUID}`);
         zvalue = this.parser.readInt32();
-        console.log(`zvalue: ${zvalue}`);
         status = this.parser.readUint32();
-        console.log(`status: ${status}`);
         rotate = this.parser.readFloat64();
-        console.log(`rotate: ${rotate}`);
         scaleX = this.parser.readFloat64();
-        console.log(`scaleX: ${scaleX}`);
         scaleY = this.parser.readFloat64();
-        console.log(`scaleY: ${scaleY}`);
-        console.log(`旧版本属性解析完成，当前位置: ${this.parser.tell()}`);
       }
     } catch (error) {
-      console.log(`解析图元属性失败: ${error}`);
-      console.log(`失败位置: ${this.parser.tell()}`);
       return null;
     }
 
@@ -553,7 +486,6 @@ export class EDBParser {
     try {
       // 记录解析内容前的位置
       const beforeContentOffset = this.parser.tell();
-      console.log(`开始解析图元内容，位置: ${beforeContentOffset}`);
       
       // 使用文件版本而不是图元版本
       const fileVersion = 50;
@@ -561,21 +493,16 @@ export class EDBParser {
       
       // 记录解析内容后的位置
       const afterContentOffset = this.parser.tell();
-      console.log(`图元内容解析完成，位置: ${afterContentOffset}`);
       
     } catch (error) {
-      console.log(`解析图元内容失败: ${error}`);
-      console.log(`错误位置: ${this.parser.tell()}`);
       
       // 尝试跳过剩余数据，避免影响后续解析
       try {
         const remainingBytes = this.parser.remaining();
         if (remainingBytes > 0) {
-          console.log(`跳过剩余 ${remainingBytes} 字节`);
           this.parser.skip(remainingBytes);
         }
       } catch (skipError) {
-        console.log(`跳过数据失败: ${skipError}`);
       }
       
       // 返回一个空的图元，而不是完全失败
@@ -591,19 +518,15 @@ export class EDBParser {
 
     // 计算下一个图元的起始位置
     const nextItemOffset = currentOffset + dataLength;
-    console.log(`下一个图元应该在位置: ${nextItemOffset}`);
     
     // 检查下一个位置是否超出文件范围
     const fileSize = this.parser.getBuffer().byteLength;
     if (nextItemOffset > fileSize) {
-      console.log(`下一个位置 ${nextItemOffset} 超出文件大小 ${fileSize}，调整到文件末尾`);
       this.parser.seek(fileSize);
     } else {
       // 如果当前位置不正确，调整到正确位置
       const currentPos = this.parser.tell();
       if (currentPos !== nextItemOffset) {
-        console.log(`位置不匹配，当前: ${currentPos}, 期望: ${nextItemOffset}`);
-        console.log(`调整位置到: ${nextItemOffset}`);
         this.parser.seek(nextItemOffset);
       }
     }
@@ -627,7 +550,6 @@ export class EDBParser {
    * 解析数据项内容
    */
   private parseItemContent(type: number, version: number): EDBItemContent {
-    console.log(`解析图元内容，类型: ${type}, 版本: ${version}`);
     
     switch (type) {
       case 0: // Traceline
@@ -669,13 +591,10 @@ export class EDBParser {
       case 30: // CoursewareLink
         return this.parseCoursewareLink(version);
       case 32: // 未知类型，尝试作为TraceLine解析
-        console.log(`类型32未知，尝试作为TraceLine解析`);
         return this.parseTraceLine(version);
       case 48: // 未知类型，尝试作为TraceLine解析
-        console.log(`类型48未知，尝试作为TraceLine解析`);
         return this.parseTraceLine(version);
       case 51: // 未知类型，尝试作为TraceLine解析
-        console.log(`类型51未知，尝试作为TraceLine解析`);
         return this.parseTraceLine(version);
       case 100: // EraserLine
         return this.parseEraserLine(version);
@@ -684,7 +603,6 @@ export class EDBParser {
       case 201: // Video (废弃)
         return this.parseVideo(version);
       case 204: // 未知类型，尝试作为TraceLine解析
-        console.log(`类型204未知，尝试作为TraceLine解析`);
         return this.parseTraceLine(version);
       case 210: // TaskGood
         return this.parseTaskGood(version);
@@ -693,7 +611,6 @@ export class EDBParser {
       case 212: // VideoNew
         return this.parseVideoNew(version);
       default:
-        console.log(`未知的图元类型: ${type}，尝试作为TraceLine解析`);
         return this.parseTraceLine(version);
     }
   }
@@ -702,15 +619,12 @@ export class EDBParser {
    * 解析TraceLine
    */
   private parseTraceLine(version: number): EDBTraceLine {
-    console.log(`开始解析TraceLine，版本: ${version}，当前位置: ${this.parser.tell()}`);
     
     try {
       // 检查剩余字节数
       const remainingBytes = this.parser.remaining();
-      console.log(`TraceLine解析前剩余字节: ${remainingBytes}`);
       
       if (remainingBytes < 10) { // 最小需要的数据量
-        console.log(`剩余字节不足，返回空TraceLine`);
         return {
           lineWidth: 0,
           lineColor: 0,
@@ -723,17 +637,13 @@ export class EDBParser {
       }
       
       const lineWidth = version >= 50 ? this.parser.readUint8() : this.parser.readUint32();
-      console.log(`lineWidth: ${lineWidth}`);
       
       const lineColor = this.parser.readUint32();
-      console.log(`lineColor: ${lineColor}`);
       
       const lineStyleCount = this.parser.readUint8();
-      console.log(`lineStyleCount: ${lineStyleCount}`);
       
       // 验证lineStyleCount的合理性
       if (lineStyleCount > 100) {
-        console.log(`lineStyleCount异常: ${lineStyleCount}，限制为0`);
         this.parser.seek(this.parser.tell() - 1); // 回退到lineStyleCount位置
         // 重新读取为0
         this.parser.readUint8(); // 读取当前值
@@ -745,14 +655,11 @@ export class EDBParser {
         if (this.parser.hasMore()) {
           styleValues.push(this.parser.readUint8());
         } else {
-          console.log(`读取styleValues时数据不足，停止读取`);
           break;
         }
       }
-      console.log(`styleValues: [${styleValues.join(', ')}]`);
 
       if (!this.parser.hasMore()) {
-        console.log(`读取pointNum前数据不足，返回空TraceLine`);
         return {
           lineWidth,
           lineColor,
@@ -765,11 +672,9 @@ export class EDBParser {
       }
       
       const pointNum = version >= 50 ? this.parser.readUint16() : this.parser.readUint32();
-      console.log(`pointNum: ${pointNum}`);
       
       // 验证pointNum的合理性
       if (pointNum > 10000) {
-        console.log(`pointNum异常: ${pointNum}，限制为0`);
         return {
           lineWidth,
           lineColor,
@@ -784,7 +689,6 @@ export class EDBParser {
       const pointData: Point[] = [];
       for (let i = 0; i < pointNum; i++) {
         if (!this.parser.hasMore()) {
-          console.log(`读取pointData时数据不足，停止读取`);
           break;
         }
         
@@ -793,23 +697,19 @@ export class EDBParser {
           const y = version >= 50 ? this.parser.readFloat32() : this.parser.readFloat64();
           pointData.push({ x, y });
         } catch (error) {
-          console.log(`读取点数据失败: ${error}`);
           break;
         }
       }
-      console.log(`成功读取 ${pointData.length} 个点`);
 
       let pragmaData: EDBPragmaData | null = null;
       if (version >= 50 && this.parser.hasMore()) {
         try {
           pragmaData = this.parsePragmaData();
         } catch (error) {
-          console.log(`解析pragmaData失败: ${error}`);
           pragmaData = null;
         }
       }
 
-      console.log(`TraceLine解析完成，当前位置: ${this.parser.tell()}`);
       
       return {
         lineWidth,
@@ -822,7 +722,6 @@ export class EDBParser {
       };
       
     } catch (error) {
-      console.log(`TraceLine解析失败: ${error}`);
       return {
         lineWidth: 0,
         lineColor: 0,

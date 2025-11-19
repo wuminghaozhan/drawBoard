@@ -107,7 +107,7 @@ const stateHandler = new StateHandler(toolManager, historyManager, ...);
 
 // 状态订阅
 const unsubscribe = drawBoard.onStateChange((state) => {
-  console.log('画板状态变化:', state);
+  // 状态变化处理
 });
 ```
 

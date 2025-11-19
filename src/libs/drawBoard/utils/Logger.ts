@@ -115,7 +115,6 @@ export class Logger {
    */
   public debug(message: string, ...args: unknown[]): void {
     if (this.isDevelopment && this.currentLevel >= LogLevel.DEBUG) {
-      console.log(`[DEBUG] ${message}`, ...args);
     }
   }
 
@@ -124,7 +123,6 @@ export class Logger {
    */
   public performance(message: string, ...args: unknown[]): void {
     if (this.isDevelopment && this.currentLevel >= LogLevel.DEBUG) {
-      console.log(`[PERF] ${message}`, ...args);
     }
   }
 

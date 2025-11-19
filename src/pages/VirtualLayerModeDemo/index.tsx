@@ -52,7 +52,6 @@ const VirtualLayerModeDemo: React.FC = () => {
     setCurrentMode(mode);
     updateLayerStats();
     
-    console.log(`虚拟图层模式已切换为: ${mode}`);
   };
 
   // 清空画板

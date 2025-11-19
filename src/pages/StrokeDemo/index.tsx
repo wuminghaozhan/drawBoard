@@ -70,7 +70,6 @@ const StrokeDemo: React.FC = () => {
 
   const handleStrokeConfigChange = (config: StrokeConfig) => {
     setStrokeConfig(config);
-    console.log('运笔配置已更新:', config);
   };
 
   const handlePresetChange = (presetType: StrokePresetType, config: StrokeConfig) => {
@@ -83,7 +82,6 @@ const StrokeDemo: React.FC = () => {
     }
     setCurrentTool('pen');
     
-    console.log('预设已切换:', presetType, config);
   };
 
   const handleClear = () => {

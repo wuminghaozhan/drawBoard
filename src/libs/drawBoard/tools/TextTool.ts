@@ -66,7 +66,6 @@ export class TextTool extends DrawTool {
   public draw(ctx: CanvasRenderingContext2D, action: TextAction): void {
     try {
       if (action.points.length === 0) {
-        console.warn('TextTool: 没有绘制点');
         return;
       }
 

@@ -1,15 +1,16 @@
 import type { DrawAction } from '../DrawTool';
 import type { Point } from '../../core/CanvasEngine';
-import type { AnchorPoint, AnchorType, Bounds, ShapeAnchorHandler } from './AnchorTypes';
+import type { AnchorPoint, AnchorType, Bounds } from './AnchorTypes';
 import { logger } from '../../utils/Logger';
 import { BoundsValidator } from '../../utils/BoundsValidator';
+import { BaseAnchorHandler } from './BaseAnchorHandler';
+import { AnchorUtils } from '../../utils/AnchorUtils';
 
 /**
  * 直线锚点处理器
  * 实现直线图形的锚点生成和拖拽处理
  */
-export class LineAnchorHandler implements ShapeAnchorHandler {
-  private readonly anchorSize: number = 8;
+export class LineAnchorHandler extends BaseAnchorHandler {
   
   /**
    * 生成直线锚点
@@ -20,7 +21,7 @@ export class LineAnchorHandler implements ShapeAnchorHandler {
     }
     
     const anchors: AnchorPoint[] = [];
-    const halfSize = this.anchorSize / 2;
+    const halfSize = AnchorUtils.DEFAULT_ANCHOR_SIZE / 2;
     
     const start = action.points[0];
     const end = action.points[1];
@@ -145,49 +146,9 @@ export class LineAnchorHandler implements ShapeAnchorHandler {
   }
   
   /**
-   * 处理直线移动
-   */
-  public handleMove(
-    action: DrawAction,
-    deltaX: number,
-    deltaY: number,
-    canvasBounds?: { width: number; height: number }
-  ): DrawAction | null {
-    if (!isFinite(deltaX) || !isFinite(deltaY)) {
-      return null;
-    }
-    
-    const newPoints = action.points.map(point => {
-      const newPoint = {
-        x: point.x + deltaX,
-        y: point.y + deltaY,
-        timestamp: point.timestamp
-      };
-      
-      // 使用统一的边界验证器限制点在画布范围内
-      if (canvasBounds) {
-        const canvasBoundsType = {
-          x: 0,
-          y: 0,
-          width: canvasBounds.width,
-          height: canvasBounds.height
-        };
-        return BoundsValidator.clampPointToCanvas(newPoint, canvasBoundsType);
-      }
-      
-      return newPoint;
-    });
-    
-    return {
-      ...action,
-      points: newPoints
-    };
-  }
-  
-  /**
    * 计算直线中心点（线段中点）
    */
-  public calculateCenterPoint(action: DrawAction, bounds?: Bounds): Point {
+  public calculateCenterPoint(action: DrawAction): Point {
     if (action.points.length >= 2) {
       const start = action.points[0];
       const end = action.points[1];
