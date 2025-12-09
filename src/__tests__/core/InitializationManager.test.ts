@@ -168,7 +168,7 @@ describe('InitializationManager', () => {
     it('应该完成完整的初始化流程', () => {
       const coreComponents = InitializationManager.initializeCoreComponents(container, config);
       const handlers = InitializationManager.initializeHandlers(coreComponents, jest.fn());
-      const mockDrawBoard = {};
+      const mockDrawBoard = { recalculateComplexity: jest.fn() };
 
       expect(() => {
         InitializationManager.setupDependencies(coreComponents, handlers, mockDrawBoard);

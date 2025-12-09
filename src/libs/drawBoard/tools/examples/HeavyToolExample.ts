@@ -178,10 +178,10 @@ export class AIPaintingTool extends DrawTool {
  * 3D建模工具示例 - 重量级工具
  */
 export class ThreeDModelingTool extends DrawTool {
-  private threeJS: any = null;
+  private threeJS: { Scene: new () => object; WebGLRenderer: new (options: { antialias: boolean }) => object } | null = null;
   private isInitialized: boolean = false;
-  private renderer: any = null;
-  private physicsEngine: any = null;
+  private renderer: object | null = null;
+  private physicsEngine: { simulate: () => Promise<{ success: boolean }> } | null = null;
 
   constructor() {
     super('3D建模', '3d-modeling');
@@ -244,6 +244,11 @@ export class ThreeDModelingTool extends DrawTool {
       await this.initialize3DEngine();
     }
 
+    // 模拟使用渲染器和物理引擎（示例代码）
+    if (this.renderer && this.physicsEngine) {
+      await this.physicsEngine.simulate();
+    }
+
     // 绘制3D建模界面
     ctx.fillStyle = '#2196F3';
     ctx.font = '14px Arial';
@@ -295,8 +300,6 @@ export class ThreeDModelingTool extends DrawTool {
  */
 export class CollaborativeTool extends DrawTool {
   private isConnected: boolean = false;
-  private websocket: any = null;
-  private serverConnection: any = null;
 
   constructor() {
     super('协作工具', 'collaborative');
@@ -328,14 +331,7 @@ export class CollaborativeTool extends DrawTool {
    */
   private async connectToServer(): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    this.websocket = {
-    };
-    
-    this.serverConnection = {
-      status: 'connected',
-      roomId: 'room-123'
-    };
+    // 模拟连接建立（示例代码）
   }
 
   /**

@@ -13,7 +13,7 @@ export class RectAnchorHandler extends BaseAnchorHandler {
   /**
    * 生成矩形锚点
    */
-  public generateAnchors(action: DrawAction, bounds: Bounds): AnchorPoint[] {
+  public generateAnchors(_action: DrawAction, bounds: Bounds): AnchorPoint[] {
     const anchors: AnchorPoint[] = [];
     
     // 生成中心点
@@ -37,7 +37,7 @@ export class RectAnchorHandler extends BaseAnchorHandler {
     startPoint: Point,
     currentPoint: Point,
     dragStartBounds: Bounds,
-    dragStartAction?: DrawAction
+    _dragStartAction?: DrawAction
   ): DrawAction | null {
     // 中心点拖拽：移动整个矩形
     if (anchorType === 'center') {

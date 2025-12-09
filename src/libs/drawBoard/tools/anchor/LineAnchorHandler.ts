@@ -13,7 +13,7 @@ export class LineAnchorHandler extends BaseAnchorHandler {
   /**
    * 生成直线锚点
    */
-  public generateAnchors(action: DrawAction, bounds: Bounds): AnchorPoint[] {
+  public generateAnchors(action: DrawAction, _bounds: Bounds): AnchorPoint[] {
     if (action.points.length < 2) {
       return [];
     }
@@ -70,8 +70,8 @@ export class LineAnchorHandler extends BaseAnchorHandler {
     anchorType: AnchorType,
     startPoint: Point,
     currentPoint: Point,
-    dragStartBounds: Bounds,
-    dragStartAction?: DrawAction
+    _dragStartBounds: Bounds,
+    _dragStartAction?: DrawAction
   ): DrawAction | null {
     if (action.points.length < 2) {
       return null;

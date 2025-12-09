@@ -1309,6 +1309,7 @@ export class DrawingHandler {
       const selectTool = currentTool as unknown as {
         getCurrentSelectionBounds: () => { x: number; y: number; width: number; height: number } | null;
         getSelectedActions: () => DrawAction[];
+        setSelectedActions?: (actions: DrawAction[]) => void;
         isSelecting: boolean;
         selectionStartPoint: Point | null;
         draw: (ctx: CanvasRenderingContext2D, action: DrawAction) => void;
@@ -1378,19 +1379,15 @@ export class DrawingHandler {
                     isDrawLayersInitialized: this.canvasEngine?.isDrawLayersInitialized()
                   });
                   
-                  if (this.canvasEngine) {
-                    try {
-                      interactionCtx = this.canvasEngine.getSelectionLayerForVirtualLayer(minZIndexLayer.zIndex);
-                      logger.debug('drawSelectToolUI: 成功获取动态图层', {
-                        zIndex: minZIndexLayer.zIndex,
-                        canvasWidth: interactionCtx.canvas.width,
-                        canvasHeight: interactionCtx.canvas.height
-                      });
-                    } catch (error) {
-                      logger.error('drawSelectToolUI: 获取动态图层失败，回退到interaction层', error);
-                      interactionCtx = this.canvasEngine.getInteractionLayer();
-                    }
-                  } else {
+                  try {
+                    interactionCtx = this.canvasEngine.getSelectionLayerForVirtualLayer(minZIndexLayer.zIndex);
+                    logger.debug('drawSelectToolUI: 成功获取动态图层', {
+                      zIndex: minZIndexLayer.zIndex,
+                      canvasWidth: interactionCtx.canvas.width,
+                      canvasHeight: interactionCtx.canvas.height
+                    });
+                  } catch (error) {
+                    logger.error('drawSelectToolUI: 获取动态图层失败，回退到interaction层', error);
                     interactionCtx = this.canvasEngine.getInteractionLayer();
                   }
                 } else {
@@ -1442,8 +1439,10 @@ export class DrawingHandler {
       let selectedActions = selectedActionsAtStart.length > 0 ? selectedActionsAtStart : selectTool.getSelectedActions();
       
       // individual模式：如果选择被清空，可能是图层切换导致的异步清空，等待选择恢复
-      // 使用更优雅的等待机制：轮询检查，但设置最大等待时间和检查间隔
-      if (selectedActions.length === 0 && mode === 'individual' && this.virtualLayerManager) {
+      // 【修复】只有当之前确实有选择（selectedActionsAtStart.length > 0）但当前被清空时才需要等待
+      // 如果一开始就没有选择，不需要等待恢复，直接跳过等待逻辑
+      const hadSelectionBefore = selectedActionsAtStart.length > 0;
+      if (selectedActions.length === 0 && hadSelectionBefore && mode === 'individual' && this.virtualLayerManager) {
         const maxWaitTime = 50; // 最大等待时间：50ms
         const checkInterval = 5; // 检查间隔：5ms
         const maxIterations = Math.ceil(maxWaitTime / checkInterval); // 最多检查次数

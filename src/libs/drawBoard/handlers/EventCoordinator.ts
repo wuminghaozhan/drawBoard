@@ -22,13 +22,26 @@ export class EventCoordinator {
   private lastSelectToolRedrawTime: number = 0;
   private readonly SELECT_TOOL_REDRAW_INTERVAL = ConfigConstants.PERFORMANCE.THROTTLE_DELAY;
   
+  // 显式声明成员（修复 erasableSyntaxOnly 错误）
+  private toolManager: ToolManager;
+  private drawingHandler: DrawingHandler;
+  private cursorHandler: CursorHandler;
+  private syncLayerDataToSelectTool?: () => void;
+  private handleUpdatedActions?: (actions: DrawAction | DrawAction[]) => Promise<void>;
+  
   constructor(
-    private toolManager: ToolManager,
-    private drawingHandler: DrawingHandler,
-    private cursorHandler: CursorHandler,
-    private syncLayerDataToSelectTool?: () => void,
-    private handleUpdatedActions?: (actions: DrawAction | DrawAction[]) => Promise<void>
-  ) {}
+    toolManager: ToolManager,
+    drawingHandler: DrawingHandler,
+    cursorHandler: CursorHandler,
+    syncLayerDataToSelectTool?: () => void,
+    handleUpdatedActions?: (actions: DrawAction | DrawAction[]) => Promise<void>
+  ) {
+    this.toolManager = toolManager;
+    this.drawingHandler = drawingHandler;
+    this.cursorHandler = cursorHandler;
+    this.syncLayerDataToSelectTool = syncLayerDataToSelectTool;
+    this.handleUpdatedActions = handleUpdatedActions;
+  }
   
   /**
    * 处理绘制开始事件
@@ -109,8 +122,10 @@ export class EventCoordinator {
     const result = selectTool.handleMouseDown(event.point);
     logger.debug('选择工具 handleMouseDown 返回', { result });
     
-    // 触发重绘以显示选择框或锚点
-    this.drawingHandler.forceRedraw();
+    // 【修复】添加错误处理，防止未捕获的 Promise rejection
+    this.drawingHandler.forceRedraw().catch(error => {
+      logger.error('handleSelectToolDrawStart: 重绘失败', error);
+    });
     this.updateCursor();
   }
   
@@ -161,7 +176,7 @@ export class EventCoordinator {
   /**
    * 处理选择工具的绘制结束
    */
-  private async handleSelectToolDrawEnd(event: DrawEvent): Promise<void> {
+  private async handleSelectToolDrawEnd(_event: DrawEvent): Promise<void> {
     const currentTool = this.toolManager.getCurrentToolInstance();
     if (!currentTool || currentTool.getActionType() !== 'select') {
       return;

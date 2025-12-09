@@ -204,9 +204,10 @@ export class SelectionManager {
       }
       
       // 获取动作边界框的函数
-      const getBounds = (action: DrawAction) => {
+      const getBounds = (action: DrawAction): { x: number; y: number; width: number; height: number } => {
         if (action.points.length === 0) {
-          return null;
+          // 返回默认边界框（单点）
+          return { x: 0, y: 0, width: 1, height: 1 };
         }
         const xs = action.points.map(p => p.x);
         const ys = action.points.map(p => p.y);

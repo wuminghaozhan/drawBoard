@@ -1,4 +1,4 @@
-import { DrawBoardError, DrawBoardErrorCode, type DrawBoardErrorCode as DrawBoardErrorCodeType } from './ErrorHandler';
+import { DrawBoardError, type DrawBoardErrorCode as DrawBoardErrorCodeType } from './ErrorHandler';
 import { ErrorHandler } from './ErrorHandler';
 import { logger } from './Logger';
 

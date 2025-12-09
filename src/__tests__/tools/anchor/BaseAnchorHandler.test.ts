@@ -8,7 +8,7 @@ import type { AnchorPoint, AnchorType, Bounds } from '../../../libs/drawBoard/to
  * 用于测试 BaseAnchorHandler 的通用方法
  */
 class TestAnchorHandler extends BaseAnchorHandler {
-  generateAnchors(action: DrawAction, bounds: Bounds): AnchorPoint[] {
+  generateAnchors(_action: DrawAction, bounds: Bounds): AnchorPoint[] {
     // 简单的测试实现
     return [
       {
@@ -24,11 +24,11 @@ class TestAnchorHandler extends BaseAnchorHandler {
 
   handleAnchorDrag(
     action: DrawAction,
-    anchorType: AnchorType,
-    startPoint: Point,
-    currentPoint: Point,
-    dragStartBounds: Bounds,
-    dragStartAction?: DrawAction
+    _anchorType: AnchorType,
+    _startPoint: Point,
+    _currentPoint: Point,
+    _dragStartBounds: Bounds,
+    _dragStartAction?: DrawAction
   ): DrawAction | null {
     // 简单的测试实现
     return action;

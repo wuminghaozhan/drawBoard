@@ -115,10 +115,6 @@ export class SelectTool extends DrawTool {
     return this.dragConfig.sensitivity;
   }
 
-  private get ANCHOR_CACHE_TTL(): number {
-    return this.dragConfig.anchorCacheTTL;
-  }
-
   // 性能优化：边界框缓存
   private boundsCache: Map<string, { x: number; y: number; width: number; height: number }> = new Map();
   private readonly MAX_CACHE_SIZE = 100; // 缓存最大大小
@@ -278,6 +274,11 @@ export class SelectTool extends DrawTool {
     const previousSelectedCount = this.selectedActions.length;
     const previousSelectedIds = this.selectedActions.map(a => a.id);
     
+    // 【修复】必须在赋值新 actions 之前保存旧的 allActions
+    // 之前的 bug：先赋值 this.allActions = actions，再取 previousAllActions = this.allActions
+    // 导致 previousAllActions 实际上指向新的 actions，而不是旧值
+    const previousAllActions = [...this.allActions];
+    
     this.allActions = actions;
     
     if (clearSelection) {
@@ -290,9 +291,6 @@ export class SelectTool extends DrawTool {
     } else {
       // 清理不在当前图层中的选中actions
       const beforeFilterCount = this.selectedActions.length;
-      
-      // 保存之前的allActions，用于检查action是否曾经存在
-      const previousAllActions = this.allActions;
       
       // 过滤选中的actions，只保留在当前图层中的actions
       // 注意：如果选中的action不在新的actions中，但之前在allActions中存在，则保留选择
@@ -361,10 +359,12 @@ export class SelectTool extends DrawTool {
       // 如果选中的actions发生变化，更新变换模式
       // 注意：在individual模式下，即使action不在新的actions中，也应该保留选择
       if (this.selectedActions.length === 1) {
-        this.enterTransformMode(this.selectedActions[0]);
-        // 清除锚点缓存，强制重新生成锚点
+        // 【修复】先清除缓存，再进入变换模式
+        // 之前顺序是 enterTransformMode → clearAnchorCache，导致刚生成的锚点缓存被清除
         this.clearAnchorCache();
-        logger.debug('SelectTool.setLayerActions: 进入变换模式，清除锚点缓存', {
+        this.clearBoundsCache();
+        this.enterTransformMode(this.selectedActions[0]);
+        logger.debug('SelectTool.setLayerActions: 进入变换模式', {
           actionId: this.selectedActions[0].id,
           actionType: this.selectedActions[0].type
         });
@@ -375,6 +375,7 @@ export class SelectTool extends DrawTool {
         this.exitTransformMode();
         // 清除锚点缓存
         this.clearAnchorCache();
+        this.clearBoundsCache();
       }
     }
     
@@ -1434,11 +1435,18 @@ export class SelectTool extends DrawTool {
     }
     
     // 检查缓存是否有效
-    // 优化：简化缓存键生成逻辑
-    // 注意：拖拽时不使用缓存，所以这里只需要基于 selectedActions 生成缓存键
-    // 拖拽结束后，selectedActions[0] 已更新，缓存键会自动反映新状态
+    // 【修复】缓存键必须包含 action 的内容变化指示器（不仅仅是 ID）
+    // 否则变形/位移后，ID 相同但 points 改变，会错误地使用旧缓存
+    // 使用 action 的第一个和最后一个点的坐标作为内容指纹
     const currentActionIds = this.selectedActions.map(a => a.id).sort();
-    const cacheKey = currentActionIds.join(',');
+    const contentFingerprint = this.selectedActions.map(a => {
+      if (a.points.length === 0) return `${a.id}:empty`;
+      const first = a.points[0];
+      const last = a.points[a.points.length - 1];
+      // 使用四舍五入减少浮点精度问题
+      return `${a.id}:${Math.round(first.x)},${Math.round(first.y)},${Math.round(last.x)},${Math.round(last.y)},${a.points.length}`;
+    }).join('|');
+    const cacheKey = `${currentActionIds.join(',')}_${contentFingerprint}`;
     
     // 拖拽时不使用缓存，确保实时更新
     if (!this.isDraggingResizeAnchor && 
@@ -2028,38 +2036,6 @@ export class SelectTool extends DrawTool {
       logger.warn('SelectTool: 无法获取画布尺寸', error);
       return null;
     }
-  }
-
-  /**
-   * 限制边界框在画布范围内
-   * 使用统一的边界验证器
-   * @internal 用于边界检查和约束
-   */
-  private clampBoundsToCanvas(bounds: { x: number; y: number; width: number; height: number }): { x: number; y: number; width: number; height: number } {
-    const canvasBounds = this.getCanvasBounds();
-    if (!canvasBounds) {
-      return bounds; // 如果无法获取画布尺寸，返回原值
-    }
-    
-    const boundsType: BoundsType = {
-      x: bounds.x,
-      y: bounds.y,
-      width: bounds.width,
-      height: bounds.height
-    };
-    
-    const canvasBoundsType: BoundsType = {
-      x: 0,
-      y: 0,
-      width: canvasBounds.width,
-      height: canvasBounds.height
-    };
-    
-    // 使用统一的边界验证器
-    const clamped = BoundsValidator.clampBoundsToCanvas(boundsType, canvasBoundsType);
-    // 确保最小尺寸
-    const minSize = 10;
-    return BoundsValidator.ensureMinSize(clamped, minSize);
   }
 
   /**
@@ -3731,10 +3707,18 @@ export class SelectTool extends DrawTool {
       ? [this.selectedActionForTransform]
       : this.selectedActions;
     
-    // 生成缓存key（基于action IDs和points数量，确保内容变化时缓存失效）
+    // 【修复】生成缓存key（基于action IDs和内容指纹，确保内容变化时缓存失效）
     // 注意：如果正在拖拽，不使用缓存，确保实时更新
+    // 之前只用 actionIds，导致变形/位移后缓存未失效
     const actionIds = actionsToUse.map(a => a.id).sort();
-    const cacheKey = actionIds.join(',');
+    const contentFingerprint = actionsToUse.map(a => {
+      if (a.points.length === 0) return `${a.id}:empty`;
+      const first = a.points[0];
+      const last = a.points[a.points.length - 1];
+      // 使用四舍五入减少浮点精度问题
+      return `${a.id}:${Math.round(first.x)},${Math.round(first.y)},${Math.round(last.x)},${Math.round(last.y)},${a.points.length}`;
+    }).join('|');
+    const cacheKey = `${actionIds.join(',')}_${contentFingerprint}`;
     
     // 检查缓存（拖拽时不使用缓存）
     if (!this.isDraggingResizeAnchor && 

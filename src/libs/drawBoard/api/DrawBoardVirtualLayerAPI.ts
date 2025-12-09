@@ -232,8 +232,10 @@ export class DrawBoardVirtualLayerAPI {
   public reorderVirtualLayer(layerId: string, newIndex: number): boolean {
     const success = this.virtualLayerManager.reorderLayer(layerId, newIndex);
     if (success) {
-      // 触发重绘
-      this.drawingHandler.forceRedraw();
+      // 【修复】添加错误处理，防止未捕获的 Promise rejection
+      this.drawingHandler.forceRedraw().catch(error => {
+        logger.error('reorderVirtualLayer: 重绘失败', error);
+      });
     }
     return success;
   }
@@ -244,7 +246,9 @@ export class DrawBoardVirtualLayerAPI {
   public moveVirtualLayerToTop(layerId: string): boolean {
     const success = this.virtualLayerManager.moveLayerToTop(layerId);
     if (success) {
-      this.drawingHandler.forceRedraw();
+      this.drawingHandler.forceRedraw().catch(error => {
+        logger.error('moveVirtualLayerToTop: 重绘失败', error);
+      });
     }
     return success;
   }
@@ -255,7 +259,9 @@ export class DrawBoardVirtualLayerAPI {
   public moveVirtualLayerToBottom(layerId: string): boolean {
     const success = this.virtualLayerManager.moveLayerToBottom(layerId);
     if (success) {
-      this.drawingHandler.forceRedraw();
+      this.drawingHandler.forceRedraw().catch(error => {
+        logger.error('moveVirtualLayerToBottom: 重绘失败', error);
+      });
     }
     return success;
   }
@@ -266,7 +272,9 @@ export class DrawBoardVirtualLayerAPI {
   public moveVirtualLayerUp(layerId: string): boolean {
     const success = this.virtualLayerManager.moveLayerUp(layerId);
     if (success) {
-      this.drawingHandler.forceRedraw();
+      this.drawingHandler.forceRedraw().catch(error => {
+        logger.error('moveVirtualLayerUp: 重绘失败', error);
+      });
     }
     return success;
   }
@@ -277,7 +285,9 @@ export class DrawBoardVirtualLayerAPI {
   public moveVirtualLayerDown(layerId: string): boolean {
     const success = this.virtualLayerManager.moveLayerDown(layerId);
     if (success) {
-      this.drawingHandler.forceRedraw();
+      this.drawingHandler.forceRedraw().catch(error => {
+        logger.error('moveVirtualLayerDown: 重绘失败', error);
+      });
     }
     return success;
   }

@@ -45,7 +45,7 @@ export class PenAnchorHandler extends BaseAnchorHandler {
     startPoint: Point,
     currentPoint: Point,
     dragStartBounds: Bounds,
-    dragStartAction?: DrawAction
+    _dragStartAction?: DrawAction
   ): DrawAction | null {
     if (action.points.length === 0) {
       return null;

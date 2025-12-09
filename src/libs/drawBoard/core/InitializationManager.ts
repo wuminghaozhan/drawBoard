@@ -5,9 +5,9 @@ import { EventManager } from '../events/EventManager';
 import { ShortcutManager } from '../shortcuts/ShortcutManager';
 import { ExportManager } from '../utils/ExportManager';
 import { SelectionManager } from './SelectionManager';
-import { PerformanceManager, type PerformanceConfig } from './PerformanceManager';
+import { PerformanceManager } from './PerformanceManager';
 import { ComplexityManager } from './ComplexityManager';
-import { VirtualLayerManager, type VirtualLayerConfig } from './VirtualLayerManager';
+import { VirtualLayerManager } from './VirtualLayerManager';
 import { DrawingHandler } from '../handlers/DrawingHandler';
 import { CursorHandler } from '../handlers/CursorHandler';
 import { StateHandler } from '../handlers/StateHandler';
@@ -169,8 +169,8 @@ export class InitializationManager {
    */
   static setupDependencies(
     coreComponents: CoreComponents,
-    handlers: Handlers,
-    drawBoardInstance: any // DrawBoard实例，用于设置引用
+    _handlers: Handlers, // 保留用于将来扩展
+    drawBoardInstance: { recalculateComplexity: () => void } // DrawBoard实例，用于设置引用
   ): void {
     // 设置PerformanceManager的DrawBoard引用
     coreComponents.performanceManager.setDrawBoard(drawBoardInstance);

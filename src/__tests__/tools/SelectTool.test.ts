@@ -1,6 +1,5 @@
 import { SelectTool } from '../../libs/drawBoard/tools/SelectTool';
 import type { DrawAction } from '../../libs/drawBoard/tools/DrawTool';
-import type { Point } from '../../libs/drawBoard/core/CanvasEngine';
 
 describe('SelectTool', () => {
   let selectTool: SelectTool;

@@ -13,7 +13,7 @@ export class TextAnchorHandler extends BaseAnchorHandler {
   /**
    * 生成文字锚点
    */
-  public generateAnchors(action: DrawAction, bounds: Bounds): AnchorPoint[] {
+  public generateAnchors(_action: DrawAction, bounds: Bounds): AnchorPoint[] {
     const anchors: AnchorPoint[] = [];
     
     // 生成中心点
@@ -36,7 +36,7 @@ export class TextAnchorHandler extends BaseAnchorHandler {
     startPoint: Point,
     currentPoint: Point,
     dragStartBounds: Bounds,
-    dragStartAction?: DrawAction
+    _dragStartAction?: DrawAction
   ): DrawAction | null {
     const textAction = action as DrawAction & { 
       text?: string; 

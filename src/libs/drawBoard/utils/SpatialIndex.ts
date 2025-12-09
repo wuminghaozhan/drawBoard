@@ -185,7 +185,6 @@ class Quadtree {
  */
 export class SpatialIndex {
   private quadtree: Quadtree | null = null;
-  private actions: DrawAction[] = [];
   private canvasWidth: number = 0;
   private canvasHeight: number = 0;
 
@@ -200,7 +199,6 @@ export class SpatialIndex {
    * @param getBounds 获取动作边界框的函数
    */
   buildIndex(actions: DrawAction[], getBounds: (action: DrawAction) => { x: number; y: number; width: number; height: number }): void {
-    this.actions = actions;
     this.quadtree = new Quadtree({
       x: 0,
       y: 0,
@@ -263,7 +261,6 @@ export class SpatialIndex {
     if (this.quadtree) {
       this.quadtree.clear();
     }
-    this.actions = [];
   }
 
   /**

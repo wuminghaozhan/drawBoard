@@ -50,6 +50,9 @@ export class CanvasEngine {
   
   // 跟踪正在使用的draw层（防止在绘制时删除）
   private drawLayersInUse: Set<string> = new Set();
+  
+  // 【修复】标记是否已销毁，防止 setTimeout 回调在销毁后执行
+  private isDestroyed: boolean = false;
 
   constructor(container: HTMLCanvasElement | HTMLDivElement) {
     logger.debug('🔧 CanvasEngine constructor called with:', container);
@@ -1037,6 +1040,8 @@ export class CanvasEngine {
       });
       // 延迟合并（异步，不阻塞）
       setTimeout(() => {
+        // 【修复】检查是否已销毁，防止在销毁后执行
+        if (this.isDestroyed) return;
         // 再次检查
         const stillInUse = layersToRemove.some(id => this.drawLayersInUse.has(id));
         if (!stillInUse && this.drawLayerSplitState.isSplit) {
@@ -1287,6 +1292,9 @@ export class CanvasEngine {
    */
   public destroy(): void {
     logger.info('🗑️ Destroying CanvasEngine...');
+    
+    // 【修复】标记已销毁，防止 setTimeout 回调继续执行
+    this.isDestroyed = true;
     
     // 清理所有固定canvas元素
     this.layers.forEach((layer, name) => {

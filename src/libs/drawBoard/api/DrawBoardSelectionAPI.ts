@@ -7,7 +7,7 @@ import type { DrawingHandler } from '../handlers/DrawingHandler';
 import type { CanvasEngine } from '../core/CanvasEngine';
 import { BoundsValidator, type Bounds as BoundsType } from '../utils/BoundsValidator';
 import { logger } from '../utils/Logger';
-import { ToolTypeGuards, type SelectToolInterface } from '../tools/ToolInterfaces';
+import { ToolTypeGuards } from '../tools/ToolInterfaces';
 
 /**
  * DrawBoard 选择操作 API
@@ -73,7 +73,6 @@ export class DrawBoardSelectionAPI {
   }
 
   public async deleteSelection(): Promise<void> {
-    debugger;
     // 从SelectTool获取选中的actions
     let selectedActions: DrawAction[] = [];
     const currentTool = this.toolManager.getCurrentToolInstance();
@@ -278,7 +277,7 @@ export class DrawBoardSelectionAPI {
   /**
    * 全选所有内容
    */
-  public selectAll(): void {
+  public async selectAll(): Promise<void> {
     // 获取所有历史动作
     const allActions = this.historyManager.getAllActions();
     
@@ -301,8 +300,8 @@ export class DrawBoardSelectionAPI {
       currentTool.setLayerActions(allActions, false);
     }
     
-    // 触发重绘
-    this.drawingHandler.forceRedraw();
+    // 【修复】使用 await 确保重绘完成并捕获可能的错误
+    await this.drawingHandler.forceRedraw();
     
     logger.debug('已全选', { count: allActions.length });
   }

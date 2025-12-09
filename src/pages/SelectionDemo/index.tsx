@@ -19,8 +19,9 @@ const SelectionDemo: React.FC = () => {
 
   // DrawBoard 初始化（只执行一次）
   useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+    
     if (containerRef.current && !drawBoardRef.current) {
-      
       // 确保容器有尺寸
       if (containerRef.current.offsetWidth === 0 || containerRef.current.offsetHeight === 0) {
         containerRef.current.style.width = '100%';
@@ -40,25 +41,19 @@ const SelectionDemo: React.FC = () => {
         drawBoardRef.current.setLineWidth(currentLineWidth);
 
         // 监听状态变化，实现自动更新
-        const unsubscribe = drawBoardRef.current.onStateChange(() => {
+        unsubscribe = drawBoardRef.current.onStateChange(() => {
           updateState();
         });
 
         updateState();
-
-        return () => {
-          unsubscribe();
-          if (drawBoardRef.current) {
-            drawBoardRef.current.destroy();
-            drawBoardRef.current = null;
-          }
-        };
       } catch (error) {
         console.error('=== DrawBoard 初始化失败 ===', error);
       }
     }
 
+    // 统一的清理函数
     return () => {
+      unsubscribe?.();
       if (drawBoardRef.current) {
         drawBoardRef.current.destroy();
         drawBoardRef.current = null;

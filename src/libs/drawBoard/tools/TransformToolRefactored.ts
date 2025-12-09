@@ -43,8 +43,14 @@ export class TransformToolRefactored extends DrawTool {
   private canvasEngine?: CanvasEngine;
   private selectedLayerZIndex?: number | null;
 
+  // 【修复】保存绑定后的事件处理函数引用，确保 removeEventListener 可以正确匹配
+  private boundHandleKeydown: (event: KeyboardEvent) => void;
+
   constructor() {
     super('变换', 'transform');
+    
+    // 【修复】在构造函数中绑定事件处理函数，确保引用一致
+    this.boundHandleKeydown = this.handleKeydown.bind(this);
     
     // 初始化模块化组件
     this.controlPointGenerator = new ControlPointGenerator({
@@ -487,7 +493,8 @@ export class TransformToolRefactored extends DrawTool {
   private setupKeyboardListeners(): void {
     if (this.keyboardListenerAdded) return;
     
-    document.addEventListener('keydown', this.handleKeydown.bind(this));
+    // 【修复】使用预先绑定的函数引用，确保 destroy 时可以正确移除
+    document.addEventListener('keydown', this.boundHandleKeydown);
     this.keyboardListenerAdded = true;
   }
 
@@ -534,7 +541,8 @@ export class TransformToolRefactored extends DrawTool {
    */
   public destroy(): void {
     if (this.keyboardListenerAdded) {
-      document.removeEventListener('keydown', this.handleKeydown.bind(this));
+      // 【修复】使用预先绑定的函数引用，确保可以正确移除监听器
+      document.removeEventListener('keydown', this.boundHandleKeydown);
       this.keyboardListenerAdded = false;
     }
     

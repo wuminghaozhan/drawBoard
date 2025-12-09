@@ -197,18 +197,18 @@ export type { StrokePresetType } from './tools/StrokePresets';
 // ============================================
 
 /**
- * 内部API命名空间
+ * 内部API对象（修复 erasableSyntaxOnly 错误，不使用 namespace）
  * 
  * 这些类主要用于DrawBoard内部实现，不建议直接使用
  * 除非你需要深度定制或扩展功能
  */
-export namespace Internal {
+export const Internal = {
   /** 绘制处理器 - 处理绘制相关逻辑（内部使用） */
-  export const DrawingHandler = DrawingHandlerClass;
+  DrawingHandler: DrawingHandlerClass,
   
   /** 鼠标样式处理器 - 处理鼠标样式管理（内部使用） */
-  export const CursorHandler = CursorHandlerClass;
+  CursorHandler: CursorHandlerClass,
   
   /** 状态处理器 - 处理状态管理（内部使用） */
-  export const StateHandler = StateHandlerClass;
-} 
+  StateHandler: StateHandlerClass,
+} as const;

@@ -113,16 +113,18 @@ export class Logger {
   /**
    * 调试日志（仅在开发环境显示）
    */
-  public debug(message: string, ...args: unknown[]): void {
+  public debug(_message: string, ..._args: unknown[]): void {
     if (this.isDevelopment && this.currentLevel >= LogLevel.DEBUG) {
+      // 调试日志在生产环境下为空实现
     }
   }
 
   /**
    * 性能日志（仅在开发环境显示）
    */
-  public performance(message: string, ...args: unknown[]): void {
+  public performance(_message: string, ..._args: unknown[]): void {
     if (this.isDevelopment && this.currentLevel >= LogLevel.DEBUG) {
+      // 性能日志在生产环境下为空实现
     }
   }
 

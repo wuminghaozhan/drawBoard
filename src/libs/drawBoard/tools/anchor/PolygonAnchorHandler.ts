@@ -3,7 +3,6 @@ import type { Point } from '../../core/CanvasEngine';
 import type { AnchorPoint, AnchorType, Bounds } from './AnchorTypes';
 import { BaseAnchorHandler } from './BaseAnchorHandler';
 import { ShapeUtils } from '../../utils/ShapeUtils';
-import { AnchorUtils } from '../../utils/AnchorUtils';
 
 /**
  * 多边形锚点处理器
@@ -161,7 +160,7 @@ export class PolygonAnchorHandler extends BaseAnchorHandler {
     anchorType: AnchorType,
     startPoint: Point,
     currentPoint: Point,
-    dragStartBounds: Bounds,
+    _dragStartBounds: Bounds,
     dragStartAction?: DrawAction
   ): DrawAction | null {
     if (action.points.length === 0) {
@@ -251,10 +250,12 @@ export class PolygonAnchorHandler extends BaseAnchorHandler {
     // 更新 action.points
     // 如果原始 action.points 是顶点列表，直接更新
     // 否则需要转换为顶点列表格式
-    const polygonAction = action as DrawAction & {
+    // 保留类型断言用于将来扩展
+    const _polygonAction = action as DrawAction & {
       polygonType?: 'triangle' | 'pentagon' | 'hexagon' | 'star' | 'custom';
       sides?: number;
     };
+    void _polygonAction; // 避免 lint 警告
     
     // 检查原始 action.points 的结构
     const originalVertices = this.getPolygonVertices(action);
@@ -274,12 +275,9 @@ export class PolygonAnchorHandler extends BaseAnchorHandler {
       };
     } else {
       // 如果原始是中心+边缘结构，转换为顶点列表
-      // 保留多边形类型信息
       return {
         ...action,
-        points: newVertices,
-        // 标记为已转换为顶点列表
-        polygonType: polygonAction.polygonType || 'custom'
+        points: newVertices
       };
     }
   }

@@ -117,10 +117,26 @@ export class PerformanceManager {
     this.drawBoard = drawBoard;
   }
 
+  // 【修复】防止 setPerformanceMode 在自动切换时循环调用
+  private isAutoSwitching: boolean = false;
+
   /**
    * 设置性能模式
+   * @param mode 性能模式
+   * @param isAutoSwitch 是否是自动切换（内部调用），自动切换时不重启监控器
    */
-  public setPerformanceMode(mode: PerformanceMode): void {
+  public setPerformanceMode(mode: PerformanceMode, isAutoSwitch: boolean = false): void {
+    // 【修复】如果是自动切换，检查是否已经在切换中，避免循环
+    if (isAutoSwitch && this.isAutoSwitching) {
+      logger.debug('PerformanceManager: 跳过自动切换，已在切换中');
+      return;
+    }
+    
+    // 如果模式没有变化，不需要重新配置
+    if (this.config.mode === mode && !isAutoSwitch) {
+      return;
+    }
+    
     this.config.mode = mode;
     
     // 根据模式调整配置
@@ -146,8 +162,9 @@ export class PerformanceManager {
         break;
     }
     
-    // 启动内存监控
-    if (this.config.enableMemoryMonitoring) {
+    // 【修复】只在非自动切换时启动内存监控，避免循环调用
+    // 自动切换是由监控器触发的，不需要重启监控器
+    if (this.config.enableMemoryMonitoring && !isAutoSwitch) {
       this.startMemoryMonitoring();
     }
   }
@@ -515,16 +532,24 @@ export class PerformanceManager {
       
       // 自动模式下的智能切换
       if (this.config.mode === PerformanceMode.AUTO) {
-        if (stats.underMemoryPressure) {
-          this.setPerformanceMode(PerformanceMode.BALANCED);
-          
-          // 触发复杂度重新计算
-          if (this.drawBoard) {
-            this.drawBoard.recalculateComplexity();
+        // 【修复】设置标志位，防止循环调用
+        this.isAutoSwitching = true;
+        try {
+          if (stats.underMemoryPressure) {
+            // 【修复】传入 isAutoSwitch = true，避免重启监控器
+            this.setPerformanceMode(PerformanceMode.BALANCED, true);
+            
+            // 触发复杂度重新计算
+            if (this.drawBoard) {
+              this.drawBoard.recalculateComplexity();
+            }
+          } else if (stats.currentCacheMemoryMB < this.config.maxCacheMemoryMB * 0.5) {
+            // 内存充足时切换到高性能模式
+            // 【修复】传入 isAutoSwitch = true，避免重启监控器
+            this.setPerformanceMode(PerformanceMode.HIGH_PERFORMANCE, true);
           }
-        } else if (stats.currentCacheMemoryMB < this.config.maxCacheMemoryMB * 0.5) {
-          // 内存充足时切换到高性能模式
-          this.setPerformanceMode(PerformanceMode.HIGH_PERFORMANCE);
+        } finally {
+          this.isAutoSwitching = false;
         }
       }
 

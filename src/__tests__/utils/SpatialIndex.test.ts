@@ -1,6 +1,5 @@
 import { SpatialIndex } from '../../libs/drawBoard/utils/SpatialIndex';
 import type { DrawAction } from '../../libs/drawBoard/tools/DrawTool';
-import type { Point } from '../../libs/drawBoard/core/CanvasEngine';
 
 describe('SpatialIndex', () => {
   let index: SpatialIndex;

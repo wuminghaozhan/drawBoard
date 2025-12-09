@@ -29,15 +29,32 @@ export type DrawSelectToolUIFn = () => Promise<void>;
  * - 选择工具UI重绘
  */
 export class RedrawManager {
+  // 显式声明成员（修复 erasableSyntaxOnly 错误）
+  private canvasEngine: CanvasEngine;
+  private historyManager: HistoryManager;
+  private toolManager: ToolManager;
+  private virtualLayerManager?: VirtualLayerManager;
+  private cacheManager?: CacheManager;
+  private drawAction?: DrawActionFn;
+  private drawSelectToolUI?: DrawSelectToolUIFn;
+  
   constructor(
-    private canvasEngine: CanvasEngine,
-    private historyManager: HistoryManager,
-    private toolManager: ToolManager,
-    private virtualLayerManager?: VirtualLayerManager,
-    private cacheManager?: CacheManager,
-    private drawAction?: DrawActionFn,
-    private drawSelectToolUI?: DrawSelectToolUIFn
-  ) {}
+    canvasEngine: CanvasEngine,
+    historyManager: HistoryManager,
+    toolManager: ToolManager,
+    virtualLayerManager?: VirtualLayerManager,
+    cacheManager?: CacheManager,
+    drawAction?: DrawActionFn,
+    drawSelectToolUI?: DrawSelectToolUIFn
+  ) {
+    this.canvasEngine = canvasEngine;
+    this.historyManager = historyManager;
+    this.toolManager = toolManager;
+    this.virtualLayerManager = virtualLayerManager;
+    this.cacheManager = cacheManager;
+    this.drawAction = drawAction;
+    this.drawSelectToolUI = drawSelectToolUI;
+  }
   
   /**
    * 全量重绘Canvas（所有图层）
@@ -403,6 +420,12 @@ export class RedrawManager {
     
     const layers = this.virtualLayerManager.getAllVirtualLayers();
     
+    // 【性能优化】使用 Map 代替 Array.find()，将 O(n) 查找优化为 O(1)
+    const actionMap = new Map<string, DrawAction>();
+    for (const action of allActions) {
+      actionMap.set(action.id, action);
+    }
+    
     for (const layer of layers) {
       if (!layer.visible || layer.locked) continue;
       
@@ -419,7 +442,7 @@ export class RedrawManager {
         if (layerCache && layer.cacheCtx) {
           layer.cacheCtx.clearRect(0, 0, layerCache.width, layerCache.height);
           for (const actionId of layer.actionIds) {
-            const action = allActions.find(a => a.id === actionId);
+            const action = actionMap.get(actionId);
             if (action) {
               await this.drawAction(layer.cacheCtx, action);
             }

@@ -1,7 +1,6 @@
 import type { Point } from '../core/CanvasEngine';
 import type { DrawAction } from '../tools/DrawTool';
 import type { Bounds } from '../tools/anchor/AnchorTypes';
-import { BoundsValidator } from './BoundsValidator';
 
 /**
  * 图形工具类

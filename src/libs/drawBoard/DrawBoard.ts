@@ -1907,22 +1907,25 @@ export class DrawBoard {
         logger.debug('✅ VirtualLayerManager已销毁');
       }
       
-      // 6. 清理DrawingHandler（如果有dispose方法）
-      if (this.drawingHandler && 'dispose' in this.drawingHandler && typeof this.drawingHandler.dispose === 'function') {
-        this.drawingHandler.dispose();
-        logger.debug('✅ DrawingHandler已清理');
+      // 6. 清理DrawingHandler
+      // 【修复】之前检查的是 dispose 方法，但实际上 DrawingHandler 有 destroy 方法
+      if (this.drawingHandler && typeof this.drawingHandler.destroy === 'function') {
+        this.drawingHandler.destroy();
+        logger.debug('✅ DrawingHandler已销毁');
       }
       
-      // 7. 清理CursorHandler（如果有dispose方法）
-      if (this.cursorHandler && 'dispose' in this.cursorHandler && typeof this.cursorHandler.dispose === 'function') {
-        this.cursorHandler.dispose();
-        logger.debug('✅ CursorHandler已清理');
+      // 7. 清理CursorHandler
+      // 【修复】之前检查的是 dispose 方法，但实际上 CursorHandler 有 destroy 方法
+      if (this.cursorHandler && typeof this.cursorHandler.destroy === 'function') {
+        this.cursorHandler.destroy();
+        logger.debug('✅ CursorHandler已销毁');
       }
       
-      // 8. 清理StateHandler（如果有dispose方法）
-      if (this.stateHandler && 'dispose' in this.stateHandler && typeof this.stateHandler.dispose === 'function') {
-        this.stateHandler.dispose();
-        logger.debug('✅ StateHandler已清理');
+      // 8. 清理StateHandler
+      // 【修复】之前检查的是 dispose 方法，但实际上 StateHandler 有 destroy 方法
+      if (this.stateHandler && typeof this.stateHandler.destroy === 'function') {
+        this.stateHandler.destroy();
+        logger.debug('✅ StateHandler已销毁');
       }
       
       // 9. 销毁所有资源管理器

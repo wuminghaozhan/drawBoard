@@ -2,7 +2,6 @@ import type { DrawAction } from '../DrawTool';
 import type { Point } from '../../core/CanvasEngine';
 import type { AnchorPoint, AnchorType, Bounds } from './AnchorTypes';
 import { logger } from '../../utils/Logger';
-import { BoundsValidator } from '../../utils/BoundsValidator';
 import { BaseAnchorHandler } from './BaseAnchorHandler';
 import { AnchorUtils } from '../../utils/AnchorUtils';
 
@@ -83,10 +82,11 @@ export class CircleAnchorHandler extends BaseAnchorHandler {
     
     // 上、下、左、右四个方向的锚点（基于圆心和半径）
     // 锚点的 x, y 是锚点左上角的位置，绘制时会加上 halfSize 得到中心点
-    const topAnchor = { x: center.x - halfSize, y: center.y - radius - halfSize, type: 'top', cursor: 'n-resize', shapeType: 'circle', isCenter: false };
-    const bottomAnchor = { x: center.x - halfSize, y: center.y + radius - halfSize, type: 'bottom', cursor: 's-resize', shapeType: 'circle', isCenter: false };
-    const leftAnchor = { x: center.x - radius - halfSize, y: center.y - halfSize, type: 'left', cursor: 'w-resize', shapeType: 'circle', isCenter: false };
-    const rightAnchor = { x: center.x + radius - halfSize, y: center.y - halfSize, type: 'right', cursor: 'e-resize', shapeType: 'circle', isCenter: false };
+    // 【修复】添加显式类型注解，避免 TypeScript 推断为 string
+    const topAnchor: AnchorPoint = { x: center.x - halfSize, y: center.y - radius - halfSize, type: 'top', cursor: 'n-resize', shapeType: 'circle', isCenter: false };
+    const bottomAnchor: AnchorPoint = { x: center.x - halfSize, y: center.y + radius - halfSize, type: 'bottom', cursor: 's-resize', shapeType: 'circle', isCenter: false };
+    const leftAnchor: AnchorPoint = { x: center.x - radius - halfSize, y: center.y - halfSize, type: 'left', cursor: 'w-resize', shapeType: 'circle', isCenter: false };
+    const rightAnchor: AnchorPoint = { x: center.x + radius - halfSize, y: center.y - halfSize, type: 'right', cursor: 'e-resize', shapeType: 'circle', isCenter: false };
     
     anchors.push(topAnchor, bottomAnchor, leftAnchor, rightAnchor);
     
@@ -113,16 +113,14 @@ export class CircleAnchorHandler extends BaseAnchorHandler {
     anchorType: AnchorType,
     startPoint: Point,
     currentPoint: Point,
-    dragStartBounds: Bounds,
-    dragStartAction?: DrawAction
+    _dragStartBounds: Bounds,
+    _dragStartAction?: DrawAction
   ): DrawAction | null {
     if (action.points.length < 2) {
       return null;
     }
     
     const center = action.points[0];
-    // 注意：CircleTool 使用 points[points.length - 1] 作为边缘点，而不是 points[1]
-    const oldEdge = action.points.length > 1 ? action.points[action.points.length - 1] : center;
     
     // 中心点拖拽：移动整个圆（此情况应该由SelectTool的移动逻辑处理）
     // 这里保留作为备用，但正常情况下不应该进入这里
@@ -222,7 +220,7 @@ export class CircleAnchorHandler extends BaseAnchorHandler {
   /**
    * 计算圆形中心点（圆心位置）
    */
-  public calculateCenterPoint(action: DrawAction, bounds?: Bounds): Point {
+  public calculateCenterPoint(action: DrawAction, _bounds?: Bounds): Point {
     if (action.points.length > 0) {
       return action.points[0]; // 圆心位置
     }

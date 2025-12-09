@@ -203,7 +203,8 @@ export class HistoryManager {
     const undoneMemory = this.calculateArrayMemorySize(this.undoneActions);
     this.currentMemoryBytes = historyMemory + undoneMemory;
     
-    const currentMemoryMB = this.currentMemoryBytes / 1024 / 1024;
+    // 【修复】使用 let 而不是 const，因为需要在循环中更新
+    let currentMemoryMB = this.currentMemoryBytes / 1024 / 1024;
     
     if (currentMemoryMB > this.maxMemoryMB) {
       logger.info(`内存使用超限 (${currentMemoryMB.toFixed(2)}MB > ${this.maxMemoryMB}MB)，开始清理`);
@@ -211,23 +212,30 @@ export class HistoryManager {
       let cleanedMemory = 0;
       
       // 优先清理重做栈
+      // 【修复】循环条件中需要重新计算 currentMemoryMB
       while (this.undoneActions.length > 0 && currentMemoryMB > this.maxMemoryMB * 0.9) {
         const removedAction = this.undoneActions.shift();
         if (removedAction) {
-          cleanedMemory += this.calculateActionMemorySize(removedAction);
+          const actionSize = this.calculateActionMemorySize(removedAction);
+          cleanedMemory += actionSize;
+          this.currentMemoryBytes -= actionSize;
+          currentMemoryMB = this.currentMemoryBytes / 1024 / 1024; // 更新循环条件变量
         }
       }
       
       // 如果还是超限，清理历史记录
+      // 【修复】循环条件中需要重新计算 currentMemoryMB
       while (this.history.length > 10 && currentMemoryMB > this.maxMemoryMB * 0.8) {
         const removedAction = this.history.shift();
         if (removedAction) {
-          cleanedMemory += this.calculateActionMemorySize(removedAction);
+          const actionSize = this.calculateActionMemorySize(removedAction);
+          cleanedMemory += actionSize;
+          this.currentMemoryBytes -= actionSize;
+          currentMemoryMB = this.currentMemoryBytes / 1024 / 1024; // 更新循环条件变量
         }
       }
       
-      // 更新内存计数
-      this.currentMemoryBytes -= cleanedMemory;
+      // 注意：currentMemoryBytes 已在循环中更新，这里不需要再减
       
       logger.info(`内存清理完成，释放: ${(cleanedMemory / 1024 / 1024).toFixed(2)}MB, 当前使用: ${(this.currentMemoryBytes / 1024 / 1024).toFixed(2)}MB`);
     }

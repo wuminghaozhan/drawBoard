@@ -1,9 +1,37 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { DrawBoard } from '../../libs/drawBoard';
 import type { ToolType } from '../../libs/drawBoard';
-import { LayerManager, type Layer } from '../../libs/drawBoard/core/LayerManager';
+// TODO: LayerManager 已被 VirtualLayerManager 替代，此 Demo 需要重构
+// import { LayerManager, type Layer } from '../../libs/drawBoard/core/LayerManager';
 import ToolPanel from '../../components/ToolPanel';
 import './style.scss';
+
+// 临时类型定义（等待 Demo 重构）
+interface Layer {
+  id: string;
+  name: string;
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
+  actions: unknown[];
+}
+
+class LayerManager {
+  getAllLayers(): Layer[] { return []; }
+  getActiveLayer(): Layer | null { return null; }
+  getLayerStats(): { totalLayers: number; totalActions: number } { return { totalLayers: 0, totalActions: 0 }; }
+  createLayer(_name: string): Layer { return { id: '', name: '', visible: true, locked: false, opacity: 1, actions: [] }; }
+  setActiveLayer(_id: string): void {}
+  deleteLayer(_id: string): boolean { return false; }
+  getLayer(_id: string): Layer | null { return null; }
+  setLayerVisible(_id: string, _visible: boolean): void {}
+  setLayerLocked(_id: string, _locked: boolean): void {}
+  setLayerOpacity(_id: string, _opacity: number): void {}
+  renameLayer(_id: string, _name: string): void {}
+  duplicateLayer(_id: string): Layer | null { return null; }
+  clearLayer(_id: string): void {}
+  moveLayer(_id: string, _newIndex: number): void {}
+}
 
 const LayerDemo: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);

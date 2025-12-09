@@ -1517,29 +1517,54 @@ export class VirtualLayerManager {
 
   /**
    * 打印状态验证报告到控制台（便于调试）
+   * 
+   * 注意：此方法故意使用 console.group/log 而非 logger，
+   * 因为它专门用于在开发者工具中提供格式化的分组输出。
+   * 在生产环境中，应使用 validateState() 方法获取结果。
    */
   public printValidationReport(): void {
     const result = this.validateState();
     
+    // 同时使用 logger 记录，方便在日志系统中追踪
+    logger.info('VirtualLayerManager 状态验证', {
+      isValid: result.isValid,
+      errorCount: result.errors.length,
+      warningCount: result.warnings.length
+    });
+    
+    // 使用 console.group 在开发者工具中提供格式化输出
+    // eslint-disable-next-line no-console
     console.group('🔍 VirtualLayerManager 状态验证报告');
+    // eslint-disable-next-line no-console
     console.log(`状态: ${result.isValid ? '✅ 有效' : '❌ 无效'}`);
+    // eslint-disable-next-line no-console
     console.log(`图层数量: ${this.virtualLayers.size}`);
+    // eslint-disable-next-line no-console
     console.log(`Action 映射数量: ${this.actionLayerMap.size}`);
+    // eslint-disable-next-line no-console
     console.log(`当前模式: ${this.mode}`);
+    // eslint-disable-next-line no-console
     console.log(`活动图层: ${this.activeLayerId || '无'}`);
     
     if (result.errors.length > 0) {
+      // eslint-disable-next-line no-console
       console.group('❌ 错误:');
+      // eslint-disable-next-line no-console
       result.errors.forEach(err => console.error(err));
+      // eslint-disable-next-line no-console
       console.groupEnd();
     }
     
     if (result.warnings.length > 0) {
+      // eslint-disable-next-line no-console
       console.group('⚠️ 警告:');
+      // eslint-disable-next-line no-console
       result.warnings.forEach(warn => console.warn(warn));
+      // eslint-disable-next-line no-console
       console.groupEnd();
     }
     
+    // eslint-disable-next-line no-console
     console.groupEnd();
   }
 

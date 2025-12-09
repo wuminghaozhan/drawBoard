@@ -21,7 +21,6 @@ import { ToolTypeGuards } from '../tools/ToolInterfaces';
 export class DrawBoardToolAPI {
   private toolManager: ToolManager;
   private canvasEngine: CanvasEngine;
-  private complexityManager: ComplexityManager;
   private syncLayerDataToSelectTool: () => void;
   private checkComplexityRecalculation: () => Promise<void>;
   private updateCursor: () => void;
@@ -31,7 +30,7 @@ export class DrawBoardToolAPI {
   constructor(
     toolManager: ToolManager,
     canvasEngine: CanvasEngine,
-    complexityManager: ComplexityManager,
+    _complexityManager: ComplexityManager, // 保留参数用于将来扩展
     syncLayerDataToSelectTool: () => void,
     checkComplexityRecalculation: () => Promise<void>,
     updateCursor: () => void,
@@ -40,7 +39,6 @@ export class DrawBoardToolAPI {
   ) {
     this.toolManager = toolManager;
     this.canvasEngine = canvasEngine;
-    this.complexityManager = complexityManager;
     this.syncLayerDataToSelectTool = syncLayerDataToSelectTool;
     this.checkComplexityRecalculation = checkComplexityRecalculation;
     this.updateCursor = updateCursor;

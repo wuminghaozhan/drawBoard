@@ -1,6 +1,6 @@
 import { CircleAnchorHandler } from '../../../libs/drawBoard/tools/anchor/CircleAnchorHandler';
 import type { DrawAction } from '../../../libs/drawBoard/tools/DrawTool';
-import type { AnchorType, Bounds } from '../../../libs/drawBoard/tools/anchor/AnchorTypes';
+import type { Bounds } from '../../../libs/drawBoard/tools/anchor/AnchorTypes';
 import type { Point } from '../../../libs/drawBoard/core/CanvasEngine';
 
 describe('CircleAnchorHandler', () => {

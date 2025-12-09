@@ -1,5 +1,4 @@
 import type { Point } from '../core/CanvasEngine';
-import { logger } from './Logger';
 
 /**
  * 边界框接口
@@ -247,10 +246,10 @@ export class BoundsValidator {
    */
   static normalizeBounds(bounds: Partial<Bounds>): Bounds {
     return {
-      x: isFinite(bounds.x) ? bounds.x! : 0,
-      y: isFinite(bounds.y) ? bounds.y! : 0,
-      width: isFinite(bounds.width) && bounds.width! > 0 ? bounds.width! : 1,
-      height: isFinite(bounds.height) && bounds.height! > 0 ? bounds.height! : 1
+      x: (bounds.x !== undefined && isFinite(bounds.x)) ? bounds.x : 0,
+      y: (bounds.y !== undefined && isFinite(bounds.y)) ? bounds.y : 0,
+      width: (bounds.width !== undefined && isFinite(bounds.width) && bounds.width > 0) ? bounds.width : 1,
+      height: (bounds.height !== undefined && isFinite(bounds.height) && bounds.height > 0) ? bounds.height : 1
     };
   }
 }

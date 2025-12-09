@@ -91,8 +91,10 @@ export class EventManager {
     });
     
     // 鼠标事件
+    // 【修复】mousemove 之前使用匿名箭头函数绑定，导致 destroy() 时无法正确移除
+    // 现在统一使用 boundHandlers 引用，确保事件监听器可以被正确移除
     this.canvas.addEventListener('mousedown', this.boundHandlers.mouseDown);
-    this.canvas.addEventListener('mousemove', (...args) => {this.boundHandlers.mouseMove(...args)});
+    this.canvas.addEventListener('mousemove', this.boundHandlers.mouseMove);
     this.canvas.addEventListener('mouseup', this.boundHandlers.mouseUp);
     this.canvas.addEventListener('mouseout', this.boundHandlers.mouseUp);
 

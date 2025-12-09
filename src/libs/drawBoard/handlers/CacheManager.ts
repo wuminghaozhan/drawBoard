@@ -30,10 +30,14 @@ export class CacheManager {
   private memoryMonitor: MemoryMonitor;
   private readonly MAX_MEMORY_USAGE = ConfigConstants.MEMORY.DEFAULT_MAX_USAGE;
   
+  // 显式声明成员（修复 erasableSyntaxOnly 错误）
+  private drawAction?: (ctx: CanvasRenderingContext2D, action: DrawAction) => Promise<void>;
+  
   constructor(
-    private canvasEngine: CanvasEngine,
-    private drawAction?: (ctx: CanvasRenderingContext2D, action: DrawAction) => Promise<void>
+    _canvasEngine: CanvasEngine, // 保留参数用于将来扩展
+    drawAction?: (ctx: CanvasRenderingContext2D, action: DrawAction) => Promise<void>
   ) {
+    this.drawAction = drawAction;
     this.memoryMonitor = new MemoryMonitor();
     this.memoryMonitor.setMaxMemoryUsage(this.MAX_MEMORY_USAGE);
   }
@@ -135,7 +139,7 @@ export class CacheManager {
         this.offscreenCanvas = document.createElement('canvas');
         this.offscreenCanvas.width = canvas.width;
         this.offscreenCanvas.height = canvas.height;
-        this.offscreenCtx = this.offscreenCanvas.getContext('2d');
+        this.offscreenCtx = this.offscreenCanvas.getContext('2d') ?? undefined;
         
         if (!this.offscreenCtx) {
           logger.error('无法创建离屏Canvas上下文');

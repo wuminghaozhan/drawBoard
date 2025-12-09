@@ -9,6 +9,7 @@ import type { DrawBoardConfig } from '../DrawBoard';
 import type { StrokeConfig } from '../tools/stroke/StrokeTypes';
 import type { PerformanceConfig } from '../core/PerformanceManager';
 import { PerformanceMode } from '../core/PerformanceManager';
+import type { VirtualLayerConfig, VirtualLayerMode } from '../core/VirtualLayerManager';
 import { validateDrawBoardConfig } from './DataProcessor';
 import type { ValidationResult } from './DataProcessor';
 
@@ -20,13 +21,7 @@ export interface DefaultConfigs {
   drawBoard: DrawBoardConfig;
   stroke: StrokeConfig;
   performance: PerformanceConfig;
-  virtualLayer: {
-    maxLayers: number;
-    defaultLayerName: string;
-    autoCreateLayer: boolean;
-    maxActionsPerLayer: number;
-    cleanupInterval: number;
-  };
+  virtualLayer: VirtualLayerConfig;
 }
 
 export interface ConfigPreset {
@@ -97,15 +92,11 @@ export const getDefaultPerformanceConfig = (): PerformanceConfig => ({
 /**
  * 获取默认虚拟图层配置
  */
-export const getDefaultVirtualLayerConfig = () => ({
-          mode: 'individual',
+export const getDefaultVirtualLayerConfig = (): VirtualLayerConfig => ({
+  mode: 'individual' as VirtualLayerMode,
   maxLayers: 50,
   defaultLayerName: '虚拟图层',
-  autoCreateLayer: true,
   maxActionsPerLayer: 1000,
-  cleanupInterval: 100,
-  cacheExpirationTime: 2000,
-  enableAsyncCleanup: true
 });
 
 // ============================================
