@@ -50,6 +50,10 @@ export class DrawingHandler {
   
   // 初始化draw层的锁（防止并发初始化）
   private initializingDrawLayers: boolean = false;
+  private layersInitializationPromise: Promise<void> | null = null; // 图层初始化Promise
+  
+  // 统一超时时间常量
+  private readonly LAYER_INITIALIZATION_TIMEOUT = 2000; // 图层初始化超时时间（毫秒）
 
   // 性能优化：缓存已绘制的动作
   private cachedActions: Set<string> = new Set();
@@ -196,8 +200,15 @@ export class DrawingHandler {
    */
   public async handleDrawEnd(event: DrawEvent): Promise<void> {
     try {
+      // 选择工具不通过DrawingHandler处理，直接返回
+      if (this.toolManager.getCurrentTool() === 'select') {
+        logger.debug('选择工具跳过DrawingHandler处理');
+        return;
+      }
+      
       if (!this.isDrawing || !this.currentAction) {
-        logger.warn('绘制结束事件处理失败：未在绘制状态或无当前动作');
+        // 降级为debug，因为可能是正常的边界情况（如快速点击、状态已清除等）
+        logger.debug('绘制结束事件：未在绘制状态或无当前动作（可能是正常情况）');
         return;
       }
 
@@ -458,16 +469,27 @@ export class DrawingHandler {
 
   /**
    * 清理离屏Canvas（内存紧张时调用）
+   * 改进：显式释放 GPU 资源，通过设置 canvas 尺寸为 0 来释放显存
    */
   private cleanupOffscreenCanvas(): void {
     if (this.offscreenCanvas) {
+      // 1. 先清除内容
       if (this.offscreenCtx) {
         this.offscreenCtx.clearRect(0, 0, this.offscreenCanvas.width, this.offscreenCanvas.height);
       }
+      
+      // 2. 显式释放 GPU 资源
+      // 设置 canvas 尺寸为 0 可以触发浏览器释放底层的显存
+      // 这是防止 Canvas 内存泄漏的关键步骤
+      this.offscreenCanvas.width = 0;
+      this.offscreenCanvas.height = 0;
+      
+      // 3. 清除引用
       this.offscreenCanvas = undefined;
       this.offscreenCtx = undefined;
       this.offscreenCacheDirty = true;
-      logger.debug('离屏Canvas已清理（内存紧张）');
+      
+      logger.debug('离屏Canvas已清理（内存紧张），GPU资源已释放');
     }
   }
 
@@ -533,40 +555,14 @@ export class DrawingHandler {
       if (this.canvasEngine.isDrawLayerSplit() && this.virtualLayerManager) {
         const selectedLayerZIndex = this.canvasEngine.getSelectedLayerZIndex();
         if (selectedLayerZIndex !== null) {
-          // 检查是否需要初始化bottom和top层（只在首次拆分时初始化）
-          if (!this.canvasEngine.isDrawLayersInitialized()) {
-            // 防止并发初始化：如果正在初始化，等待完成
-            if (this.initializingDrawLayers) {
-              // 等待初始化完成（最多等待1秒）
-              const maxWait = 1000;
-              const startTime = Date.now();
-              while (this.initializingDrawLayers && (Date.now() - startTime) < maxWait) {
-                await new Promise(resolve => setTimeout(resolve, 10));
-              }
-              // 如果超时或初始化失败，回退到全量重绘
-              if (!this.canvasEngine.isDrawLayersInitialized()) {
-                logger.warn('等待初始化超时或失败，回退到全量重绘');
-                await this.redrawCanvasFull();
-                return;
-              }
-            } else {
-              // 开始初始化
-              this.initializingDrawLayers = true;
-              try {
-                // 拆分draw层时，需要初始化绘制bottom和top层（如果存在）
-                await this.initializeSplitDrawLayers(selectedLayerZIndex);
-                // 标记已初始化
-                this.canvasEngine.markDrawLayersInitialized();
-              } catch (error) {
-                logger.error('初始化draw层失败', error);
-                // 初始化失败，合并draw层并回退到全量重绘
-                this.canvasEngine.mergeDrawLayers();
-                await this.redrawCanvasFull();
-                return;
-              } finally {
-                this.initializingDrawLayers = false;
-              }
-            }
+          // 统一使用ensureLayersInitialized确保图层初始化完成
+          try {
+            await this.ensureLayersInitialized();
+          } catch (error) {
+            logger.error('redrawCanvas: 图层初始化失败，回退到全量重绘', error);
+            // 初始化失败，回退到全量重绘
+            await this.redrawCanvasFull();
+            return;
           }
           
           // 只重绘选中图层
@@ -711,6 +707,11 @@ export class DrawingHandler {
         throw new Error('无法获取Canvas上下文');
       }
 
+      // individual模式：如果图层已拆分但未初始化，先完成初始化
+      if (this.canvasEngine.isDrawLayerSplit() && this.virtualLayerManager) {
+        await this.ensureLayersInitialized();
+      }
+
       // 清空画布
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -740,10 +741,54 @@ export class DrawingHandler {
         await this.drawAction(ctx, this.currentAction);
       }
 
-      // 如果是选择工具，绘制选择框和锚点
-      if (this.toolManager.getCurrentTool() === 'select') {
-        await this.drawSelectToolUI();
+      // 优化：只在必要时调用drawSelectToolUI
+      // 1. 当前工具是select - 需要绘制选择UI
+      // 2. 需要清除选择UI（从select切换到其他工具）- 需要清除选择UI
+      const currentTool = this.toolManager.getCurrentTool();
+      
+      // 检查是否需要强制清除（超时）
+      if (this.needsClearSelectionUI) {
+        const timeSinceMark = Date.now() - this.needsClearSelectionUITime;
+        if (timeSinceMark > this.CLEAR_SELECTION_UI_TIMEOUT) {
+          logger.warn('redrawCanvasFull: 清除选择UI标记超时，强制清除', {
+            timeSinceMark,
+            timeout: this.CLEAR_SELECTION_UI_TIMEOUT
+          });
+          // 直接清除UI，不调用drawSelectToolUI
+          this.clearSelectionUI();
+          this.needsClearSelectionUI = false;
+        }
       }
+      
+      const shouldCallDrawSelectToolUI = 
+        currentTool === 'select' || 
+        this.needsClearSelectionUI;
+      
+      if (shouldCallDrawSelectToolUI) {
+        logger.info('redrawCanvasFull: 调用drawSelectToolUI', {
+          currentTool,
+          needsClearSelectionUI: this.needsClearSelectionUI
+        });
+        await this.drawSelectToolUI();
+        // 清除标志
+        this.needsClearSelectionUI = false;
+        this.needsClearSelectionUITime = 0;
+        logger.info('redrawCanvasFull: drawSelectToolUI完成');
+      } else {
+        logger.debug('redrawCanvasFull: 跳过drawSelectToolUI', {
+          currentTool,
+          previousTool: this.previousTool
+        });
+      }
+      
+      // 更新工具状态（检查是否同步）
+      if (this.previousTool !== currentTool) {
+        logger.debug('redrawCanvasFull: 工具状态更新', {
+          previousTool: this.previousTool,
+          currentTool
+        });
+      }
+      this.previousTool = currentTool;
 
       logger.debug('全量重绘完成', {
         totalActions: allActions.length,
@@ -1007,6 +1052,14 @@ export class DrawingHandler {
           layerName: selectedLayer.name,
           actionCount: selectedLayer.actionIds.length
         });
+        
+        // 【重要修复】绘制选择工具UI（选区框和锚点）
+        // 之前这里缺少此调用，导致图层拆分后选中效果不显示
+        const currentTool = this.toolManager.getCurrentTool();
+        if (currentTool === 'select') {
+          logger.debug('redrawSelectedLayerOnly: 调用drawSelectToolUI绘制选择UI');
+          await this.drawSelectToolUI();
+        }
       } catch (error) {
         logger.error('只重绘选中图层失败', error);
         // 出错时回退到全量重绘
@@ -1022,12 +1075,234 @@ export class DrawingHandler {
   }
 
   /**
+   * 确保图层已初始化（使用Promise确保异步操作完成）
+   * 改进：使用事件驱动模式替代轮询，避免竞态条件和UI阻塞
+   * @returns Promise，在图层初始化完成后resolve
+   */
+  private async ensureLayersInitialized(): Promise<void> {
+    if (!this.canvasEngine.isDrawLayerSplit() || !this.virtualLayerManager) {
+      return; // 未拆分，无需初始化
+    }
+
+    const selectedLayerZIndex = this.canvasEngine.getSelectedLayerZIndex();
+    if (selectedLayerZIndex === null) {
+      return; // 无法获取选中图层zIndex
+    }
+
+    if (this.canvasEngine.isDrawLayersInitialized()) {
+      return; // 已初始化，直接返回
+    }
+
+    // 如果已有初始化Promise，等待它完成
+    if (this.layersInitializationPromise) {
+      logger.debug('ensureLayersInitialized: 等待现有初始化Promise完成');
+      try {
+        await this.layersInitializationPromise;
+        // 再次检查是否已初始化（Promise可能失败）
+        if (this.canvasEngine.isDrawLayersInitialized()) {
+          return;
+        }
+        // Promise完成但未初始化，清除Promise并继续
+        logger.warn('ensureLayersInitialized: Promise完成但未初始化，重新初始化');
+        this.layersInitializationPromise = null;
+      } catch (error) {
+        logger.error('ensureLayersInitialized: 等待初始化Promise失败', error);
+        // Promise失败，清除并继续尝试初始化
+        this.layersInitializationPromise = null;
+      }
+    }
+
+    // 如果正在初始化，使用 Promise 等待而不是轮询
+    // 改进：避免 while 循环轮询，使用带超时的 Promise
+    if (this.initializingDrawLayers) {
+      logger.debug('ensureLayersInitialized: 检测到正在初始化，等待完成');
+      
+      // 创建一个等待 Promise，带超时机制
+      const waitForInitialization = new Promise<void>((resolve, reject) => {
+        const startTime = Date.now();
+        const checkInterval = 50; // 检查间隔 50ms（比原来的 10ms 更高效）
+        const maxChecks = Math.ceil(this.LAYER_INITIALIZATION_TIMEOUT / checkInterval);
+        let checkCount = 0;
+        
+        const checkInitialized = () => {
+          checkCount++;
+          
+          // 检查是否已初始化
+          if (this.canvasEngine.isDrawLayersInitialized()) {
+            resolve();
+            return;
+          }
+          
+          // 检查是否不再处于初始化状态（可能已失败或取消）
+          if (!this.initializingDrawLayers) {
+            if (this.canvasEngine.isDrawLayersInitialized()) {
+              resolve();
+            } else {
+              // 初始化被取消但未完成，需要重新初始化
+              resolve(); // 让后续代码重新初始化
+            }
+            return;
+          }
+          
+          // 检查是否超时
+          if (checkCount >= maxChecks) {
+            const elapsed = Date.now() - startTime;
+            logger.warn('ensureLayersInitialized: 等待初始化超时', {
+              timeout: this.LAYER_INITIALIZATION_TIMEOUT,
+              elapsed,
+              checkCount
+            });
+            reject(new Error(`图层初始化超时 (${elapsed}ms)`));
+            return;
+          }
+          
+          // 继续等待（使用 requestAnimationFrame 或 setTimeout）
+          // 优先使用 requestAnimationFrame 以避免阻塞渲染
+          if (typeof requestAnimationFrame !== 'undefined') {
+            requestAnimationFrame(() => setTimeout(checkInitialized, checkInterval - 16));
+          } else {
+            setTimeout(checkInitialized, checkInterval);
+          }
+        };
+        
+        // 开始检查
+        checkInitialized();
+      });
+      
+      try {
+        await waitForInitialization;
+        // 等待完成后再次检查
+        if (this.canvasEngine.isDrawLayersInitialized()) {
+          return;
+        }
+        // 如果仍未初始化且不在初始化中，继续下面的初始化逻辑
+      } catch (error) {
+        logger.error('ensureLayersInitialized: 等待初始化失败', error);
+        throw error;
+      }
+    }
+
+    // 🔒 防止竞态条件：在创建 Promise 前先设置标志
+    // 这样其他并发调用会进入上面的等待逻辑
+    if (this.initializingDrawLayers) {
+      // 双重检查：如果在上面的等待后，另一个调用已经开始初始化
+      // 则递归调用自己以进入等待逻辑
+      logger.debug('ensureLayersInitialized: 检测到并发初始化，递归等待');
+      return this.ensureLayersInitialized();
+    }
+    
+    // 先设置标志，再创建 Promise（原子性保护）
+    this.initializingDrawLayers = true;
+
+    // 创建新的初始化Promise（注意：initializingDrawLayers 已在上面设置为 true）
+    this.layersInitializationPromise = (async () => {
+      try {
+        logger.info('ensureLayersInitialized: 开始初始化图层', {
+          selectedLayerZIndex
+        });
+        // 拆分draw层时，需要初始化绘制bottom和top层（如果存在）
+        await this.initializeSplitDrawLayers(selectedLayerZIndex);
+        // 标记已初始化
+        this.canvasEngine.markDrawLayersInitialized();
+        logger.info('ensureLayersInitialized: 图层初始化完成');
+      } catch (error) {
+        logger.error('ensureLayersInitialized: 初始化draw层失败', error);
+        // 初始化失败，合并draw层
+        this.canvasEngine.mergeDrawLayers();
+        throw error; // 重新抛出错误
+      } finally {
+        this.initializingDrawLayers = false;
+        this.layersInitializationPromise = null; // 清除Promise
+      }
+    })();
+
+    // 等待初始化完成
+    await this.layersInitializationPromise;
+  }
+
+  /**
+   * 获取图层的交互上下文（辅助方法，避免重复代码）
+   * @param layer 虚拟图层，如果为null则使用interaction层
+   * @returns Canvas上下文
+   */
+  private getInteractionContextForLayer(layer: { zIndex: number } | null): CanvasRenderingContext2D {
+    if (layer && this.canvasEngine) {
+      try {
+        return this.canvasEngine.getSelectionLayerForVirtualLayer(layer.zIndex);
+      } catch {
+        return this.canvasEngine.getInteractionLayer();
+      }
+    }
+    return this.canvasEngine?.getInteractionLayer() || ({} as CanvasRenderingContext2D);
+  }
+
+  // 防止drawSelectToolUI无限循环调用的标志
+  private isDrawingSelectToolUI: boolean = false;
+  private lastDrawSelectToolUITime: number = 0;
+  private drawingSelectToolUIStartTime: number = 0; // 开始绘制时间，用于超时检测
+  private readonly DRAW_SELECT_TOOL_UI_INTERVAL = 16; // 约60fps，防止过于频繁调用
+  private readonly DRAW_SELECT_TOOL_UI_MAX_DURATION = 1000; // 最多1秒，防止永久锁定
+  
+  // 工具切换状态跟踪（用于优化drawSelectToolUI调用）
+  private previousTool: string | null = null;
+  private needsClearSelectionUI: boolean = false; // 是否需要清除选择UI
+  private needsClearSelectionUITime: number = 0; // 标记时间，用于超时检测
+  private readonly CLEAR_SELECTION_UI_TIMEOUT = 100; // 100ms后强制清除
+
+  /**
    * 绘制选择工具的UI（选择框、锚点等）
    */
   private async drawSelectToolUI(): Promise<void> {
+    // 防止无限循环调用
+    if (this.isDrawingSelectToolUI) {
+      // 检查是否超时，如果超时则强制重置
+      const duration = Date.now() - this.drawingSelectToolUIStartTime;
+      if (duration > this.DRAW_SELECT_TOOL_UI_MAX_DURATION) {
+        logger.warn('drawSelectToolUI: 执行超时，强制重置', {
+          duration,
+          maxDuration: this.DRAW_SELECT_TOOL_UI_MAX_DURATION
+        });
+        this.isDrawingSelectToolUI = false;
+      } else {
+        logger.debug('drawSelectToolUI: 正在绘制中，跳过重复调用', {
+          duration
+        });
+        return;
+      }
+    }
+
+    // 节流：防止过于频繁调用
+    const now = Date.now();
+    if (now - this.lastDrawSelectToolUITime < this.DRAW_SELECT_TOOL_UI_INTERVAL) {
+      logger.debug('drawSelectToolUI: 调用过于频繁，跳过', {
+        timeSinceLastCall: now - this.lastDrawSelectToolUITime
+      });
+      return;
+    }
+
+    this.isDrawingSelectToolUI = true;
+    this.drawingSelectToolUIStartTime = now;
+    this.lastDrawSelectToolUITime = now;
+
     try {
+      logger.info('drawSelectToolUI: 开始绘制选择工具UI');
       const currentTool = this.toolManager.getCurrentToolInstance();
-      if (!currentTool || currentTool.getActionType() !== 'select') {
+      const currentToolType = this.toolManager.getCurrentTool();
+      
+      if (!currentTool || currentToolType !== 'select') {
+        logger.info('drawSelectToolUI: 当前工具不是select工具，清除选择UI', {
+          currentToolType,
+          hasCurrentTool: !!currentTool
+        });
+        
+        // 清除所有动态图层中的选择UI（选区和锚点）
+        this.clearSelectionUI();
+        
+        // 注意：此时工具已经切换，currentTool已经不是select工具了
+        // 选择状态应该在setTool时已经清除，这里只需要清除UI即可
+        // 如果确实需要清除select工具的状态，应该通过ToolManager获取select工具实例
+        // 但通常不需要，因为setTool时已经清除了
+        
         return;
       }
 
@@ -1038,6 +1313,16 @@ export class DrawingHandler {
         selectionStartPoint: Point | null;
         draw: (ctx: CanvasRenderingContext2D, action: DrawAction) => void;
       };
+      
+      // 在开始时就获取选中的actions，避免在后续处理中被清空
+      const selectedActionsAtStart = selectTool.getSelectedActions();
+      logger.info('drawSelectToolUI: 开始时获取选中的actions', {
+        selectedActionsCount: selectedActionsAtStart.length,
+        selectedActionIds: selectedActionsAtStart.map(a => a.id)
+      });
+
+      // 获取模式（在作用域外定义，以便后续使用）
+      const mode = this.virtualLayerManager?.getMode();
 
       // 获取交互层上下文（使用动态图层或interaction层）
       let interactionCtx: CanvasRenderingContext2D;
@@ -1045,23 +1330,157 @@ export class DrawingHandler {
         // 尝试获取动态图层（如果选中了图层）
         if (this.virtualLayerManager) {
           const activeLayer = this.virtualLayerManager.getActiveVirtualLayer();
-          if (activeLayer && this.canvasEngine) {
-            interactionCtx = this.canvasEngine.getSelectionLayerForVirtualLayer(activeLayer.zIndex);
+          
+          // individual模式：如果有选中的actions，使用它们的图层来获取动态图层
+          if (mode === 'individual') {
+            const selectedActions = selectTool.getSelectedActions();
+            if (selectedActions.length > 0) {
+          // individual模式：必须保证先动态划分图层完毕，再绘制选区和锚点
+          // 使用Promise确保图层初始化完成
+          if (this.canvasEngine && this.canvasEngine.isDrawLayerSplit() && !this.canvasEngine.isDrawLayersInitialized()) {
+            logger.info('drawSelectToolUI: individual模式，图层已拆分但未初始化，等待初始化完成', {
+              selectedActionsCount: selectedActions.length
+            });
+            try {
+              // 等待图层初始化完成
+              await this.ensureLayersInitialized();
+              logger.info('drawSelectToolUI: 图层初始化完成，继续绘制');
+            } catch (error) {
+              logger.error('drawSelectToolUI: 等待图层初始化失败', error);
+              // 初始化失败，不绘制选择UI
+              return;
+            }
+          }
+              
+              // 收集所有被选中的虚拟图层ID
+              const selectedLayerIds = new Set<string>();
+              for (const action of selectedActions) {
+                if (action.virtualLayerId) {
+                  selectedLayerIds.add(action.virtualLayerId);
+                }
+              }
+              
+              if (selectedLayerIds.size > 0) {
+                // 找到zIndex最小的选中图层来获取动态图层
+                const allLayers = this.virtualLayerManager.getAllVirtualLayers();
+                const selectedLayers = allLayers.filter(layer => selectedLayerIds.has(layer.id));
+                
+                if (selectedLayers.length > 0) {
+                  const minZIndexLayer = selectedLayers.reduce((min, layer) => 
+                    layer.zIndex < min.zIndex ? layer : min
+                  );
+                  
+                  logger.debug('drawSelectToolUI: individual模式，使用选中图层的最小zIndex', {
+                    minZIndexLayerId: minZIndexLayer.id,
+                    minZIndex: minZIndexLayer.zIndex,
+                    selectedLayerIds: Array.from(selectedLayerIds),
+                    isDrawLayerSplit: this.canvasEngine?.isDrawLayerSplit(),
+                    isDrawLayersInitialized: this.canvasEngine?.isDrawLayersInitialized()
+                  });
+                  
+                  if (this.canvasEngine) {
+                    try {
+                      interactionCtx = this.canvasEngine.getSelectionLayerForVirtualLayer(minZIndexLayer.zIndex);
+                      logger.debug('drawSelectToolUI: 成功获取动态图层', {
+                        zIndex: minZIndexLayer.zIndex,
+                        canvasWidth: interactionCtx.canvas.width,
+                        canvasHeight: interactionCtx.canvas.height
+                      });
+                    } catch (error) {
+                      logger.error('drawSelectToolUI: 获取动态图层失败，回退到interaction层', error);
+                      interactionCtx = this.canvasEngine.getInteractionLayer();
+                    }
+                  } else {
+                    interactionCtx = this.canvasEngine.getInteractionLayer();
+                  }
+                } else {
+                  // 如果找不到图层，回退到活动图层或interaction层
+                  interactionCtx = this.getInteractionContextForLayer(activeLayer);
+                }
+              } else {
+                // 没有选中的图层，回退到活动图层或interaction层
+                interactionCtx = this.getInteractionContextForLayer(activeLayer);
+              }
+            } else {
+              // 没有选中的actions，回退到活动图层或interaction层
+              interactionCtx = this.getInteractionContextForLayer(activeLayer);
+            }
           } else {
-            interactionCtx = this.canvasEngine.getInteractionLayer();
+            // grouped模式：使用活动图层
+            logger.debug('drawSelectToolUI: grouped模式，使用活动图层', {
+              hasActiveLayer: !!activeLayer,
+              activeLayerId: activeLayer?.id,
+              activeLayerZIndex: activeLayer?.zIndex
+            });
+            interactionCtx = this.getInteractionContextForLayer(activeLayer);
+            if (activeLayer) {
+              logger.debug('drawSelectToolUI: 成功获取动态图层', {
+                zIndex: activeLayer.zIndex,
+                canvasWidth: interactionCtx.canvas.width,
+                canvasHeight: interactionCtx.canvas.height
+              });
+            }
           }
         } else {
+          logger.debug('drawSelectToolUI: 没有virtualLayerManager，使用interaction层');
           interactionCtx = this.canvasEngine.getInteractionLayer();
         }
-      } catch {
+      } catch (error) {
+        logger.error('drawSelectToolUI: 获取交互层上下文失败', error);
         interactionCtx = this.canvasEngine.getInteractionLayer();
       }
       
       // 清空交互层
       interactionCtx.clearRect(0, 0, interactionCtx.canvas.width, interactionCtx.canvas.height);
+      logger.debug('drawSelectToolUI: 已清空交互层', {
+        canvasWidth: interactionCtx.canvas.width,
+        canvasHeight: interactionCtx.canvas.height
+      });
 
+      // 使用开始时获取的selectedActions，避免在后续处理中被清空
       // 如果有选中的actions，绘制锚点（通过draw方法）
-      const selectedActions = selectTool.getSelectedActions();
+      let selectedActions = selectedActionsAtStart.length > 0 ? selectedActionsAtStart : selectTool.getSelectedActions();
+      
+      // individual模式：如果选择被清空，可能是图层切换导致的异步清空，等待选择恢复
+      // 使用更优雅的等待机制：轮询检查，但设置最大等待时间和检查间隔
+      if (selectedActions.length === 0 && mode === 'individual' && this.virtualLayerManager) {
+        const maxWaitTime = 50; // 最大等待时间：50ms
+        const checkInterval = 5; // 检查间隔：5ms
+        const maxIterations = Math.ceil(maxWaitTime / checkInterval); // 最多检查次数
+        
+        let waitIterations = 0;
+        for (let i = 0; i < maxIterations; i++) {
+          // 等待一个事件循环，让Promise.resolve().then()中的恢复选择逻辑执行
+          await new Promise(resolve => setTimeout(resolve, checkInterval));
+          selectedActions = selectTool.getSelectedActions();
+          waitIterations = i + 1;
+          
+          if (selectedActions.length > 0) {
+            logger.info('drawSelectToolUI: individual模式，等待后选择已恢复', {
+              selectedActionsCount: selectedActions.length,
+              selectedActionIds: selectedActions.map(a => a.id),
+              waitIterations,
+              waitTime: waitIterations * checkInterval
+            });
+            break;
+          }
+        }
+        
+        if (selectedActions.length === 0) {
+          logger.warn('drawSelectToolUI: individual模式，等待后选择仍未恢复', {
+            selectedActionsAtStartCount: selectedActionsAtStart.length,
+            selectedActionsAtStartIds: selectedActionsAtStart.map(a => a.id),
+            waitIterations,
+            maxWaitTime
+          });
+        }
+      }
+      
+      logger.info('drawSelectToolUI: 准备绘制锚点', {
+        selectedActionsCount: selectedActions.length,
+        selectedActionIds: selectedActions.map(a => a.id)
+      });
+      
       if (selectedActions.length > 0) {
         // 创建一个临时的SelectAction用于绘制锚点
         const tempAction: DrawAction = {
@@ -1075,7 +1494,23 @@ export class DrawingHandler {
           },
           timestamp: Date.now()
         };
+        // 验证选中的actions是否仍然存在，如果被清空则尝试恢复
+        const currentSelectedActions = selectTool.getSelectedActions();
+        if (currentSelectedActions.length === 0 && selectedActions.length > 0) {
+          logger.warn('drawSelectToolUI: 选中的actions在绘制前被清空，尝试恢复', {
+            selectedActionIds: selectedActions.map(a => a.id)
+          });
+          // 尝试恢复选中的actions
+          if (selectTool.setSelectedActions) {
+            selectTool.setSelectedActions(selectedActions);
+          }
+        }
+        
+        // 使用开始时获取的selectedActions绘制，确保在重绘过程中即使选择被临时清空，也能正确绘制
         selectTool.draw(interactionCtx, tempAction as any);
+        logger.info('drawSelectToolUI: selectTool.draw完成');
+      } else {
+        logger.info('drawSelectToolUI: 没有选中的actions，跳过绘制');
       }
 
       // 如果正在框选，绘制选择框
@@ -1102,6 +1537,9 @@ export class DrawingHandler {
       }
     } catch (error) {
       logger.error('绘制选择工具UI失败', error);
+    } finally {
+      // 重置标志，允许下次调用
+      this.isDrawingSelectToolUI = false;
     }
   }
 
@@ -1195,16 +1633,25 @@ export class DrawingHandler {
     }
     
     // 优化：未分配的动作应该已经自动分配到默认图层，这里不再单独处理
-    // 如果仍有未分配的动作，说明是旧数据，直接绘制
+    // 如果仍有未分配的动作，说明是旧数据，需要根据模式处理
     const unassignedActions = actions.filter(action => !action.virtualLayerId);
     if (unassignedActions.length > 0) {
-      logger.warn(`发现 ${unassignedActions.length} 个未分配的动作，将自动分配到默认图层`);
-      // 自动分配到默认图层
-      const defaultLayer = this.virtualLayerManager.getActiveVirtualLayer();
-      if (defaultLayer) {
+      logger.warn(`发现 ${unassignedActions.length} 个未分配的动作，将根据模式自动分配`);
+      // 根据模式处理未分配的动作
+      const mode = this.virtualLayerManager.getMode();
+      if (mode === 'individual') {
+        // individual模式：为每个动作创建新图层
         for (const action of unassignedActions) {
-          this.virtualLayerManager.assignActionToLayer(action.id, defaultLayer.id);
-          action.virtualLayerId = defaultLayer.id;
+          this.virtualLayerManager.handleNewAction(action);
+        }
+      } else {
+        // grouped模式：分配到默认图层
+        const defaultLayer = this.virtualLayerManager.getActiveVirtualLayer();
+        if (defaultLayer) {
+          for (const action of unassignedActions) {
+            this.virtualLayerManager.assignActionToLayer(action.id, defaultLayer.id);
+            action.virtualLayerId = defaultLayer.id;
+          }
         }
       }
     }
@@ -1296,6 +1743,53 @@ export class DrawingHandler {
   }
 
   /**
+   * 标记需要清除选择UI（用于工具切换时）
+   */
+  public markNeedsClearSelectionUI(): void {
+    this.needsClearSelectionUI = true;
+    this.needsClearSelectionUITime = Date.now();
+    logger.debug('DrawingHandler: 标记需要清除选择UI', {
+      timestamp: this.needsClearSelectionUITime
+    });
+  }
+
+  /**
+   * 清除选择UI（辅助方法，避免重复代码）
+   */
+  private clearSelectionUI(): void {
+    if (!this.canvasEngine) {
+      return;
+    }
+
+    try {
+      // 清除interaction层
+      const interactionLayer = this.canvasEngine.getInteractionLayer();
+      interactionLayer.clearRect(0, 0, interactionLayer.canvas.width, interactionLayer.canvas.height);
+      logger.debug('clearSelectionUI: 已清除interaction层');
+    } catch (error) {
+      logger.error('clearSelectionUI: 清除interaction层失败', error);
+    }
+
+    try {
+      // 清除所有动态选择图层
+      const allDynamicLayers = this.canvasEngine.getAllDynamicLayers();
+      let clearedCount = 0;
+      for (const [layerId, layer] of allDynamicLayers) {
+        if (layerId.startsWith('selection-')) {
+          layer.ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
+          clearedCount++;
+        }
+      }
+      logger.debug('clearSelectionUI: 已清除动态选择图层', {
+        clearedCount,
+        totalDynamicLayers: allDynamicLayers.size
+      });
+    } catch (error) {
+      logger.error('clearSelectionUI: 清除动态选择图层失败', error);
+    }
+  }
+
+  /**
    * 强制重绘（用于外部调用）
    */
   // 防止重绘任务堆积
@@ -1358,13 +1852,41 @@ export class DrawingHandler {
   }
 
   /**
+   * 重置绘制状态（用于工具切换时清理状态）
+   */
+  public resetDrawingState(): void {
+    if (this.isDrawing) {
+      logger.debug('重置绘制状态', {
+        wasDrawing: this.isDrawing,
+        hadCurrentAction: !!this.currentAction
+      });
+    }
+    this.isDrawing = false;
+    this.currentAction = null;
+    this.redrawScheduled = false;
+  }
+
+  /**
    * 销毁处理器
+   * 改进：正确清理离屏 Canvas 以防止内存泄漏
    */
   public destroy(): void {
     this.isDrawing = false;
     this.currentAction = null;
     this.cachedActions.clear();
     this.redrawScheduled = false;
-    logger.debug('DrawingHandler已销毁');
+    
+    // 清理离屏 Canvas（防止内存泄漏）
+    this.cleanupOffscreenCanvas();
+    
+    // 清理其他状态
+    this.pendingRedraw = false;
+    this.isRedrawing = false;
+    this.isDrawingSelectToolUI = false;
+    this.needsClearSelectionUI = false;
+    this.layersInitializationPromise = null;
+    this.initializingDrawLayers = false;
+    
+    logger.debug('DrawingHandler已销毁，所有资源已清理');
   }
 } 

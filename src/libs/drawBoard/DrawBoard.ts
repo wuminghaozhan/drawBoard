@@ -15,13 +15,18 @@ import { PerformanceMode } from './tools/DrawTool';
 import type { ToolType } from './tools/DrawTool';
 import type { DrawAction } from './tools/DrawTool';
 import type { DrawEvent } from './events/EventManager';
-import type { Point } from './core/CanvasEngine';
 import type { StrokeConfig } from './tools/stroke/StrokeTypes';
 import type { StrokePresetType } from './tools/StrokePresets';
+import { ToolTypeGuards } from './tools/ToolInterfaces';
 import { ErrorHandler, DrawBoardError, DrawBoardErrorCode, type DrawBoardErrorCode as DrawBoardErrorCodeType } from './utils/ErrorHandler';
 import { LightweightResourceManager } from './utils/LightweightResourceManager';
 import { logger } from './utils/Logger';
-import { BoundsValidator, type Bounds as BoundsType } from './utils/BoundsValidator';
+
+// API 模块
+import { DrawBoardVirtualLayerAPI } from './api/DrawBoardVirtualLayerAPI';
+import { DrawBoardSelectionAPI } from './api/DrawBoardSelectionAPI';
+import { DrawBoardToolAPI } from './api/DrawBoardToolAPI';
+import { DrawBoardHistoryAPI } from './api/DrawBoardHistoryAPI';
 
 // 函数式编程模块
 import { 
@@ -213,11 +218,27 @@ export class DrawBoard {
   /** 状态处理器 - 处理状态管理 */
   private stateHandler!: StateHandler;
 
-  /** 剪贴板存储 - 存储复制的动作 */
-  private clipboard: DrawAction[] = [];
-
   /** 容器元素引用 */
   private container!: HTMLElement;
+
+  // ============================================
+  // API 模块实例
+  // ============================================
+  
+  /** 虚拟图层 API */
+  private virtualLayerAPI!: DrawBoardVirtualLayerAPI;
+  
+  /** 选择操作 API */
+  private selectionAPI!: DrawBoardSelectionAPI;
+  
+  /** 工具管理 API */
+  private toolAPI!: DrawBoardToolAPI;
+  
+  /** 历史记录 API */
+  private historyAPI!: DrawBoardHistoryAPI;
+
+  /** 同步图层数据标志位 - 防止重复调用 syncLayerDataToSelectTool */
+  private isSyncingLayerData: boolean = false;
 
   /**
    * 构造函数 - 初始化DrawBoard实例
@@ -245,6 +266,9 @@ export class DrawBoard {
       
       // 初始化处理器
       this.initializeHandlers();
+      
+      // 初始化 API 模块（需要在 handlers 初始化之后）
+      this.initializeAPIModules();
       
       // 绑定事件
       this.bindEvents();
@@ -321,16 +345,35 @@ export class DrawBoard {
         container instanceof HTMLCanvasElement ? container : document.createElement('canvas')
       );
     } else {
-      logger.debug('EventManager 绑定到 interaction canvas', {
+      logger.info('EventManager 绑定到 interaction canvas', {
         canvas: interactionCanvas,
         width: interactionCanvas.width,
         height: interactionCanvas.height,
         offsetWidth: interactionCanvas.offsetWidth,
         offsetHeight: interactionCanvas.offsetHeight,
         pointerEvents: getComputedStyle(interactionCanvas).pointerEvents,
-        zIndex: getComputedStyle(interactionCanvas).zIndex
+        zIndex: getComputedStyle(interactionCanvas).zIndex,
+        display: getComputedStyle(interactionCanvas).display,
+        visibility: getComputedStyle(interactionCanvas).visibility,
+        opacity: getComputedStyle(interactionCanvas).opacity
       });
+      
+      // 验证interaction canvas是否可见且可交互
+      const computedStyle = getComputedStyle(interactionCanvas);
+      if (computedStyle.pointerEvents !== 'auto') {
+        logger.warn('⚠️ Interaction canvas的pointer-events不是auto，可能无法接收事件！', {
+          pointerEvents: computedStyle.pointerEvents
+        });
+      }
+      if (computedStyle.display === 'none') {
+        logger.warn('⚠️ Interaction canvas的display是none，可能无法接收事件！');
+      }
+      if (computedStyle.visibility === 'hidden') {
+        logger.warn('⚠️ Interaction canvas的visibility是hidden，可能无法接收事件！');
+      }
+      
       this.eventManager = new EventManager(interactionCanvas);
+      logger.info('✅ EventManager 已创建并绑定到 interaction canvas');
     }
     
     this.shortcutManager = new ShortcutManager();
@@ -382,6 +425,51 @@ export class DrawBoard {
   }
 
   /**
+   * 初始化 API 模块
+   * 在 handlers 初始化之后调用，确保所有依赖都已就绪
+   */
+  private initializeAPIModules(): void {
+    // 初始化虚拟图层 API
+    this.virtualLayerAPI = new DrawBoardVirtualLayerAPI(
+      this.virtualLayerManager,
+      this.drawingHandler,
+      this.toolManager,
+      this.canvasEngine,
+      (preserveSelection?: boolean) => this.syncLayerDataToSelectTool(preserveSelection)
+    );
+
+    // 初始化选择操作 API
+    this.selectionAPI = new DrawBoardSelectionAPI(
+      this.toolManager,
+      this.historyManager,
+      this.selectionManager,
+      this.virtualLayerManager,
+      this.drawingHandler,
+      this.canvasEngine
+    );
+
+    // 初始化工具管理 API
+    this.toolAPI = new DrawBoardToolAPI(
+      this.toolManager,
+      this.canvasEngine,
+      this.complexityManager,
+      () => this.syncLayerDataToSelectTool(),
+      () => this.checkComplexityRecalculation(),
+      () => this.updateCursor(),
+      () => this.drawingHandler.forceRedraw(),
+      () => this.drawingHandler.markNeedsClearSelectionUI()
+    );
+
+    // 初始化历史记录 API
+    this.historyAPI = new DrawBoardHistoryAPI(
+      this.historyManager,
+      this.drawingHandler
+    );
+
+    logger.debug('API 模块初始化完成');
+  }
+
+  /**
    * 业务事件绑定和路由
    * 🔗 业务事件绑定：将 EventManager 的标准化事件绑定到具体业务处理方法
    * 🎨 绘制流程控制：handleDrawStart/Move/End 控制绘制的生命周期
@@ -397,12 +485,30 @@ export class DrawBoard {
   };
 
   private bindEvents(): void {
+    logger.info('DrawBoard.bindEvents: 开始绑定事件', {
+      hasEventManager: !!this.eventManager,
+      hasHandlers: {
+        handleDrawStart: !!this.boundEventHandlers.handleDrawStart,
+        handleDrawMove: !!this.boundEventHandlers.handleDrawMove,
+        handleDrawEnd: !!this.boundEventHandlers.handleDrawEnd
+      }
+    });
+    
     this.eventManager.on('mousedown', this.boundEventHandlers.handleDrawStart);
     this.eventManager.on('mousemove', this.boundEventHandlers.handleDrawMove);
     this.eventManager.on('mouseup', this.boundEventHandlers.handleDrawEnd);
     this.eventManager.on('touchstart', this.boundEventHandlers.handleDrawStart);
     this.eventManager.on('touchmove', this.boundEventHandlers.handleDrawMove);
     this.eventManager.on('touchend', this.boundEventHandlers.handleDrawEnd);
+    
+    // 验证事件绑定
+    const eventManagerInternal = this.eventManager as unknown as { handlers?: Map<string, Array<unknown>> };
+    const mousedownHandlers = eventManagerInternal.handlers?.get('mousedown');
+    logger.info('DrawBoard.bindEvents: 事件绑定完成', {
+      mousedownHandlersCount: mousedownHandlers?.length || 0,
+      allEventTypes: Array.from(eventManagerInternal.handlers?.keys() || []),
+      totalHandlers: Array.from(eventManagerInternal.handlers?.values() || []).reduce((sum: number, h: Array<unknown>) => sum + h.length, 0)
+    });
   }
 
   /**
@@ -489,11 +595,10 @@ export class DrawBoard {
         handler: () => {
           // 如果正在拖拽，取消拖拽；否则取消选择
           const currentTool = this.toolManager.getCurrentToolInstance();
-          if (currentTool && currentTool.getActionType() === 'select') {
-            const selectTool = currentTool as unknown as { cancelDrag: () => void };
-            if (selectTool.cancelDrag) {
-              const wasDragging = selectTool.cancelDrag();
-              if (wasDragging) {
+          if (currentTool && ToolTypeGuards.isSelectTool(currentTool)) {
+            if (currentTool.cancelDrag) {
+              const wasDragging = currentTool.cancelDrag();
+              if (wasDragging === true) {
                 // 如果取消了拖拽，触发重绘
                 this.drawingHandler.forceRedraw().catch(error => {
                   logger.error('重绘失败', error);
@@ -533,30 +638,61 @@ export class DrawBoard {
   // 事件处理
   // ============================================
 
-  private handleDrawStart(event: DrawEvent): void {
-    logger.debug('handleDrawStart 被调用', {
+  private async handleDrawStart(event: DrawEvent): Promise<void> {
+    logger.info('handleDrawStart 被调用', {
       tool: this.toolManager.getCurrentTool(),
       point: event.point
     });
     
     // 如果是选择工具，直接处理选择逻辑，不通过DrawingHandler
     if (this.toolManager.getCurrentTool() === 'select') {
-      logger.debug('检测到选择工具，开始处理');
+      logger.info('检测到选择工具，开始处理');
       const currentTool = this.toolManager.getCurrentToolInstance();
-      if (currentTool && currentTool.getActionType() === 'select') {
-        logger.debug('选择工具实例获取成功，开始同步数据');
-        // 确保选择工具的数据已同步
-        this.syncLayerDataToSelectTool();
+      if (currentTool && ToolTypeGuards.isSelectTool(currentTool)) {
+        logger.info('选择工具实例获取成功');
         
-        const selectTool = currentTool as unknown as { 
-          handleMouseDown: (point: Point) => 'select' | 'transform' | 'move' | 'box-select' | 'anchor-drag' | null;
-        };
-        logger.debug('调用 selectTool.handleMouseDown', { point: event.point });
-        const result = selectTool.handleMouseDown(event.point);
-        logger.debug('selectTool.handleMouseDown 返回', { result });
+        // 注意：不要在handleMouseDown之前调用syncLayerDataToSelectTool
+        // 因为syncLayerDataToSelectTool可能会清空选择（如果shouldClearSelection为true）
+        // 先让handleMouseDown处理选择，然后再同步图层数据
         
-        // 触发重绘以显示选择框或锚点
-        this.drawingHandler.forceRedraw();
+        logger.info('调用 selectTool.handleMouseDown', { point: event.point });
+        const result = currentTool.handleMouseDown(event.point);
+        logger.info('selectTool.handleMouseDown 返回', { 
+          result,
+          selectedActionsCount: currentTool.getSelectedActions().length,
+          selectedActionIds: currentTool.getSelectedActions().map(a => a.id)
+        });
+        
+        // 重要：先同步图层数据（划分图层），然后再触发重绘（绘制选区和锚点）
+        // 这样可以确保图层划分完成后再绘制，避免绘制时图层未划分的问题
+        const mode = this.virtualLayerManager?.getMode();
+        if (mode === 'individual') {
+          const selectedActions = currentTool.getSelectedActions();
+          if (selectedActions.length > 0) {
+            logger.info('individual模式：选中了actions，先同步图层数据以触发图层拆分', {
+              selectedActionsCount: selectedActions.length,
+              selectedActionIds: selectedActions.map(a => a.id)
+            });
+            // 先同步图层数据，划分图层，保留选择
+            // 同步完成后，会在图层划分完成后自动触发重绘
+            this.syncLayerDataToSelectTool(true); // 使用preserveSelection=true保留选择
+          } else {
+            // 如果没有选中的actions，也需要同步图层数据（但不会触发图层拆分）
+            this.syncLayerDataToSelectTool(false);
+            // 没有选择时，也需要触发重绘以清除之前的选区和锚点
+            this.drawingHandler.forceRedraw().catch(error => {
+              logger.error('重绘失败', error);
+            });
+          }
+        } else {
+          // grouped模式：也需要同步图层数据（但不触发图层拆分）
+          this.syncLayerDataToSelectTool(false);
+          // grouped模式下，也需要触发重绘以显示选择框或锚点
+          this.drawingHandler.forceRedraw().catch(error => {
+            logger.error('重绘失败', error);
+          });
+        }
+        
         this.updateCursor();
         return;
       } else {
@@ -580,23 +716,18 @@ export class DrawBoard {
     // 如果是选择工具，直接处理选择逻辑
     if (this.toolManager.getCurrentTool() === 'select') {
       const currentTool = this.toolManager.getCurrentToolInstance();
-      if (currentTool && currentTool.getActionType() === 'select') {
+      if (currentTool && ToolTypeGuards.isSelectTool(currentTool)) {
         // 注意：不要在 mousemove 时同步数据，这会导致选择被清空
         // 数据同步只在工具切换或图层切换时进行
         
-        const selectTool = currentTool as unknown as { 
-          handleMouseMove: (point: Point) => DrawAction | DrawAction[] | null;
-          updateHoverAnchor?: (point: Point) => boolean | void;
-        };
-        
         // 更新悬停锚点（用于光标更新和hover状态显示）
         let hoverChanged = false;
-        if (selectTool.updateHoverAnchor) {
-          const result = selectTool.updateHoverAnchor(event.point);
+        if (currentTool.updateHoverAnchor) {
+          const result = currentTool.updateHoverAnchor(event.point);
           hoverChanged = result === true; // 如果返回true，表示hover状态变化
         }
         
-        const updatedActions = selectTool.handleMouseMove(event.point);
+        const updatedActions = currentTool.handleMouseMove(event.point);
         
         // 节流重绘（避免过于频繁的重绘）
         const now = Date.now();
@@ -636,11 +767,8 @@ export class DrawBoard {
       // 如果是选择工具，先处理选择工具的鼠标抬起事件
       if (this.toolManager.getCurrentTool() === 'select') {
         const currentTool = this.toolManager.getCurrentToolInstance();
-        if (currentTool && currentTool.getActionType() === 'select') {
-          const selectTool = currentTool as unknown as { 
-            handleMouseUp: () => DrawAction | DrawAction[] | null;
-          };
-          const updatedActions = selectTool.handleMouseUp();
+        if (currentTool && ToolTypeGuards.isSelectTool(currentTool)) {
+          const updatedActions = currentTool.handleMouseUp();
           
           // 如果返回了更新后的actions，更新HistoryManager和标记图层缓存过期
           if (updatedActions) {
@@ -656,7 +784,37 @@ export class DrawBoard {
       
       // 如果当前是选择工具，同步图层数据并触发重绘
       if (this.toolManager.getCurrentTool() === 'select') {
-        this.syncLayerDataToSelectTool();
+        // 重要：在 individual 模式下，必须传 preserveSelection=true 以保留选择
+        // 否则 syncLayerDataToSelectTool 会因为 hasActionsFromOtherLayer=true 而清空选择
+        const mode = this.virtualLayerManager?.getMode();
+        const preserveSelection = mode === 'individual';
+        
+        // 获取当前选择状态用于日志
+        const currentTool = this.toolManager.getCurrentToolInstance();
+        const selectedActionsBeforeSync = currentTool && ToolTypeGuards.isSelectTool(currentTool) 
+          ? currentTool.getSelectedActions() 
+          : [];
+        
+        logger.info('handleDrawEnd: 同步图层数据', {
+          mode,
+          preserveSelection,
+          selectedActionsCountBeforeSync: selectedActionsBeforeSync.length,
+          selectedActionIdsBeforeSync: selectedActionsBeforeSync.map(a => a.id)
+        });
+        
+        this.syncLayerDataToSelectTool(preserveSelection);
+        
+        // 获取同步后的选择状态
+        const selectedActionsAfterSync = currentTool && ToolTypeGuards.isSelectTool(currentTool) 
+          ? currentTool.getSelectedActions() 
+          : [];
+        
+        logger.info('handleDrawEnd: 同步完成，准备重绘', {
+          selectedActionsCountAfterSync: selectedActionsAfterSync.length,
+          selectedActionIdsAfterSync: selectedActionsAfterSync.map(a => a.id),
+          selectionPreserved: selectedActionsBeforeSync.length === selectedActionsAfterSync.length
+        });
+        
         await this.drawingHandler.forceRedraw();
       }
       
@@ -701,89 +859,304 @@ export class DrawBoard {
    * @param type 工具类型
    */
   public async setTool(toolType: ToolType): Promise<void> {
-    await this.toolManager.setCurrentTool(toolType);
+    logger.info('DrawBoard.setTool: 切换工具', {
+      toolType,
+      currentTool: this.toolManager.getCurrentTool(),
+      hasEventManager: !!this.eventManager
+    });
     
-    // 切换到选择工具时，同步图层数据
+    // 如果切换到select工具，先清理之前的绘制状态
     if (toolType === 'select') {
-      this.syncLayerDataToSelectTool();
+      // 清理DrawingHandler的绘制状态，避免isDrawing标志导致的问题
+      if (this.drawingHandler && 'resetDrawingState' in this.drawingHandler) {
+        (this.drawingHandler as { resetDrawingState: () => void }).resetDrawingState();
+        logger.info('DrawBoard.setTool: 已清理DrawingHandler的绘制状态');
+      }
+      
+      // 验证事件管理器状态
+      if (this.eventManager) {
+        const interactionLayer = this.canvasEngine.getLayer('interaction');
+        if (interactionLayer) {
+          logger.info('DrawBoard.setTool: 验证事件管理器绑定', {
+            eventManagerExists: !!this.eventManager,
+            interactionCanvas: interactionLayer.canvas,
+            canvasWidth: interactionLayer.canvas.width,
+            canvasHeight: interactionLayer.canvas.height,
+            pointerEvents: getComputedStyle(interactionLayer.canvas).pointerEvents,
+            zIndex: getComputedStyle(interactionLayer.canvas).zIndex
+          });
+        } else {
+          logger.error('❌ DrawBoard.setTool: 无法获取interaction层！');
+        }
+      } else {
+        logger.error('❌ DrawBoard.setTool: EventManager不存在！');
+      }
     }
     
-    // 切换到复杂工具时检查复杂度
-    if (['brush', 'pen'].includes(toolType)) {
-      await this.checkComplexityRecalculation();
-    }
+    const result = await this.toolAPI.setTool(toolType);
     
+    // 确保鼠标样式正确更新
     this.updateCursor();
+    
+    logger.info('DrawBoard.setTool: 工具切换完成', {
+      toolType,
+      newTool: this.toolManager?.getCurrentTool(),
+      toolInstance: !!this.toolManager?.getCurrentToolInstance()
+    });
+    
+    return result;
   }
 
   /**
    * 同步图层数据到选择工具
+   * @param preserveSelection 是否保留选择（individual模式下使用）
    */
-  private syncLayerDataToSelectTool(): void {
+  private syncLayerDataToSelectTool(preserveSelection: boolean = false): void {
+    // 防重复调用机制：如果正在同步，跳过本次调用
+    if (this.isSyncingLayerData) {
+      logger.debug('syncLayerDataToSelectTool: 正在同步中，跳过重复调用', {
+        preserveSelection
+      });
+      return;
+    }
+    
+    this.isSyncingLayerData = true;
+    
     try {
+      // 检查 toolManager 是否存在
+      if (!this.toolManager) {
+        logger.warn('syncLayerDataToSelectTool: toolManager 不存在，跳过同步');
+        this.isSyncingLayerData = false; // 重置标志位
+        return;
+      }
+      
       const currentTool = this.toolManager.getCurrentToolInstance();
-      if (currentTool && currentTool.getActionType() === 'select') {
+      if (currentTool && ToolTypeGuards.isSelectTool(currentTool)) {
         // 获取当前所有actions
         const allActions = this.historyManager.getAllActions();
         
-        // 如果启用了虚拟图层，只获取当前活动图层的actions
+        // 如果启用了虚拟图层，根据模式决定获取哪些actions
         let layerActions = allActions;
         if (this.virtualLayerManager) {
-          const activeLayer = this.virtualLayerManager.getActiveVirtualLayer();
-          if (activeLayer) {
-            layerActions = allActions.filter((action: DrawAction) => 
-              action.virtualLayerId === activeLayer.id
-            );
+          const mode = this.virtualLayerManager.getMode();
+          if (mode === 'individual') {
+            // individual模式：可以选择所有图层的actions（每个图层只有一个action）
+            // 所以直接使用所有actions
+            // 注意：在individual模式下，即使action不在当前活动图层中，也应该包含在layerActions中
+            // 这样setLayerActions就不会过滤掉选中的actions
+            layerActions = allActions;
+            logger.debug('syncLayerDataToSelectTool: individual模式，使用所有actions', {
+              totalActions: allActions.length
+            });
+          } else {
+            // grouped模式：只获取当前活动图层的actions
+            const activeLayer = this.virtualLayerManager.getActiveVirtualLayer();
+            if (activeLayer) {
+              layerActions = allActions.filter((action: DrawAction) => 
+                action.virtualLayerId === activeLayer.id
+              );
+            }
           }
         }
-        
-        // 设置到选择工具
-        const selectTool = currentTool as unknown as { 
-          setLayerActions: (actions: DrawAction[], clearSelection?: boolean) => void;
-          setCanvasEngine?: (canvasEngine: CanvasEngine, selectedLayerZIndex?: number | null) => void;
-          reset?: () => void;
-          getSelectedActions?: () => DrawAction[];
-        };
         
         // 图层切换时，清空选择
         // 注意：只有在图层真正切换时才清空选择
         // 这里我们通过检查当前图层的actions是否与选择工具中的actions不同来判断
         const activeLayer = this.virtualLayerManager?.getActiveVirtualLayer();
-        const selectToolActions = selectTool.getSelectedActions ? selectTool.getSelectedActions() : [];
+        const selectToolActions = currentTool.getSelectedActions();
         const currentLayerActionIds = new Set(layerActions.map((a: DrawAction) => a.id));
         
         // 如果选中的actions中有不属于当前图层的，说明图层切换了，需要清空选择
-        const hasActionsFromOtherLayer = selectToolActions.some((action: DrawAction) => !currentLayerActionIds.has(action.id));
-        const shouldClearSelection = hasActionsFromOtherLayer;
+        // 注意：individual模式下，这个检查可能不适用，因为可以选择所有actions
+        const mode = this.virtualLayerManager?.getMode();
+        const hasActionsFromOtherLayer = mode === 'grouped' && selectToolActions.some((action: DrawAction) => !currentLayerActionIds.has(action.id));
+        // 如果preserveSelection为true（individual模式下），不清空选择
+        const shouldClearSelection = preserveSelection ? false : hasActionsFromOtherLayer;
         
-        logger.debug('syncLayerDataToSelectTool: 检查是否需要清空选择', {
+        logger.info('syncLayerDataToSelectTool: 检查是否需要清空选择', {
+          mode,
+          preserveSelection,
           activeLayerId: activeLayer?.id,
           layerActionsCount: layerActions.length,
           selectedActionsCount: selectToolActions.length,
+          selectedActionIds: selectToolActions.map(a => a.id),
           hasActionsFromOtherLayer,
           shouldClearSelection
         });
         
-        selectTool.setLayerActions(layerActions, shouldClearSelection);
+        currentTool.setLayerActions(layerActions, shouldClearSelection);
+        
+        logger.info('syncLayerDataToSelectTool: setLayerActions完成', {
+          selectedActionsCountAfter: currentTool.getSelectedActions().length,
+          selectedActionIdsAfter: currentTool.getSelectedActions().map(a => a.id)
+        });
         
         // 如果清空了选择，也重置状态
-        if (shouldClearSelection && selectTool.reset) {
-          selectTool.reset();
+        if (shouldClearSelection && currentTool.reset) {
+          currentTool.reset();
+        }
+        
+        // individual模式：当选中actions时，找到对应的虚拟图层并拆分
+        if (mode === 'individual') {
+          const selectedActions = currentTool.getSelectedActions();
+          if (selectedActions.length > 0) {
+            // 收集所有被选中的虚拟图层ID
+            const selectedLayerIds = new Set<string>();
+            for (const action of selectedActions) {
+              if (action.virtualLayerId) {
+                selectedLayerIds.add(action.virtualLayerId);
+              }
+            }
+            
+            logger.debug('individual模式：选中actions，找到对应的虚拟图层', {
+              selectedActionsCount: selectedActions.length,
+              selectedLayerIds: Array.from(selectedLayerIds),
+              selectedLayerCount: selectedLayerIds.size
+            });
+            
+            // 如果有选中的图层，需要拆分draw层
+            // 对于多个图层的情况，我们选择zIndex最小的图层作为"选中图层"来拆分
+            // 这样可以将所有选中的图层都放在selected层中
+            if (selectedLayerIds.size > 0) {
+              const allLayers = this.virtualLayerManager?.getAllVirtualLayers() || [];
+              const selectedLayers = allLayers.filter(layer => selectedLayerIds.has(layer.id));
+              
+              if (selectedLayers.length > 0) {
+                // 找到zIndex最小的选中图层作为拆分基准
+                const minZIndexLayer = selectedLayers.reduce((min, layer) => 
+                  layer.zIndex < min.zIndex ? layer : min
+                );
+                
+                const currentActiveLayer = this.virtualLayerManager?.getActiveVirtualLayer();
+                // 如果当前活动图层不是最小zIndex的图层，则切换
+                if (!currentActiveLayer || currentActiveLayer.id !== minZIndexLayer.id) {
+                  logger.debug('individual模式：选中actions，切换到最小zIndex的图层进行拆分', {
+                    minZIndexLayerId: minZIndexLayer.id,
+                    minZIndex: minZIndexLayer.zIndex,
+                    selectedLayerIds: Array.from(selectedLayerIds)
+                  });
+                  
+                  // 注意：在individual模式下，需要切换图层以进行图层拆分
+                  // 先保存选中的actions，确保选择被保留
+                  const selectedActionsBeforeSwitch = currentTool.getSelectedActions();
+                  
+                  // 重要：直接调用virtualLayerManager.setActiveVirtualLayer，避免触发syncLayerDataToSelectTool
+                  // 因为当前已经在syncLayerDataToSelectTool中，如果通过virtualLayerAPI调用会触发重复调用
+                  // 我们会在图层切换后手动更新SelectTool的状态，并确保选择被保留
+                  // 注意：由于防重复调用机制，即使通过virtualLayerAPI调用，也会被跳过
+                  // 所以直接调用virtualLayerManager更安全，避免不必要的同步
+                  const switchSuccess = this.virtualLayerManager?.setActiveVirtualLayer(minZIndexLayer.id);
+                  
+                  if (switchSuccess) {
+                    // 切换图层后，需要重新获取活动图层zIndex并更新SelectTool
+                    const newActiveLayer = this.virtualLayerManager?.getActiveVirtualLayer();
+                    if (newActiveLayer && currentTool.setCanvasEngine) {
+                      const selectedLayerZIndex = newActiveLayer.zIndex;
+                      logger.info('individual模式：更新SelectTool的selectedLayerZIndex', {
+                        selectedLayerZIndex,
+                        layerId: newActiveLayer.id,
+                        selectedActionsCountBeforeSwitch: selectedActionsBeforeSwitch.length
+                      });
+                      currentTool.setCanvasEngine(this.canvasEngine, selectedLayerZIndex);
+                      
+                      // 重要：确保选择被保留
+                      // 因为直接调用virtualLayerManager，不会触发syncLayerDataToSelectTool
+                      // 所以选择应该还在，但为了安全，我们验证并恢复
+                      const selectedActionsAfterSwitch = currentTool.getSelectedActions();
+                      if (selectedActionsAfterSwitch.length === 0 && selectedActionsBeforeSwitch.length > 0) {
+                        logger.warn('individual模式：选择在切换图层后丢失，立即恢复选择', {
+                          selectedActionsCountBefore: selectedActionsBeforeSwitch.length,
+                          selectedActionIdsBefore: selectedActionsBeforeSwitch.map(a => a.id)
+                        });
+                        if (currentTool.setSelectedActions) {
+                          currentTool.setSelectedActions(selectedActionsBeforeSwitch);
+                          logger.info('individual模式：已恢复选择', {
+                            restoredCount: selectedActionsBeforeSwitch.length
+                          });
+                        }
+                      } else if (selectedActionsAfterSwitch.length > 0) {
+                        logger.debug('individual模式：选择已保留', {
+                          selectedActionsCount: selectedActionsAfterSwitch.length
+                        });
+                      }
+                    }
+                  } else {
+                    logger.warn('individual模式：切换图层失败', {
+                      layerId: minZIndexLayer.id
+                    });
+                  }
+                } else {
+                  // 如果已经是活动图层，只需要更新SelectTool的selectedLayerZIndex
+                  if (currentTool.setCanvasEngine) {
+                    const selectedLayerZIndex = currentActiveLayer.zIndex;
+                    logger.info('individual模式：当前图层已激活，更新SelectTool的selectedLayerZIndex', {
+                      selectedLayerZIndex,
+                      layerId: currentActiveLayer.id
+                    });
+                    currentTool.setCanvasEngine(this.canvasEngine, selectedLayerZIndex);
+                  }
+                }
+              }
+            }
+          }
         }
         
         // 设置CanvasEngine和选中图层zIndex（用于动态图层）
-        if (selectTool.setCanvasEngine) {
+        // 注意：必须在切换活动图层之后设置，确保zIndex是最新的
+        // individual模式下，如果已经在上面设置过，这里会再次设置以确保一致性
+        if (currentTool.setCanvasEngine) {
           const selectedLayerZIndex = this.virtualLayerManager?.getActiveVirtualLayerZIndex() ?? null;
-          selectTool.setCanvasEngine(this.canvasEngine, selectedLayerZIndex);
+          logger.debug('设置选择工具的CanvasEngine和selectedLayerZIndex', {
+            selectedLayerZIndex,
+            activeLayerId: this.virtualLayerManager?.getActiveVirtualLayer()?.id,
+            mode
+          });
+          currentTool.setCanvasEngine(this.canvasEngine, selectedLayerZIndex);
+        }
+        
+        // individual模式：图层划分完成后，触发重绘以确保drawSelectToolUI被调用
+        // 注意：必须在设置CanvasEngine之后触发，确保SelectTool已更新
+        // 使用Promise确保异步操作完成，而不是setTimeout
+        if (mode === 'individual') {
+          const selectedActions = currentTool.getSelectedActions();
+          if (selectedActions.length > 0 && this.canvasEngine?.isDrawLayerSplit()) {
+            logger.info('individual模式：图层划分完成，触发重绘以绘制选区和锚点', {
+              selectedActionsCount: selectedActions.length,
+              isDrawLayersInitialized: this.canvasEngine.isDrawLayersInitialized()
+            });
+            // 使用Promise确保图层初始化完成后再触发重绘
+            // 注意：这里使用Promise.resolve().then()而不是setTimeout，确保在下一个事件循环中执行
+            // 但不会阻塞当前执行，同时保证执行顺序
+            // 注意：不需要在这里再次调用syncLayerDataToSelectTool，因为：
+            // 1. syncLayerDataToSelectTool本身已经处理了图层划分和选择保留
+            // 2. 如果在这里再次调用，会导致无限循环（syncLayerDataToSelectTool -> 图层划分 -> 重绘 -> syncLayerDataToSelectTool）
+            Promise.resolve().then(async () => {
+              try {
+                // 直接触发重绘，重绘过程中会确保图层初始化完成
+                // DrawingHandler.ensureLayersInitialized()会在重绘时自动处理初始化
+                // drawSelectToolUI会在重绘时被调用，此时选择已经被syncLayerDataToSelectTool保留了
+                await this.drawingHandler.forceRedraw();
+                logger.debug('individual模式：重绘完成，选区和锚点已绘制');
+              } catch (error) {
+                logger.error('individual模式：重绘失败', error);
+              }
+            }).catch(error => {
+              logger.error('individual模式：Promise链错误', error);
+            });
+          }
         }
         
         logger.debug(`同步${layerActions.length}个actions到选择工具`, {
+          mode,
           selectedLayerZIndex: this.virtualLayerManager?.getActiveVirtualLayerZIndex() ?? null,
           clearedSelection: shouldClearSelection
         });
       }
     } catch (error) {
       logger.error('同步图层数据到选择工具失败', error);
+    } finally {
+      // 重置同步标志位，允许下次调用
+      this.isSyncingLayerData = false;
     }
   }
 
@@ -791,44 +1164,42 @@ export class DrawBoard {
    * 初始化默认工具（异步初始化常用工具）
    */
   public async initializeDefaultTools(): Promise<void> {
-    // 预加载常用工具
-    await this.toolManager.setCurrentTool('pen');
-          logger.info('默认工具初始化完成');
+    return this.toolAPI.initializeDefaultTools();
   }
 
   /**
    * 预加载工具（后台加载，不阻塞UI）
    */
   public async preloadTool(type: ToolType): Promise<void> {
-    await this.toolManager.preloadTool(type);
+    return this.toolAPI.preloadTool(type);
   }
 
   /**
    * 预加载多个工具
    */
   public async preloadTools(types: ToolType[]): Promise<void> {
-    await this.toolManager.preloadTools(types);
+    return this.toolAPI.preloadTools(types);
   }
 
   /**
    * 获取工具加载状态
    */
   public getToolLoadingState(): 'idle' | 'loading' | 'ready' | 'error' {
-    return this.toolManager.getLoadingState();
+    return this.toolAPI.getToolLoadingState();
   }
 
   /**
    * 获取工具元数据
    */
   public getToolMetadata(type: ToolType) {
-    return this.toolManager.getToolMetadata(type);
+    return this.toolAPI.getToolMetadata(type);
   }
 
   /**
    * 获取当前工具
    */
   public getCurrentTool(): ToolType {
-    return this.toolManager.getCurrentTool();
+    return this.toolAPI.getCurrentTool();
   }
   
   /**
@@ -836,8 +1207,7 @@ export class DrawBoard {
    * @param color 颜色
    */
   public setColor(color: string): void {
-    this.canvasEngine.setContext({ strokeStyle: color, fillStyle: color });
-    // 颜色改变不需要重绘，只影响后续绘制
+    this.toolAPI.setColor(color);
   }
   
   /**
@@ -845,9 +1215,7 @@ export class DrawBoard {
    * @param width 线宽
    */
   public setLineWidth(width: number): void {
-    this.canvasEngine.setContext({ lineWidth: width });
-    this.updateCursor();
-    // 线宽改变不需要重绘，只影响后续绘制
+    this.toolAPI.setLineWidth(width);
   }
 
   // ============================================
@@ -859,11 +1227,7 @@ export class DrawBoard {
    * @param config 运笔效果配置
    */
   public async setStrokeConfig(config: Partial<StrokeConfig>): Promise<void> {
-    const penTool = await this.toolManager.getTool('pen');
-    if (penTool && 'setStrokeConfig' in penTool) {
-      (penTool as { setStrokeConfig: (config: Partial<StrokeConfig>) => void }).setStrokeConfig(config);
-      // 配置改变不需要重绘，只影响后续绘制
-    }
+    return this.toolAPI?.setStrokeConfig(config);
   }
 
   /**
@@ -871,11 +1235,7 @@ export class DrawBoard {
    * @returns 运笔效果配置或null
    */
   public async getStrokeConfig(): Promise<StrokeConfig | null> {
-    const penTool = await this.toolManager.getTool('pen');
-    if (penTool && 'getStrokeConfig' in penTool) {
-      return (penTool as { getStrokeConfig: () => StrokeConfig }).getStrokeConfig();
-    }
-    return null;
+    return this.toolAPI.getStrokeConfig();
   }
 
   /**
@@ -883,11 +1243,7 @@ export class DrawBoard {
    * @param preset 运笔预设
    */
   public async setStrokePreset(preset: StrokePresetType): Promise<void> {
-    const penTool = await this.toolManager.getTool('pen');
-    if (penTool && 'setPreset' in penTool) {
-      (penTool as { setPreset: (preset: StrokePresetType) => void }).setPreset(preset);
-      // 预设改变不需要重绘，只影响后续绘制
-    }
+    return this.toolAPI.setStrokePreset(preset);
   }
 
   /**
@@ -895,11 +1251,7 @@ export class DrawBoard {
    * @returns 当前笔刷预设类型或null
    */
   public async getCurrentStrokePreset(): Promise<StrokePresetType | null> {
-    const penTool = await this.toolManager.getTool('pen');
-    if (penTool && 'getCurrentPreset' in penTool) {
-      return (penTool as { getCurrentPreset: () => StrokePresetType | null }).getCurrentPreset();
-    }
-    return null;
+    return this.toolAPI.getCurrentStrokePreset();
   }
 
   // ============================================
@@ -907,96 +1259,23 @@ export class DrawBoard {
   // ============================================
 
   public async undo(): Promise<boolean> {
-    logger.debug('🔄 开始执行撤销操作...');
-    
-    // 检查是否可以撤销
-    const canUndo = this.canUndo();
-    logger.debug('🔄 是否可以撤销:', canUndo);
-    
-    if (!canUndo) {
-      logger.debug('❌ 无法撤销：没有可撤销的操作');
-      return false;
-    }
-    
-    // 获取当前历史记录状态
-    const historyCount = this.historyManager.getHistoryCount();
-    const allActions = this.historyManager.getAllActions();
-    logger.debug('🔄 当前历史记录状态:', {
-      historyCount,
-      allActionsCount: allActions.length,
-      canUndo: this.canUndo(),
-      canRedo: this.canRedo()
-    });
-    
-    // 执行撤销
-    const action = this.historyManager.undo();
-    logger.debug('🔄 撤销结果:', {
-      action: action ? {
-        id: action.id,
-        type: action.type,
-        points: action.points?.length || 0
-      } : null
-    });
-    
-    if (action) {
-      logger.debug('✅ 撤销成功，开始重绘...');
-      // 标记离屏缓存过期（历史记录已变化）
-      this.drawingHandler.invalidateOffscreenCache();
-      await this.drawingHandler.forceRedraw();
-      logger.debug('✅ 重绘完成');
-      return true;
-    } else {
-      logger.warn('❌ 撤销失败：没有返回action');
-      return false;
-    }
+    return this.historyAPI.undo();
   }
 
   public async redo(): Promise<boolean> {
-    logger.debug('🔄 开始执行重做操作...');
-    
-    // 检查是否可以重做
-    const canRedo = this.canRedo();
-    logger.debug('🔄 是否可以重做:', canRedo);
-    
-    if (!canRedo) {
-      logger.debug('❌ 无法重做：没有可重做的操作');
-      return false;
-    }
-    
-    // 执行重做
-    const action = this.historyManager.redo();
-    logger.debug('🔄 重做结果:', {
-      action: action ? {
-        id: action.id,
-        type: action.type,
-        points: action.points?.length || 0
-      } : null
-    });
-    
-    if (action) {
-      logger.debug('✅ 重做成功，开始重绘...');
-      // 标记离屏缓存过期（历史记录已变化）
-      this.drawingHandler.invalidateOffscreenCache();
-      await this.drawingHandler.forceRedraw();
-      logger.debug('✅ 重绘完成');
-      return true;
-    } else {
-      logger.warn('❌ 重做失败：没有返回action');
-      return false;
-    }
+    return this.historyAPI.redo();
   }
 
   public async clear(): Promise<void> {
-    this.historyManager.clear();
-    await this.drawingHandler.forceRedraw();
+    return this.historyAPI.clear();
   }
 
   public canUndo(): boolean {
-    return this.historyManager.canUndo();
+    return this.historyAPI.canUndo();
   }
 
   public canRedo(): boolean {
-    return this.historyManager.canRedo();
+    return this.historyAPI.canRedo();
   }
 
   // ============================================
@@ -1007,92 +1286,28 @@ export class DrawBoard {
    * 清除选择
    */
   public async clearSelection(): Promise<void> {
-    // 清除SelectionManager的选择
-    this.selectionManager.clearSelection();
-    
-    // 清除SelectTool的选择
-    const currentTool = this.toolManager.getCurrentToolInstance();
-    if (currentTool && currentTool.getActionType() === 'select') {
-      const selectTool = currentTool as unknown as { clearSelection: () => void };
-      selectTool.clearSelection();
-    }
-    
-    await this.drawingHandler.forceRedraw();
+    return this.selectionAPI.clearSelection();
   }
 
   /**
    * 删除选择
    */
   public async deleteSelection(): Promise<void> {
-    // 从SelectTool获取选中的actions
-    let selectedActions: DrawAction[] = [];
-    const currentTool = this.toolManager.getCurrentToolInstance();
-    if (currentTool && currentTool.getActionType() === 'select') {
-      const selectTool = currentTool as unknown as { getSelectedActions: () => DrawAction[] };
-      selectedActions = selectTool.getSelectedActions();
-    }
-    
-    // 如果没有从SelectTool获取到，则从SelectionManager获取
-    if (selectedActions.length === 0 && this.selectionManager.hasSelection()) {
-      selectedActions = this.selectionManager.getSelectedActions().map(item => item.action);
-    }
-    
-    // 删除选中的actions
-    if (selectedActions.length > 0) {
-      selectedActions.forEach(action => {
-        this.historyManager.removeActionById(action.id);
-      });
-      
-      // 清除选择状态
-      this.selectionManager.clearSelection();
-      if (currentTool && currentTool.getActionType() === 'select') {
-        const selectTool = currentTool as unknown as { clearSelection: () => void };
-        selectTool.clearSelection();
-      }
-      
-      await this.drawingHandler.forceRedraw();
-    }
+    return this.selectionAPI.deleteSelection();
   }
 
   /**
    * 复制选择
    */
   public copySelection(): DrawAction[] {
-    const copiedActions: DrawAction[] = [];
-    
-    // 优先从SelectTool获取
-    const currentTool = this.toolManager.getCurrentToolInstance();
-    if (currentTool && currentTool.getActionType() === 'select') {
-      const selectTool = currentTool as unknown as { copySelectedActions: () => DrawAction[] };
-      copiedActions.push(...selectTool.copySelectedActions());
-    } else if (this.selectionManager.hasSelection()) {
-      // 从SelectionManager获取
-      copiedActions.push(...this.selectionManager.copySelectedActions());
-    }
-    
-    // 存储到剪贴板
-    if (copiedActions.length > 0) {
-      this.clipboard = copiedActions;
-      logger.debug('已复制到剪贴板', { count: copiedActions.length });
-    }
-    
-    return copiedActions;
+    return this.selectionAPI.copySelection();
   }
 
   /**
    * 剪切选择
    */
   public async cutSelection(): Promise<DrawAction[]> {
-    // 先复制
-    const copiedActions = this.copySelection();
-    
-    if (copiedActions.length > 0) {
-      // 然后删除
-      await this.deleteSelection();
-      logger.debug('已剪切到剪贴板', { count: copiedActions.length });
-    }
-    
-    return copiedActions;
+    return this.selectionAPI.cutSelection();
   }
 
   /**
@@ -1101,171 +1316,38 @@ export class DrawBoard {
    * @param offsetY 垂直偏移量，默认10px
    */
   public async pasteSelection(offsetX: number = 10, offsetY: number = 10): Promise<DrawAction[]> {
-    if (this.clipboard.length === 0) {
-      logger.warn('剪贴板为空，无法粘贴');
-      return [];
-    }
-
-    // 获取画布边界
-    const canvas = this.canvasEngine.getCanvas();
-    const canvasBounds: BoundsType = {
-      x: 0,
-      y: 0,
-      width: canvas.width,
-      height: canvas.height
-    };
-
-    // 生成新的ID，避免冲突，并验证和限制边界
-    const pastedActions = this.clipboard
-      .filter(action => {
-        // 验证动作有效性
-        if (!action.points || action.points.length === 0) {
-          logger.warn('粘贴的动作points为空，跳过', action.id);
-          return false;
-        }
-        if (!action.type) {
-          logger.warn('粘贴的动作类型为空，跳过', action.id);
-          return false;
-        }
-        return true;
-      })
-      .map(action => {
-        const newId = `${action.id}_paste_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        
-        // 限制所有点在画布范围内
-        const validatedPoints = action.points.map(point => {
-          const offsetPoint = {
-            x: point.x + offsetX,
-            y: point.y + offsetY,
-            timestamp: Date.now()
-          };
-          
-          // 使用边界验证器限制点在画布内
-          return BoundsValidator.clampPointToCanvas(offsetPoint, canvasBounds);
-        });
-        
-        return {
-          ...action,
-          id: newId,
-          points: validatedPoints
-        };
-      });
-    
-    if (pastedActions.length === 0) {
-      logger.warn('粘贴后没有有效的动作');
-      return [];
-    }
-
-    // 添加到历史记录
-    for (const action of pastedActions) {
-      this.historyManager.addAction(action);
-      
-      // 分配到虚拟图层
-      if (this.virtualLayerManager) {
-        this.virtualLayerManager.handleNewAction(action);
-      }
-    }
-
-    // 如果当前是选择工具，选中粘贴的内容
-    const currentTool = this.toolManager.getCurrentToolInstance();
-    if (currentTool && currentTool.getActionType() === 'select') {
-      const selectTool = currentTool as unknown as { 
-        pasteActions: (actions: DrawAction[], offsetX: number, offsetY: number) => DrawAction[];
-        setSelectedActions: (actions: DrawAction[]) => void;
-      };
-      
-      if (selectTool.pasteActions) {
-        selectTool.pasteActions(pastedActions, 0, 0);
-      } else if (selectTool.setSelectedActions) {
-        selectTool.setSelectedActions(pastedActions);
-      }
-    }
-
-    // 触发重绘
-    await this.drawingHandler.forceRedraw();
-    
-    logger.debug('已粘贴', { count: pastedActions.length });
-    return pastedActions;
+    return this.selectionAPI.pasteSelection(offsetX, offsetY);
   }
 
   /**
    * 检查剪贴板是否有数据
    */
   public hasClipboardData(): boolean {
-    return this.clipboard.length > 0;
+    return this.selectionAPI.hasClipboardData();
   }
 
   /**
    * 全选所有内容
    */
   public selectAll(): void {
-    // 获取所有历史动作
-    const allActions = this.historyManager.getAllActions();
-    
-    if (allActions.length === 0) {
-      logger.debug('没有可选择的动作');
-      return;
-    }
-    
     // 切换到选择工具
     this.setTool('select');
-    
-    // 获取选择工具实例
-    const currentTool = this.toolManager.getCurrentToolInstance();
-    if (currentTool && currentTool.getActionType() === 'select') {
-      const selectTool = currentTool as unknown as { 
-        setSelectedActions: (actions: DrawAction[]) => void;
-        setLayerActions: (actions: DrawAction[], clearSelection: boolean) => void;
-      };
-      
-      // 设置所有动作为选中状态
-      if (selectTool.setSelectedActions) {
-        selectTool.setSelectedActions(allActions);
-      }
-      
-      // 更新图层动作列表（确保选择工具知道所有动作）
-      if (selectTool.setLayerActions) {
-        selectTool.setLayerActions(allActions, false);
-      }
-    }
-    
-    // 触发重绘
-    this.drawingHandler.forceRedraw();
-    
-    logger.debug('已全选', { count: allActions.length });
+    // 然后调用 API 的全选方法
+    this.selectionAPI.selectAll();
   }
 
   /**
    * 是否有选择
    */
   public hasSelection(): boolean {
-    // 检查SelectTool
-    const currentTool = this.toolManager.getCurrentToolInstance();
-    if (currentTool && currentTool.getActionType() === 'select') {
-      const selectTool = currentTool as unknown as { getSelectedActions: () => DrawAction[] };
-      const selectedActions = selectTool.getSelectedActions();
-      if (selectedActions.length > 0) {
-        return true;
-      }
-    }
-    
-    // 检查SelectionManager
-    return this.selectionManager.hasSelection();
+    return this.selectionAPI.hasSelection();
   }
 
   /**
    * 获取选择
    */
   public getSelectedActions(): DrawAction[] {
-    // 优先从SelectTool获取
-    const currentTool = this.toolManager.getCurrentToolInstance();
-    if (currentTool && currentTool.getActionType() === 'select') {
-      const selectTool = currentTool as unknown as { getSelectedActions: () => DrawAction[] };
-      return selectTool.getSelectedActions();
-    }
-    
-    // 从SelectionManager获取
-    return this.selectionManager.getSelectedActions().map(item => item.action);
+    return this.selectionAPI.getSelectedActions();
   }
 
   // ============================================
@@ -1294,13 +1376,10 @@ export class DrawBoard {
     // 如果是选择工具，从选择工具获取光标样式
     if (currentTool === 'select') {
       const currentToolInstance = this.toolManager.getCurrentToolInstance();
-      if (currentToolInstance && currentToolInstance.getActionType() === 'select') {
-        const selectTool = currentToolInstance as unknown as { 
-          getCurrentCursor: (point?: Point) => string;
-        };
+      if (currentToolInstance && ToolTypeGuards.isSelectTool(currentToolInstance)) {
         // 注意：这里无法获取当前鼠标位置，所以不传point参数
         // 光标更新会在handleDrawMove中通过updateHoverAnchor更新
-        const cursor = selectTool.getCurrentCursor();
+        const cursor = currentToolInstance.getCurrentCursor();
         if (this.cursorHandler) {
           this.cursorHandler.setCursor(cursor);
         }
@@ -1450,7 +1529,7 @@ export class DrawBoard {
    * 获取历史记录
    */
   public getHistory(): DrawAction[] {
-    return this.historyManager.getHistory();
+    return this.historyAPI.getHistory();
   }
 
   /**
@@ -1504,7 +1583,7 @@ export class DrawBoard {
    * 获取工具名称列表
    */
   public getToolNames(): Array<{ type: ToolType; name: string }> {
-    return this.toolManager.getToolNames();
+    return this.toolAPI.getToolNames();
   }
 
   /**
@@ -1577,193 +1656,107 @@ export class DrawBoard {
    * 创建虚拟图层
    */
   public createVirtualLayer(name?: string): VirtualLayer {
-    return this.virtualLayerManager.createVirtualLayer(name);
+    return this.virtualLayerAPI.createVirtualLayer(name);
   }
 
   /**
    * 删除虚拟图层
    */
   public deleteVirtualLayer(layerId: string): boolean {
-    return this.virtualLayerManager.deleteVirtualLayer(layerId);
+    return this.virtualLayerAPI.deleteVirtualLayer(layerId);
   }
 
   /**
    * 设置活动虚拟图层
    */
   public setActiveVirtualLayer(layerId: string): boolean {
-    const success = this.virtualLayerManager.setActiveVirtualLayer(layerId);
-    
-    // 如果当前是选择工具，同步新图层的数据
-    if (success && this.toolManager.getCurrentTool() === 'select') {
-      this.syncLayerDataToSelectTool();
-    }
-    
-    return success;
+    return this.virtualLayerAPI.setActiveVirtualLayer(layerId);
   }
 
   /**
    * 获取活动虚拟图层
    */
   public getActiveVirtualLayer(): VirtualLayer | null {
-    return this.virtualLayerManager.getActiveVirtualLayer();
+    return this.virtualLayerAPI.getActiveVirtualLayer();
   }
 
   /**
    * 获取指定虚拟图层
    */
   public getVirtualLayer(layerId: string): VirtualLayer | null {
-    return this.virtualLayerManager.getVirtualLayer(layerId);
+    return this.virtualLayerAPI.getVirtualLayer(layerId);
   }
 
   /**
    * 获取所有虚拟图层
    */
   public getAllVirtualLayers(): VirtualLayer[] {
-    return this.virtualLayerManager.getAllVirtualLayers();
+    return this.virtualLayerAPI.getAllVirtualLayers();
   }
 
   /**
    * 设置虚拟图层可见性
    */
-  public setVirtualLayerVisible(layerId: string, visible: boolean): boolean {
-    const success = this.virtualLayerManager.setVirtualLayerVisible(layerId, visible);
-    
-    if (!success) return false;
-    
-    // 如果当前是选择工具，同步图层数据
-    if (this.toolManager.getCurrentTool() === 'select') {
-      this.syncLayerDataToSelectTool();
-    }
-    
-    // 优化：如果draw层已拆分，只重绘对应的draw层
-    if (this.canvasEngine.isDrawLayerSplit() && this.virtualLayerManager) {
-      const changedLayer = this.virtualLayerManager.getVirtualLayer(layerId);
-      const activeLayer = this.virtualLayerManager.getActiveVirtualLayer();
-      
-      if (changedLayer && activeLayer) {
-        const selectedZIndex = activeLayer.zIndex;
-        const changedZIndex = changedLayer.zIndex;
-        
-        if (changedZIndex === selectedZIndex) {
-          // 变化的图层是选中图层，只重绘selected层
-          this.drawingHandler.forceRedraw();
-        } else if (changedZIndex < selectedZIndex) {
-          // 变化的图层在下层，只重绘bottom层
-          this.drawingHandler.redrawBottomLayers(selectedZIndex).catch(error => {
-            logger.error('重绘bottom层失败', error);
-            this.drawingHandler.forceRedraw();
-          });
-        } else {
-          // 变化的图层在上层，只重绘top层
-          this.drawingHandler.redrawTopLayers(selectedZIndex).catch(error => {
-            logger.error('重绘top层失败', error);
-            this.drawingHandler.forceRedraw();
-          });
-        }
-      } else {
-        // 无法确定图层位置，使用全量重绘
-        this.drawingHandler.forceRedraw();
-      }
-    } else {
-      // draw层未拆分，使用全量重绘
-      this.drawingHandler.forceRedraw();
-    }
-    
-    return success;
+  public async setVirtualLayerVisible(layerId: string, visible: boolean): Promise<boolean> {
+    return this.virtualLayerAPI.setVirtualLayerVisible(layerId, visible);
   }
 
   /**
    * 设置虚拟图层透明度
+   * @param layerId 图层ID
+   * @param opacity 透明度 (0-1)
    */
-  public setVirtualLayerOpacity(layerId: string, opacity: number): boolean {
-    const success = this.virtualLayerManager.setVirtualLayerOpacity(layerId, opacity);
-    
-    if (!success) return false;
-    
-    // 优化：如果draw层已拆分，只重绘对应的draw层
-    if (this.canvasEngine.isDrawLayerSplit() && this.virtualLayerManager) {
-      const changedLayer = this.virtualLayerManager.getVirtualLayer(layerId);
-      const activeLayer = this.virtualLayerManager.getActiveVirtualLayer();
-      
-      if (changedLayer && activeLayer) {
-        const selectedZIndex = activeLayer.zIndex;
-        const changedZIndex = changedLayer.zIndex;
-        
-        if (changedZIndex === selectedZIndex) {
-          // 变化的图层是选中图层，只重绘selected层
-          this.drawingHandler.forceRedraw();
-        } else if (changedZIndex < selectedZIndex) {
-          // 变化的图层在下层，只重绘bottom层
-          this.drawingHandler.redrawBottomLayers(selectedZIndex).catch(error => {
-            logger.error('重绘bottom层失败', error);
-            this.drawingHandler.forceRedraw();
-          });
-        } else {
-          // 变化的图层在上层，只重绘top层
-          this.drawingHandler.redrawTopLayers(selectedZIndex).catch(error => {
-            logger.error('重绘top层失败', error);
-            this.drawingHandler.forceRedraw();
-          });
-        }
-      } else {
-        // 无法确定图层位置，使用全量重绘
-        this.drawingHandler.forceRedraw();
-      }
-    } else {
-      // draw层未拆分，使用全量重绘
-      this.drawingHandler.forceRedraw();
-    }
-    
-    return success;
+  public async setVirtualLayerOpacity(layerId: string, opacity: number): Promise<boolean> {
+    return this.virtualLayerAPI.setVirtualLayerOpacity(layerId, opacity);
   }
 
   /**
    * 设置虚拟图层锁定状态
    */
   public setVirtualLayerLocked(layerId: string, locked: boolean): boolean {
-    return this.virtualLayerManager.setVirtualLayerLocked(layerId, locked);
+    return this.virtualLayerAPI.setVirtualLayerLocked(layerId, locked);
   }
 
   /**
    * 重命名虚拟图层
    */
   public renameVirtualLayer(layerId: string, newName: string): boolean {
-    return this.virtualLayerManager.renameVirtualLayer(layerId, newName);
+    return this.virtualLayerAPI.renameVirtualLayer(layerId, newName);
   }
 
   /**
    * 获取虚拟图层统计信息
    */
   public getVirtualLayerStats() {
-    return this.virtualLayerManager.getVirtualLayerStats();
+    return this.virtualLayerAPI.getVirtualLayerStats();
   }
 
   /**
    * 获取当前虚拟图层模式
    */
   public getVirtualLayerMode(): VirtualLayerMode {
-    return this.virtualLayerManager.getMode();
+    return this.virtualLayerAPI.getVirtualLayerMode();
   }
 
   /**
    * 设置虚拟图层模式
    */
   public setVirtualLayerMode(mode: VirtualLayerMode): void {
-    this.virtualLayerManager.setMode(mode);
+    this.virtualLayerAPI.setVirtualLayerMode(mode);
   }
 
   /**
    * 获取虚拟图层配置
    */
   public getVirtualLayerConfig() {
-    return this.virtualLayerManager.getConfig();
+    return this.virtualLayerAPI.getVirtualLayerConfig();
   }
 
   /**
    * 更新虚拟图层配置
    */
   public updateVirtualLayerConfig(config: Partial<VirtualLayerConfig>): void {
-    this.virtualLayerManager.updateConfig(config);
+    this.virtualLayerAPI.updateVirtualLayerConfig(config);
   }
 
   // ============================================
@@ -1777,56 +1770,35 @@ export class DrawBoard {
    * @returns 是否成功
    */
   public reorderVirtualLayer(layerId: string, newIndex: number): boolean {
-    const success = this.virtualLayerManager.reorderLayer(layerId, newIndex);
-    if (success) {
-      // 触发重绘
-      this.drawingHandler.forceRedraw();
-    }
-    return success;
+    return this.virtualLayerAPI.reorderVirtualLayer(layerId, newIndex);
   }
 
   /**
    * 将图层移到最上层
    */
   public moveVirtualLayerToTop(layerId: string): boolean {
-    const success = this.virtualLayerManager.moveLayerToTop(layerId);
-    if (success) {
-      this.drawingHandler.forceRedraw();
-    }
-    return success;
+    return this.virtualLayerAPI.moveVirtualLayerToTop(layerId);
   }
 
   /**
    * 将图层移到最下层
    */
   public moveVirtualLayerToBottom(layerId: string): boolean {
-    const success = this.virtualLayerManager.moveLayerToBottom(layerId);
-    if (success) {
-      this.drawingHandler.forceRedraw();
-    }
-    return success;
+    return this.virtualLayerAPI.moveVirtualLayerToBottom(layerId);
   }
 
   /**
    * 将图层上移一层
    */
   public moveVirtualLayerUp(layerId: string): boolean {
-    const success = this.virtualLayerManager.moveLayerUp(layerId);
-    if (success) {
-      this.drawingHandler.forceRedraw();
-    }
-    return success;
+    return this.virtualLayerAPI.moveVirtualLayerUp(layerId);
   }
 
   /**
    * 将图层下移一层
    */
   public moveVirtualLayerDown(layerId: string): boolean {
-    const success = this.virtualLayerManager.moveLayerDown(layerId);
-    if (success) {
-      this.drawingHandler.forceRedraw();
-    }
-    return success;
+    return this.virtualLayerAPI.moveVirtualLayerDown(layerId);
   }
 
   // ============================================
@@ -2008,6 +1980,7 @@ export class DrawBoard {
 
   /**
    * 检查是否需要重新计算复杂度
+   * 注意：此方法通过箭头函数传递给 toolAPI，实际在使用中
    */
   private async checkComplexityRecalculation(): Promise<void> {
     // 检查复杂度管理器是否已初始化
@@ -2054,19 +2027,10 @@ export class DrawBoard {
     } | undefined = undefined;
     
     const currentToolInstance = this.toolManager.getCurrentToolInstance();
-    if (currentToolInstance && currentToolInstance.getActionType() === 'select') {
-      const selectTool = currentToolInstance as unknown as { 
-        getDebugInfo: () => {
-          allActionsCount: number;
-          selectedActionsCount: number;
-          isTransformMode: boolean;
-          isSelecting: boolean;
-          isDraggingAnchor: boolean;
-          anchorPointsCount: number;
-          boundsCacheSize: number;
-        }
-      };
-      selectToolDebugInfo = selectTool.getDebugInfo();
+    if (currentToolInstance && ToolTypeGuards.isSelectTool(currentToolInstance)) {
+      if (currentToolInstance.getDebugInfo) {
+        selectToolDebugInfo = currentToolInstance.getDebugInfo();
+      }
     }
     
     return {
@@ -2086,9 +2050,10 @@ export class DrawBoard {
     
     // 强制更新选择工具状态
     const currentTool = this.toolManager.getCurrentToolInstance();
-    if (currentTool && currentTool.getActionType() === 'select') {
-      const selectTool = currentTool as unknown as { forceUpdate: () => void };
-      selectTool.forceUpdate();
+    if (currentTool && ToolTypeGuards.isSelectTool(currentTool)) {
+      if (currentTool.forceUpdate) {
+        currentTool.forceUpdate();
+      }
     }
     
     logger.debug('强制同步选择工具数据完成', this.getSelectionDebugInfo());

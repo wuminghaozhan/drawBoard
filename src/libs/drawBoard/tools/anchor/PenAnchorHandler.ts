@@ -5,29 +5,37 @@ import { BaseAnchorHandler } from './BaseAnchorHandler';
 import { ShapeUtils } from '../../utils/ShapeUtils';
 
 /**
- * 矩形锚点处理器
- * 实现矩形图形的锚点生成和拖拽处理
+ * 画笔（路径）锚点处理器
+ * 实现画笔路径的锚点生成和拖拽处理
+ * 
+ * 对于路径类型的action（pen/brush/eraser），使用8个标准锚点 + 1个中心点
+ * 支持移动和缩放操作
  */
-export class RectAnchorHandler extends BaseAnchorHandler {
+export class PenAnchorHandler extends BaseAnchorHandler {
   
   /**
-   * 生成矩形锚点
+   * 生成路径锚点
+   * 使用8个标准锚点（4个角点 + 4个边中点）+ 1个中心点
    */
   public generateAnchors(action: DrawAction, bounds: Bounds): AnchorPoint[] {
+    if (action.points.length === 0) {
+      return [];
+    }
+    
     const anchors: AnchorPoint[] = [];
     
     // 生成中心点
-    anchors.push(this.generateCenterAnchor(bounds, 'rect'));
+    anchors.push(this.generateCenterAnchor(bounds, 'pen'));
     
     // 生成8个标准锚点
-    anchors.push(...this.generateStandardAnchors(bounds, 'rect'));
+    anchors.push(...this.generateStandardAnchors(bounds, 'pen'));
     
     return anchors;
   }
   
   /**
-   * 处理矩形锚点拖拽
-   * 中心点：移动整个矩形
+   * 处理路径锚点拖拽
+   * 中心点：移动整个路径
    * 边中点：只改变对应边的位置和尺寸
    * 角点：同时改变两个相邻边的位置和尺寸
    */
@@ -39,7 +47,11 @@ export class RectAnchorHandler extends BaseAnchorHandler {
     dragStartBounds: Bounds,
     dragStartAction?: DrawAction
   ): DrawAction | null {
-    // 中心点拖拽：移动整个矩形
+    if (action.points.length === 0) {
+      return null;
+    }
+    
+    // 中心点拖拽：移动整个路径
     if (anchorType === 'center') {
       const deltaX = currentPoint.x - startPoint.x;
       const deltaY = currentPoint.y - startPoint.y;
@@ -66,7 +78,7 @@ export class RectAnchorHandler extends BaseAnchorHandler {
   }
   
   /**
-   * 处理矩形边中点拖拽
+   * 处理路径边中点拖拽
    */
   private handleEdgeDrag(
     action: DrawAction,
@@ -112,7 +124,7 @@ export class RectAnchorHandler extends BaseAnchorHandler {
   }
   
   /**
-   * 处理矩形角点拖拽
+   * 处理路径角点拖拽
    */
   private handleCornerDrag(
     action: DrawAction,
@@ -165,16 +177,15 @@ export class RectAnchorHandler extends BaseAnchorHandler {
   
   
   /**
-   * 计算矩形中心点（矩形特殊实现：使用边界框中心或点集中心）
+   * 计算路径中心点（边界框中心或点集中心）
    */
-  public calculateCenterPoint(action: DrawAction): Point {
+  public calculateCenterPoint(action: DrawAction, bounds?: Bounds): Point {
     // 先尝试从边界框计算（如果有的话）
-    const bounds = this.calculateBounds(action);
-    if (bounds.width > 0 && bounds.height > 0) {
+    if (bounds && bounds.width > 0 && bounds.height > 0) {
       return ShapeUtils.getBoundsCenter(bounds);
     }
     
-    // 否则使用基类的通用实现
+    // 否则使用基类的通用实现（点集中心）
     return super.calculateCenterPoint(action);
   }
 }

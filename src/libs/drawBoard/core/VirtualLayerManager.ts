@@ -71,7 +71,7 @@ export class VirtualLayerManager {
   private virtualLayers: Map<string, VirtualLayer> = new Map(); // 虚拟图层Map
   private actionLayerMap: Map<string, string> = new Map(); // actionId -> layerId
   private activeLayerId: string = ''; // 活动虚拟图层ID
-  private mode: VirtualLayerMode = 'grouped'; // 虚拟图层模式
+  private mode: VirtualLayerMode = 'individual'; // 虚拟图层模式
   
   // 配置参数
   private maxLayers: number = 50; // 最大虚拟图层数量
@@ -107,7 +107,7 @@ export class VirtualLayerManager {
   private historyManager?: HistoryManager;
 
   constructor(config: VirtualLayerConfig = {}, canvasEngine?: CanvasEngine) {
-    this.mode = config.mode || 'grouped';
+    this.mode = config.mode || 'individual';
     this.maxLayers = config.maxLayers || 50;
     this.defaultLayerName = config.defaultLayerName || '图层';
     this.maxActionsPerLayer = config.maxActionsPerLayer || 1000;
@@ -202,19 +202,31 @@ export class VirtualLayerManager {
       return false;
     }
 
-    // 将该图层的动作移动到默认图层
+    // 获取默认图层（用于后续处理）
     const defaultLayer = this.getDefaultLayer();
-    if (defaultLayer && layer.actionIds.length > 0) {
+
+    // individual模式：直接删除图层和action映射（保持一个图层一个action的规则）
+    if (this.mode === 'individual') {
+      // 删除action映射
+      layer.actionIds.forEach(actionId => {
+        this.actionLayerMap.delete(actionId);
+      });
+      // 删除图层
+      this.virtualLayers.delete(layerId);
+      logger.debug(`独立模式：删除图层 ${layer.name}（保持一个图层一个action规则）`);
+    } else {
+      // grouped模式：将该图层的动作移动到默认图层
+      if (defaultLayer && layer.actionIds.length > 0) {
         layer.actionIds.forEach(actionId => {
           this.actionLayerMap.set(actionId, defaultLayer.id);
           defaultLayer.actionIds.push(actionId);
-        defaultLayer.actionIdsSet.add(actionId);
+          defaultLayer.actionIdsSet.add(actionId);
         });
         defaultLayer.modified = Date.now();
+      }
+      // 删除图层
+      this.virtualLayers.delete(layerId);
     }
-
-    // 删除图层
-    this.virtualLayers.delete(layerId);
 
     // 如果删除的是当前激活图层，切换到默认图层并重新拆分draw层
     if (this.activeLayerId === layerId) {
@@ -299,8 +311,8 @@ export class VirtualLayerManager {
         
         // 拆分draw层以实现性能优化
         try {
-          const allLayers = this.getAllVirtualLayers();
-          const allLayerZIndices = allLayers.map(l => l.zIndex);
+          const allLayers = this.getAllVirtualLayers(); // 已按zIndex排序
+          const allLayerZIndices = allLayers.map(l => l.zIndex); // 已排序的zIndex数组
           const splitResult = this.canvasEngine.splitDrawLayer(layer.zIndex, allLayerZIndices);
           logger.debug('拆分draw层完成:', layer.name, 'zIndex:', layer.zIndex, splitResult);
           
@@ -531,12 +543,21 @@ export class VirtualLayerManager {
 
   /**
    * 将动作分配到虚拟图层
+   * 注意：individual模式下，如果目标图层已有action，会拒绝分配
    */
   public assignActionToLayer(actionId: string, layerId: string): boolean {
     const layer = this.getVirtualLayer(layerId);
     if (!layer || layer.locked) {
       logger.warn('无法分配动作：虚拟图层不存在或已锁定');
       return false;
+    }
+
+    // individual模式：检查目标图层是否已有action（保持一个图层一个action的规则）
+    if (this.mode === 'individual') {
+      if (layer.actionIds.length > 0 && !layer.actionIdsSet.has(actionId)) {
+        logger.warn(`独立模式：图层 ${layer.name} 已有action，无法分配新action（保持一个图层一个action规则）`);
+        return false;
+      }
     }
 
         // 从原图层移除
@@ -590,6 +611,13 @@ export class VirtualLayerManager {
    * 处理新动作（根据模式自动分配图层）
    */
   public handleNewAction(action: DrawAction): void {
+    // individual 模式：每个动作必然对应一个新图层，忽略已指定的图层
+    if (this.mode === 'individual') {
+      this.handleIndividualMode(action);
+      return;
+    }
+
+    // grouped 模式：可以使用已指定的图层或默认图层
     // 如果动作已经指定了虚拟图层，直接使用
     if (action.virtualLayerId) {
       this.assignActionToLayer(action.id, action.virtualLayerId);
@@ -609,12 +637,8 @@ export class VirtualLayerManager {
       return;
     }
 
-    // 根据模式处理新动作
-    if (this.mode === 'individual') {
-      this.handleIndividualMode(action);
-    } else {
-      this.handleGroupedMode(action);
-    }
+    // 否则使用分组模式的标准处理逻辑
+    this.handleGroupedMode(action);
   }
 
   /**
@@ -792,6 +816,7 @@ export class VirtualLayerManager {
 
   /**
    * 合并最旧的图层（性能优化）
+   * 注意：individual模式下不合并图层，而是删除最旧的图层
    */
   private mergeOldestLayers(): void {
     const layers = Array.from(this.virtualLayers.values())
@@ -799,7 +824,19 @@ export class VirtualLayerManager {
     
     if (layers.length <= 1) return;
     
-    // 合并前两个最旧的图层
+    // individual模式：删除最旧的图层（保持一个图层一个action的规则）
+    if (this.mode === 'individual') {
+      const oldestLayer = layers[0];
+      // 删除图层及其action映射
+      oldestLayer.actionIds.forEach(actionId => {
+        this.actionLayerMap.delete(actionId);
+      });
+      this.virtualLayers.delete(oldestLayer.id);
+      logger.debug(`独立模式：删除最旧图层 ${oldestLayer.name}（保持一个图层一个action规则）`);
+      return;
+    }
+    
+    // grouped模式：合并前两个最旧的图层
     const oldestLayer = layers[0];
     const secondOldestLayer = layers[1];
     
@@ -816,7 +853,7 @@ export class VirtualLayerManager {
     // 更新第一个图层的修改时间
     oldestLayer.modified = Date.now();
     
-    logger.debug(`合并图层: ${secondOldestLayer.name} -> ${oldestLayer.name}`);
+    logger.debug(`分组模式：合并图层 ${secondOldestLayer.name} -> ${oldestLayer.name}`);
   }
 
   /**
@@ -918,8 +955,25 @@ export class VirtualLayerManager {
 
   /**
    * 获取默认图层
+   * 改进：优先查找名为"默认图层"的图层，否则返回 zIndex 最小的图层
+   * 这比依赖 Map 插入顺序更可靠
    */
   private getDefaultLayer(): VirtualLayer | null {
+    // 首先查找名为"默认图层"的图层
+    for (const layer of this.virtualLayers.values()) {
+      if (layer.name === '默认图层') {
+        return layer;
+      }
+    }
+    
+    // 如果没有找到默认图层，返回 zIndex 最小的图层（最底层）
+    // 这是按照图层层级关系获取的合理默认值
+    const allLayers = this.getAllVirtualLayers(); // 已按 zIndex 排序
+    if (allLayers.length > 0) {
+      return allLayers[0];
+    }
+    
+    // 最后的回退：返回 Map 中的第一个值
     return this.virtualLayers.values().next().value || null;
   }
 
@@ -945,13 +999,23 @@ export class VirtualLayerManager {
     
     logger.info(`切换虚拟图层模式: ${this.mode} -> ${mode}`);
     
-    if (mode === 'individual') {
-      this.convertToIndividualMode();
-    } else {
-      this.convertToGroupedMode();
+    // 先切换模式，再转换图层结构（这样转换过程中的方法调用能正确检查模式）
+    const oldMode = this.mode;
+    this.mode = mode;
+    
+    try {
+      if (mode === 'individual') {
+        this.convertToIndividualMode();
+      } else {
+        this.convertToGroupedMode();
+      }
+    } catch (error) {
+      // 如果转换失败，恢复原模式
+      this.mode = oldMode;
+      logger.error('切换虚拟图层模式失败，已恢复原模式:', error);
+      throw error;
     }
     
-    this.mode = mode;
     this.invalidateCache();
   }
 
@@ -1357,7 +1421,174 @@ export class VirtualLayerManager {
     return this.reorderLayer(layerId, currentIndex - 1);
   }
 
+  // ============================================
+  // 状态验证方法（用于调试和错误检测）
+  // ============================================
+
   /**
-   * 销毁虚拟图层管理器
+   * 验证虚拟图层管理器的内部状态一致性
+   * 用于调试和发现潜在的状态不一致问题
+   * @returns 验证结果，包含是否有效和错误列表
    */
+  public validateState(): { isValid: boolean; errors: string[]; warnings: string[] } {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    // 1. 检查 actionLayerMap 与图层的一致性
+    for (const [actionId, layerId] of this.actionLayerMap) {
+      const layer = this.virtualLayers.get(layerId);
+      if (!layer) {
+        errors.push(`Action "${actionId}" 引用了不存在的图层 "${layerId}"`);
+        continue;
+      }
+      if (!layer.actionIdsSet.has(actionId)) {
+        errors.push(`Action "${actionId}" 在 actionLayerMap 中映射到图层 "${layerId}"，但不在该图层的 actionIdsSet 中`);
+      }
+    }
+
+    // 2. 检查每个图层的 actionIds 与 actionIdsSet 一致性
+    for (const layer of this.virtualLayers.values()) {
+      // 检查数组和 Set 的大小是否一致
+      if (layer.actionIds.length !== layer.actionIdsSet.size) {
+        errors.push(`图层 "${layer.name}" (${layer.id}) 的 actionIds (${layer.actionIds.length}个) 与 actionIdsSet (${layer.actionIdsSet.size}个) 数量不一致`);
+      }
+
+      // 检查数组中的每个 ID 是否都在 Set 中
+      for (const actionId of layer.actionIds) {
+        if (!layer.actionIdsSet.has(actionId)) {
+          errors.push(`图层 "${layer.name}" 的 actionIds 包含 "${actionId}"，但 actionIdsSet 中不存在`);
+        }
+      }
+
+      // 检查 Set 中的每个 ID 是否都在 actionLayerMap 中映射到此图层
+      for (const actionId of layer.actionIdsSet) {
+        const mappedLayerId = this.actionLayerMap.get(actionId);
+        if (mappedLayerId !== layer.id) {
+          warnings.push(`图层 "${layer.name}" 的 actionIdsSet 包含 "${actionId}"，但 actionLayerMap 将其映射到 "${mappedLayerId || 'undefined'}"`);
+        }
+      }
+    }
+
+    // 3. 检查活动图层是否存在
+    if (this.activeLayerId) {
+      const activeLayer = this.virtualLayers.get(this.activeLayerId);
+      if (!activeLayer) {
+        errors.push(`活动图层 ID "${this.activeLayerId}" 对应的图层不存在`);
+      } else if (activeLayer.locked) {
+        warnings.push(`活动图层 "${activeLayer.name}" 处于锁定状态`);
+      }
+    }
+
+    // 4. 检查 zIndex 唯一性
+    const zIndexMap = new Map<number, string[]>();
+    for (const layer of this.virtualLayers.values()) {
+      const existing = zIndexMap.get(layer.zIndex) || [];
+      existing.push(layer.id);
+      zIndexMap.set(layer.zIndex, existing);
+    }
+    for (const [zIndex, layerIds] of zIndexMap) {
+      if (layerIds.length > 1) {
+        errors.push(`多个图层共享相同的 zIndex (${zIndex}): ${layerIds.join(', ')}`);
+      }
+    }
+
+    // 5. 检查缓存状态
+    const totalActionsInLayers = Array.from(this.virtualLayers.values())
+      .reduce((sum, layer) => sum + layer.actionIds.length, 0);
+    if (totalActionsInLayers !== this.actionLayerMap.size) {
+      warnings.push(`图层中的总 action 数量 (${totalActionsInLayers}) 与 actionLayerMap 大小 (${this.actionLayerMap.size}) 不一致`);
+    }
+
+    // 6. individual 模式检查：每个图层应该只有一个 action
+    if (this.mode === 'individual') {
+      for (const layer of this.virtualLayers.values()) {
+        if (layer.actionIds.length > 1) {
+          warnings.push(`individual 模式下，图层 "${layer.name}" 包含 ${layer.actionIds.length} 个 actions（应该只有1个）`);
+        }
+      }
+    }
+
+    return {
+      isValid: errors.length === 0,
+      errors,
+      warnings
+    };
+  }
+
+  /**
+   * 打印状态验证报告到控制台（便于调试）
+   */
+  public printValidationReport(): void {
+    const result = this.validateState();
+    
+    console.group('🔍 VirtualLayerManager 状态验证报告');
+    console.log(`状态: ${result.isValid ? '✅ 有效' : '❌ 无效'}`);
+    console.log(`图层数量: ${this.virtualLayers.size}`);
+    console.log(`Action 映射数量: ${this.actionLayerMap.size}`);
+    console.log(`当前模式: ${this.mode}`);
+    console.log(`活动图层: ${this.activeLayerId || '无'}`);
+    
+    if (result.errors.length > 0) {
+      console.group('❌ 错误:');
+      result.errors.forEach(err => console.error(err));
+      console.groupEnd();
+    }
+    
+    if (result.warnings.length > 0) {
+      console.group('⚠️ 警告:');
+      result.warnings.forEach(warn => console.warn(warn));
+      console.groupEnd();
+    }
+    
+    console.groupEnd();
+  }
+
+  /**
+   * 自动修复常见的状态不一致问题
+   * 注意：此方法可能会导致数据丢失，谨慎使用
+   * @returns 修复的问题数量
+   */
+  public autoRepairState(): number {
+    let repairCount = 0;
+    
+    // 1. 修复 actionLayerMap 中引用不存在图层的映射
+    const invalidMappings: string[] = [];
+    for (const [actionId, layerId] of this.actionLayerMap) {
+      if (!this.virtualLayers.has(layerId)) {
+        invalidMappings.push(actionId);
+      }
+    }
+    for (const actionId of invalidMappings) {
+      this.actionLayerMap.delete(actionId);
+      repairCount++;
+      logger.warn(`autoRepairState: 删除了无效的 action 映射 "${actionId}"`);
+    }
+
+    // 2. 修复 actionIds 和 actionIdsSet 不一致的问题
+    for (const layer of this.virtualLayers.values()) {
+      // 以 actionIds 数组为准，重建 actionIdsSet
+      if (layer.actionIds.length !== layer.actionIdsSet.size) {
+        layer.actionIdsSet = new Set(layer.actionIds);
+        repairCount++;
+        logger.warn(`autoRepairState: 重建了图层 "${layer.name}" 的 actionIdsSet`);
+      }
+    }
+
+    // 3. 如果活动图层不存在，设置为默认图层
+    if (this.activeLayerId && !this.virtualLayers.has(this.activeLayerId)) {
+      const defaultLayer = this.getDefaultLayer();
+      if (defaultLayer) {
+        this.activeLayerId = defaultLayer.id;
+        repairCount++;
+        logger.warn(`autoRepairState: 活动图层不存在，已切换到默认图层 "${defaultLayer.name}"`);
+      }
+    }
+
+    if (repairCount > 0) {
+      this.invalidateCache();
+      logger.info(`autoRepairState: 共修复了 ${repairCount} 个问题`);
+    }
+
+    return repairCount;
+  }
 } 

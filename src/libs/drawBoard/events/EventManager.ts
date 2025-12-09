@@ -81,6 +81,15 @@ export class EventManager {
    * 🛡️ 事件过滤：防止重复事件、无效事件的处理
   */
   private bindEvents(): void {
+    logger.debug('EventManager.bindEvents: 开始绑定DOM事件', {
+      canvas: this.canvas,
+      canvasWidth: this.canvas.width,
+      canvasHeight: this.canvas.height,
+      offsetWidth: this.canvas.offsetWidth,
+      offsetHeight: this.canvas.offsetHeight,
+      pointerEvents: getComputedStyle(this.canvas).pointerEvents
+    });
+    
     // 鼠标事件
     this.canvas.addEventListener('mousedown', this.boundHandlers.mouseDown);
     this.canvas.addEventListener('mousemove', (...args) => {this.boundHandlers.mouseMove(...args)});
@@ -91,6 +100,8 @@ export class EventManager {
     this.canvas.addEventListener('touchstart', this.boundHandlers.touchStart, { passive: false });
     this.canvas.addEventListener('touchmove', this.boundHandlers.touchMove, { passive: false });
     this.canvas.addEventListener('touchend', this.boundHandlers.touchEnd, { passive: false });
+    
+    logger.debug('EventManager.bindEvents: DOM事件绑定完成');
   }
 
   /**
@@ -118,25 +129,42 @@ export class EventManager {
   private safeEmitEvent(event: DrawEvent): void {
     if (!this.isDuplicateEvent(event)) {
       this.lastProcessedEvent = event;
-      logger.debug('EventManager: 分发事件', { type: event.type, point: event.point });
+      logger.debug('EventManager.safeEmitEvent: 分发事件', { 
+        type: event.type, 
+        point: event.point,
+        registeredHandlers: this.handlers.get(event.type)?.length || 0
+      });
       this.emit(event.type, event);
     } else {
-      logger.debug('EventManager: 检测到重复事件，已过滤:', event.type, event.point);
+      logger.debug('EventManager.safeEmitEvent: 检测到重复事件，已过滤', { 
+        type: event.type, 
+        point: event.point 
+      });
     }
   }
 
   private handleMouseDown(e: MouseEvent): void {
-    logger.debug('EventManager: handleMouseDown 被调用', { 
+    logger.info('EventManager: handleMouseDown 被调用', { 
       button: e.button, 
       clientX: e.clientX, 
-      clientY: e.clientY 
+      clientY: e.clientY,
+      target: e.target,
+      currentTarget: e.currentTarget,
+      canvas: this.canvas,
+      canvasWidth: this.canvas.width,
+      canvasHeight: this.canvas.height,
+      canvasOffsetWidth: this.canvas.offsetWidth,
+      canvasOffsetHeight: this.canvas.offsetHeight
     });
     
     const now = Date.now();
     
     // 防止快速重复点击
     if (now - this.lastMouseDownTime < this.minEventInterval) {
-      logger.debug('EventManager: 事件被过滤（时间间隔太短）');
+      logger.debug('EventManager: 事件被过滤（时间间隔太短）', {
+        timeSinceLastEvent: now - this.lastMouseDownTime,
+        minInterval: this.minEventInterval
+      });
       return;
     }
     
@@ -152,7 +180,12 @@ export class EventManager {
     };
     
     logger.debug('EventManager: Mouse down point:', point);
-    logger.debug('EventManager: 准备分发事件，注册的处理器数量:', this.handlers.get('mousedown')?.length || 0);
+    const handlerCount = this.handlers.get('mousedown')?.length || 0;
+    logger.debug('EventManager: 准备分发事件', {
+      handlerCount,
+      registeredEventTypes: Array.from(this.handlers.keys()),
+      allHandlersCount: Array.from(this.handlers.values()).reduce((sum, h) => sum + h.length, 0)
+    });
 
     this.safeEmitEvent(event);
   }
@@ -406,11 +439,15 @@ export class EventManager {
     const handlers = this.handlers.get(eventType);
     
     if (!handlers || handlers.length === 0) {
-      logger.debug('EventManager: 没有找到事件处理器', { eventType });
+      logger.warn('EventManager.emit: 没有找到事件处理器', { 
+        eventType,
+        allRegisteredTypes: Array.from(this.handlers.keys()),
+        allHandlersCount: Array.from(this.handlers.values()).reduce((sum, h) => sum + h.length, 0)
+      });
       return;
     }
     
-    logger.debug('EventManager: emit 被调用', { 
+    logger.debug('EventManager.emit: 开始分发事件', { 
       eventType, 
       handlersCount: handlers.length,
       point: event.point 
@@ -421,15 +458,17 @@ export class EventManager {
     
     handlersCopy.forEach((handler, index) => {
       try {
-        logger.debug(`EventManager: 执行处理器 [${index}]`, { eventType });
+        logger.debug(`EventManager.emit: 执行处理器 [${index}/${handlersCopy.length}]`, { eventType });
         handler(event);
-        logger.debug(`EventManager: 处理器 [${index}] 执行完成`);
+        logger.debug(`EventManager.emit: 处理器 [${index}] 执行完成`);
       } catch (error) {
-        logger.error(`事件处理器执行失败 (${eventType}) [${index}]:`, error);
+        logger.error(`EventManager.emit: 事件处理器执行失败 (${eventType}) [${index}]:`, error);
         // 不在这里移除，避免影响其他处理器
         // 可以考虑添加错误计数，超过阈值后移除
       }
     });
+    
+    logger.debug('EventManager.emit: 所有处理器执行完成', { eventType });
   }
 
   /**

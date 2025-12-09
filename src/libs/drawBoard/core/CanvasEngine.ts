@@ -129,7 +129,8 @@ export class CanvasEngine {
     // 绘制层 - 用于历史记录和最终绘制
     this.createLayer('draw', 1);
     // 交互层 - 用于实时预览、选择框等
-    this.createLayer('interaction', 2);
+    // 注意：使用较大的 zIndex (1000) 以确保在所有动态图层之上
+    this.createLayer('interaction', 1000);
   }
 
   private createLayer(name: string, zIndex: number): void {
@@ -153,6 +154,7 @@ export class CanvasEngine {
     canvas.style.pointerEvents = 'none';
     canvas.style.zIndex = zIndex.toString();
     canvas.style.backgroundColor = 'transparent'; // 确保背景透明
+    canvas.setAttribute('layer-name', name); // 添加图层名称属性
     
     // 交互层需要接收事件
     if (name === 'interaction') {
@@ -395,22 +397,104 @@ export class CanvasEngine {
   // ============================================
 
   // 动态图层 zIndex 计算常量（优化版）
-  private static readonly BASE_ZINDEX = 100; // interaction层基础zIndex
-  private static readonly MAX_DYNAMIC_LAYER_ZINDEX = 1000; // 最大zIndex限制
-  private static readonly ZINDEX_STEP = 2; // zIndex步长
+  // 注意：interaction层的zIndex是1000，所以动态图层的zIndex必须小于1000
+  // 否则会遮挡interaction层，导致事件无法触发
+  // 我们使用100作为基础zIndex，确保在draw层(1)之上，但在interaction层(1000)之下
+  private static readonly BASE_ZINDEX = 100; // 动态图层基础zIndex，必须小于interaction层(1000)
+  private static readonly MAX_DYNAMIC_LAYER_ZINDEX = 999; // 最大zIndex限制，必须小于interaction层(1000)
+  private static readonly ZINDEX_STEP = 1; // zIndex步长，用于区分不同虚拟图层的动态图层
+  
+  // 已使用的动态图层 zIndex 集合（防止冲突）
+  private usedDynamicZIndices: Set<number> = new Set();
 
   /**
    * 计算动态图层的zIndex（优化版）
    * 公式：BASE_ZINDEX + virtualLayerZIndex * ZINDEX_STEP
    * 例如：虚拟图层zIndex=0 → 动态图层zIndex=100
-   *      虚拟图层zIndex=1 → 动态图层zIndex=102
-   *      虚拟图层zIndex=2 → 动态图层zIndex=104
+   *      虚拟图层zIndex=1 → 动态图层zIndex=101
+   *      虚拟图层zIndex=2 → 动态图层zIndex=102
+   * 
+   * 改进：当计算出的 zIndex 超出范围或冲突时，使用备选策略
    * @param virtualLayerZIndex 虚拟图层的zIndex
-   * @returns 计算后的zIndex（不超过最大值）
+   * @returns 计算后的zIndex（不超过最大值，返回整数）
    */
   public static calculateDynamicLayerZIndex(virtualLayerZIndex: number): number {
     const calculatedZIndex = CanvasEngine.BASE_ZINDEX + virtualLayerZIndex * CanvasEngine.ZINDEX_STEP;
-    return Math.min(calculatedZIndex, CanvasEngine.MAX_DYNAMIC_LAYER_ZINDEX);
+    
+    // 确保返回整数（浏览器可能不支持小数zIndex）
+    const result = Math.floor(calculatedZIndex);
+    
+    // 检查是否超出最大值
+    if (result >= CanvasEngine.MAX_DYNAMIC_LAYER_ZINDEX) {
+      // 当 zIndex 超出范围时，记录警告
+      // 这种情况表示虚拟图层数量过多（超过 899 个）
+      logger.warn('calculateDynamicLayerZIndex: zIndex 超出范围，可能存在冲突', {
+        virtualLayerZIndex,
+        calculatedZIndex: result,
+        maxAllowed: CanvasEngine.MAX_DYNAMIC_LAYER_ZINDEX - 1,
+        recommendation: '考虑减少虚拟图层数量或调整 BASE_ZINDEX'
+      });
+      return CanvasEngine.MAX_DYNAMIC_LAYER_ZINDEX - 1; // 返回最大有效值
+    }
+    
+    return result;
+  }
+  
+  /**
+   * 分配一个唯一的动态图层 zIndex（防止冲突）
+   * 当多个虚拟图层可能映射到同一个 zIndex 时使用此方法
+   * @param preferredZIndex 首选的 zIndex
+   * @returns 分配的唯一 zIndex
+   */
+  private allocateDynamicZIndex(preferredZIndex: number): number {
+    // 如果首选值可用，直接使用
+    if (!this.usedDynamicZIndices.has(preferredZIndex)) {
+      this.usedDynamicZIndices.add(preferredZIndex);
+      return preferredZIndex;
+    }
+    
+    // 否则向上查找可用的 zIndex
+    let candidate = preferredZIndex + 1;
+    while (candidate < CanvasEngine.MAX_DYNAMIC_LAYER_ZINDEX) {
+      if (!this.usedDynamicZIndices.has(candidate)) {
+        this.usedDynamicZIndices.add(candidate);
+        logger.debug('allocateDynamicZIndex: 分配备选 zIndex', {
+          preferred: preferredZIndex,
+          allocated: candidate
+        });
+        return candidate;
+      }
+      candidate++;
+    }
+    
+    // 如果向上找不到，向下查找
+    candidate = preferredZIndex - 1;
+    while (candidate >= CanvasEngine.BASE_ZINDEX) {
+      if (!this.usedDynamicZIndices.has(candidate)) {
+        this.usedDynamicZIndices.add(candidate);
+        logger.debug('allocateDynamicZIndex: 分配备选 zIndex (向下)', {
+          preferred: preferredZIndex,
+          allocated: candidate
+        });
+        return candidate;
+      }
+      candidate--;
+    }
+    
+    // 所有 zIndex 都被占用，记录错误并返回首选值（会产生冲突）
+    logger.error('allocateDynamicZIndex: 无法分配唯一 zIndex，将产生冲突', {
+      preferred: preferredZIndex,
+      usedCount: this.usedDynamicZIndices.size
+    });
+    return preferredZIndex;
+  }
+  
+  /**
+   * 释放动态图层的 zIndex
+   * @param zIndex 要释放的 zIndex
+   */
+  private releaseDynamicZIndex(zIndex: number): void {
+    this.usedDynamicZIndices.delete(zIndex);
   }
 
   /**
@@ -420,15 +504,27 @@ export class CanvasEngine {
    * @returns 创建的CanvasLayer
    */
   public createDynamicLayer(layerId: string, zIndex: number): CanvasLayer {
-    // 如果已存在，先删除
+    // 如果已存在，先删除（这会释放旧的 zIndex）
     if (this.dynamicLayers.has(layerId)) {
       this.removeDynamicLayer(layerId);
+    }
+
+    // 分配唯一的 zIndex（防止冲突）
+    const allocatedZIndex = this.allocateDynamicZIndex(zIndex);
+    if (allocatedZIndex !== zIndex) {
+      logger.debug('createDynamicLayer: zIndex 已调整以避免冲突', {
+        layerId,
+        requested: zIndex,
+        allocated: allocatedZIndex
+      });
     }
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     
     if (!ctx) {
+      // 分配失败，释放 zIndex
+      this.releaseDynamicZIndex(allocatedZIndex);
       logger.error('Failed to get 2D context for dynamic layer:', layerId);
       throw new Error(`无法创建动态图层 ${layerId} 的2D上下文`);
     }
@@ -444,21 +540,81 @@ export class CanvasEngine {
     // 动态图层不接收事件，事件由 interaction 层统一处理
     // 这样可以避免动态图层遮挡 interaction 层
     canvas.style.pointerEvents = 'none';
-    canvas.style.zIndex = zIndex.toString();
+    // 重要：先设置 zIndex（在设置尺寸之前）
+    // 使用分配的 zIndex 而不是原始请求的 zIndex
+    const zIndexString = allocatedZIndex.toString();
+    // 保存分配的 zIndex 用于后续释放
+    canvas.setAttribute('data-allocated-zindex', zIndexString);
+    canvas.style.setProperty('z-index', zIndexString);
+    canvas.style.zIndex = zIndexString; // 双重设置确保生效
     canvas.style.backgroundColor = 'transparent';
-    logger.debug('创建动态图层', {
+    canvas.setAttribute('layer-name', layerId); // 添加图层名称属性，便于调试
+    
+    logger.info('创建动态图层', {
       layerId,
       zIndex,
+      zIndexString,
+      canvasStyleZIndex: canvas.style.zIndex,
       pointerEvents: canvas.style.pointerEvents,
-      canvas
+      interactionLayerZIndex: 1000,
+      willBlockEvents: parseFloat(zIndexString) >= 1000,
+      canvasWidth: canvas.width,
+      canvasHeight: canvas.height
     });
+    
+    // 警告：如果zIndex >= 1000，可能会遮挡interaction层
+    if (parseFloat(zIndexString) >= 1000) {
+      logger.warn('⚠️ 动态图层的zIndex >= 1000，可能会遮挡interaction层的事件！', {
+        layerId,
+        zIndex,
+        interactionLayerZIndex: 1000,
+        pointerEvents: canvas.style.pointerEvents
+      });
+    }
 
-    // 设置Canvas尺寸
+    // 设置Canvas尺寸（注意：某些浏览器在设置尺寸时可能会重置样式）
     canvas.width = this.width || this.container.offsetWidth || 800;
     canvas.height = this.height || this.container.offsetHeight || 600;
+    
+    // 设置尺寸后立即重新设置 zIndex（防止被重置）
+    canvas.style.setProperty('z-index', zIndexString);
+    canvas.style.zIndex = zIndexString;
+    
+    logger.info('设置尺寸后验证zIndex', {
+      layerId,
+      zIndexAfterSize: canvas.style.zIndex,
+      zIndexMatch: canvas.style.zIndex === zIndexString
+    });
 
     // 插入到容器中（需要按zIndex顺序插入）
-    this.insertCanvasByZIndex(canvas, zIndex);
+    // 注意：使用 allocatedZIndex 而非原始 zIndex，确保 z-index 冲突防止逻辑生效
+    this.insertCanvasByZIndex(canvas, allocatedZIndex);
+    
+    // 插入后再次验证 zIndex 是否被正确设置
+    const finalZIndex = canvas.style.zIndex;
+    if (!finalZIndex || finalZIndex !== zIndex.toString()) {
+      logger.error('❌ 动态图层的zIndex设置失败！', {
+        layerId,
+        expectedZIndex: zIndex,
+        actualZIndex: finalZIndex,
+        canvasStyleZIndex: canvas.style.zIndex
+      });
+      // 强制设置
+      canvas.style.setProperty('z-index', zIndex.toString());
+      // 如果 setProperty 失败，直接设置
+      if (!canvas.style.zIndex) {
+        canvas.style.zIndex = zIndex.toString();
+      }
+      logger.info('✅ 已强制设置zIndex', {
+        layerId,
+        zIndex: canvas.style.zIndex
+      });
+    } else {
+      logger.info('✅ 动态图层的zIndex设置成功', {
+        layerId,
+        zIndex: finalZIndex
+      });
+    }
 
     const layer: CanvasLayer = {
       canvas,
@@ -476,12 +632,39 @@ export class CanvasEngine {
    * 按zIndex顺序插入Canvas元素
    */
   private insertCanvasByZIndex(canvas: HTMLCanvasElement, zIndex: number): void {
+    // 确保zIndex被正确设置到canvas的style上（在插入前设置）
+    const zIndexString = zIndex.toString();
+    // 多重设置确保生效
+    canvas.style.setProperty('z-index', zIndexString);
+    canvas.style.zIndex = zIndexString;
+    
+    logger.info('insertCanvasByZIndex: 设置canvas的zIndex', {
+      layerName: canvas.getAttribute('layer-name'),
+      zIndex,
+      zIndexString,
+      canvasStyleZIndex: canvas.style.zIndex,
+      canvasComputedZIndex: canvas.parentElement ? getComputedStyle(canvas).zIndex : 'N/A (not in DOM)'
+    });
+    
+    // 如果此时 zIndex 还是空的，说明有问题
+    if (!canvas.style.zIndex || canvas.style.zIndex !== zIndexString) {
+      logger.error('❌ insertCanvasByZIndex: 插入前zIndex设置失败！', {
+        layerName: canvas.getAttribute('layer-name'),
+        expectedZIndex: zIndexString,
+        actualZIndex: canvas.style.zIndex,
+        canvasStyle: canvas.getAttribute('style')
+      });
+      // 尝试使用 setAttribute 直接设置 style
+      const currentStyle = canvas.getAttribute('style') || '';
+      canvas.setAttribute('style', `${currentStyle}; z-index: ${zIndexString} !important;`.replace(/^; /, ''));
+    }
+    
     const allCanvases = Array.from(this.container.querySelectorAll('canvas'));
     
     // 找到应该插入的位置（zIndex大于当前zIndex的第一个元素之前）
     let insertBefore: Node | null = null;
     for (const existingCanvas of allCanvases) {
-      const existingZIndex = parseInt(existingCanvas.style.zIndex || '0', 10);
+      const existingZIndex = parseFloat(existingCanvas.style.zIndex || getComputedStyle(existingCanvas).zIndex || '0');
       if (existingZIndex > zIndex) {
         insertBefore = existingCanvas;
         break;
@@ -493,6 +676,37 @@ export class CanvasEngine {
     } else {
       this.container.appendChild(canvas);
     }
+    
+    // 插入后立即再次设置zIndex（确保不被覆盖）
+    canvas.style.setProperty('z-index', zIndexString);
+    canvas.style.zIndex = zIndexString;
+    
+    // 使用 requestAnimationFrame 确保在下一帧验证（让浏览器有时间应用样式）
+    requestAnimationFrame(() => {
+      const finalZIndex = canvas.style.zIndex;
+      const computedZIndex = getComputedStyle(canvas).zIndex;
+      if (!finalZIndex || finalZIndex !== zIndexString) {
+        logger.warn('⚠️ insertCanvasByZIndex: 插入后zIndex丢失，重新设置', {
+          layerName: canvas.getAttribute('layer-name'),
+          expectedZIndex: zIndexString,
+          actualZIndex: finalZIndex,
+          computedZIndex
+        });
+        // 最后一次尝试：直接设置 style.zIndex
+        canvas.style.zIndex = zIndexString;
+        // 如果还是不行，使用 setAttribute 作为备选方案
+        if (!canvas.style.zIndex || canvas.style.zIndex !== zIndexString) {
+          const currentStyle = canvas.getAttribute('style') || '';
+          canvas.setAttribute('style', `${currentStyle}; z-index: ${zIndexString} !important;`.replace(/^; /, ''));
+        }
+      } else {
+        logger.info('✅ insertCanvasByZIndex: zIndex设置成功', {
+          layerName: canvas.getAttribute('layer-name'),
+          zIndex: finalZIndex,
+          computedZIndex
+        });
+      }
+    });
   }
 
   /**
@@ -502,11 +716,17 @@ export class CanvasEngine {
   public removeDynamicLayer(layerId: string): void {
     const layer = this.dynamicLayers.get(layerId);
     if (layer) {
+      // 释放分配的 zIndex
+      const allocatedZIndex = layer.canvas.getAttribute('data-allocated-zindex');
+      if (allocatedZIndex) {
+        this.releaseDynamicZIndex(parseInt(allocatedZIndex, 10));
+      }
+      
       if (layer.canvas.parentNode) {
         layer.canvas.parentNode.removeChild(layer.canvas);
       }
       this.dynamicLayers.delete(layerId);
-      logger.debug('删除动态图层:', layerId);
+      logger.debug('删除动态图层:', layerId, 'releasedZIndex:', allocatedZIndex);
     }
   }
 
@@ -523,7 +743,81 @@ export class CanvasEngine {
     if (!layer) {
       // 使用优化后的zIndex计算公式：BASE_ZINDEX + virtualLayerZIndex * ZINDEX_STEP
       const zIndex = CanvasEngine.calculateDynamicLayerZIndex(virtualLayerZIndex);
+      logger.info('getSelectionLayerForVirtualLayer: 创建新的动态图层', {
+        layerId,
+        virtualLayerZIndex,
+        calculatedZIndex: zIndex,
+        interactionLayerZIndex: 1000,
+        willBlockEvents: zIndex >= 1000
+      });
+      
+      // 警告：如果zIndex >= 1000，可能会遮挡interaction层
+      if (zIndex >= 1000) {
+        logger.warn('⚠️ 动态图层的zIndex >= 1000，可能会遮挡interaction层的事件！', {
+          layerId,
+          zIndex,
+          interactionLayerZIndex: 1000,
+          suggestion: '考虑调整calculateDynamicLayerZIndex的计算方式'
+        });
+      }
+      
       layer = this.createDynamicLayer(layerId, zIndex);
+      
+      // 创建后再次验证 zIndex
+      const finalZIndex = layer.canvas.style.zIndex;
+      logger.info('getSelectionLayerForVirtualLayer: 创建完成，验证zIndex', {
+        layerId,
+        expectedZIndex: zIndex,
+        actualZIndex: finalZIndex,
+        zIndexMatch: finalZIndex === zIndex.toString()
+      });
+      
+      if (!finalZIndex || finalZIndex !== zIndex.toString()) {
+        logger.error('❌ getSelectionLayerForVirtualLayer: zIndex设置失败，强制设置', {
+          layerId,
+          expectedZIndex: zIndex,
+          actualZIndex: finalZIndex
+        });
+        layer.canvas.style.setProperty('z-index', zIndex.toString());
+        // 如果 setProperty 失败，直接设置
+        if (!layer.canvas.style.zIndex) {
+          layer.canvas.style.zIndex = zIndex.toString();
+        }
+      }
+    } else {
+      // 计算期望的 zIndex
+      const expectedZIndex = CanvasEngine.calculateDynamicLayerZIndex(virtualLayerZIndex);
+      const currentStyleZIndex = layer.canvas.style.zIndex;
+      const computedZIndex = getComputedStyle(layer.canvas).zIndex;
+      
+      logger.info('getSelectionLayerForVirtualLayer: 使用已存在的动态图层', {
+        layerId,
+        virtualLayerZIndex,
+        expectedZIndex,
+        currentStyleZIndex,
+        computedZIndex,
+        pointerEvents: layer.canvas.style.pointerEvents
+      });
+      
+      // 检查并修复 zIndex：如果没有设置或与期望值不匹配，则重新设置
+      const needsUpdate = !currentStyleZIndex || 
+                         currentStyleZIndex !== expectedZIndex.toString() ||
+                         (computedZIndex === 'auto' || computedZIndex === '0');
+      
+      if (needsUpdate) {
+        logger.debug('修复动态图层的zIndex', {
+          layerId,
+          expectedZIndex,
+          currentStyleZIndex,
+          computedZIndex,
+          reason: !currentStyleZIndex ? '内联样式缺失' : 
+                  currentStyleZIndex !== expectedZIndex.toString() ? 'zIndex不匹配' : 
+                  '计算样式异常'
+        });
+        
+        // 使用 updateDynamicLayerZIndex 方法确保正确更新
+        this.updateDynamicLayerZIndex(layerId, expectedZIndex);
+      }
     }
 
     return layer.ctx;
@@ -537,13 +831,31 @@ export class CanvasEngine {
   public updateDynamicLayerZIndex(layerId: string, newZIndex: number): void {
     const layer = this.dynamicLayers.get(layerId);
     if (layer) {
-      layer.canvas.style.zIndex = newZIndex.toString();
-      // 重新插入以保持顺序
+      // 1. 释放旧的 zIndex
+      const oldAllocatedZIndex = layer.canvas.getAttribute('data-allocated-zindex');
+      if (oldAllocatedZIndex) {
+        this.releaseDynamicZIndex(parseInt(oldAllocatedZIndex, 10));
+      }
+      
+      // 2. 分配新的 zIndex（防止冲突）
+      const allocatedZIndex = this.allocateDynamicZIndex(newZIndex);
+      const zIndexString = allocatedZIndex.toString();
+      
+      // 3. 更新 canvas 属性和样式
+      layer.canvas.setAttribute('data-allocated-zindex', zIndexString);
+      layer.canvas.style.zIndex = zIndexString;
+      
+      // 4. 重新插入以保持顺序
       if (layer.canvas.parentNode) {
         layer.canvas.parentNode.removeChild(layer.canvas);
       }
-      this.insertCanvasByZIndex(layer.canvas, newZIndex);
-      logger.debug('更新动态图层zIndex:', layerId, 'newZIndex:', newZIndex);
+      this.insertCanvasByZIndex(layer.canvas, allocatedZIndex);
+      
+      logger.debug('更新动态图层zIndex:', layerId, {
+        requestedZIndex: newZIndex,
+        allocatedZIndex,
+        oldZIndex: oldAllocatedZIndex
+      });
     }
   }
 
@@ -795,6 +1107,7 @@ export class CanvasEngine {
     canvas.style.pointerEvents = 'none';
     canvas.style.zIndex = zIndex.toString();
     canvas.style.backgroundColor = 'transparent';
+    canvas.setAttribute('layer-name', layerId); // 添加图层名称属性，便于调试
 
     // 设置Canvas尺寸
     canvas.width = this.width || this.container.offsetWidth || 800;
@@ -1006,6 +1319,9 @@ export class CanvasEngine {
     
     // 清理上下文缓存
     this.contextCache.clear();
+    
+    // 清理动态图层 zIndex 分配表
+    this.usedDynamicZIndices.clear();
     
     logger.info('✅ CanvasEngine destroyed successfully');
   }

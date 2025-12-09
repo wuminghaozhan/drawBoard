@@ -263,7 +263,9 @@ const Test: React.FC = () => {
 
     const layer = drawBoardRef.current.getVirtualLayer(layerId);
     if (layer) {
-      drawBoardRef.current.setVirtualLayerVisible(layerId, !layer.visible);
+      drawBoardRef.current.setVirtualLayerVisible(layerId, !layer.visible).then(() => {
+        updateVirtualLayerState();
+      });
       updateVirtualLayerState();
     }
   };

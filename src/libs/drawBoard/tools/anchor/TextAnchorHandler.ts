@@ -1,10 +1,7 @@
 import type { DrawAction } from '../DrawTool';
 import type { Point } from '../../core/CanvasEngine';
 import type { AnchorPoint, AnchorType, Bounds } from './AnchorTypes';
-import { logger } from '../../utils/Logger';
-import { BoundsValidator } from '../../utils/BoundsValidator';
 import { BaseAnchorHandler } from './BaseAnchorHandler';
-import { AnchorUtils } from '../../utils/AnchorUtils';
 import { ShapeUtils } from '../../utils/ShapeUtils';
 
 /**
@@ -18,37 +15,12 @@ export class TextAnchorHandler extends BaseAnchorHandler {
    */
   public generateAnchors(action: DrawAction, bounds: Bounds): AnchorPoint[] {
     const anchors: AnchorPoint[] = [];
-    const halfSize = AnchorUtils.DEFAULT_ANCHOR_SIZE / 2;
-    const { x, y, width, height } = bounds;
-    
-    // 计算中心点
-    const centerX = x + width / 2;
-    const centerY = y + height / 2;
     
     // 生成中心点
-    anchors.push({
-      x: centerX - halfSize,
-      y: centerY - halfSize,
-      type: 'center',
-      cursor: 'move',
-      shapeType: 'text',
-      isCenter: true
-    });
+    anchors.push(this.generateCenterAnchor(bounds, 'text'));
     
     // 生成8个标准锚点
-    anchors.push(
-      // 四个角点
-      { x: x - halfSize, y: y - halfSize, type: 'top-left', cursor: 'nw-resize', shapeType: 'text' },
-      { x: x + width - halfSize, y: y - halfSize, type: 'top-right', cursor: 'ne-resize', shapeType: 'text' },
-      { x: x + width - halfSize, y: y + height - halfSize, type: 'bottom-right', cursor: 'se-resize', shapeType: 'text' },
-      { x: x - halfSize, y: y + height - halfSize, type: 'bottom-left', cursor: 'sw-resize', shapeType: 'text' },
-      
-      // 四个边中点
-      { x: x + width / 2 - halfSize, y: y - halfSize, type: 'top', cursor: 'n-resize', shapeType: 'text' },
-      { x: x + width - halfSize, y: y + height / 2 - halfSize, type: 'right', cursor: 'e-resize', shapeType: 'text' },
-      { x: x + width / 2 - halfSize, y: y + height - halfSize, type: 'bottom', cursor: 's-resize', shapeType: 'text' },
-      { x: x - halfSize, y: y + height / 2 - halfSize, type: 'left', cursor: 'w-resize', shapeType: 'text' }
-    );
+    anchors.push(...this.generateStandardAnchors(bounds, 'text'));
     
     return anchors;
   }
@@ -86,7 +58,7 @@ export class TextAnchorHandler extends BaseAnchorHandler {
     const mouseDeltaX = currentPoint.x - startPoint.x;
     const mouseDeltaY = currentPoint.y - startPoint.y;
     
-    // 根据锚点类型计算新的边界框
+    // 根据锚点类型计算新的边界框（使用公共方法）
     const newBounds = this.calculateNewBounds(dragStartBounds, anchorType, mouseDeltaX, mouseDeltaY);
     if (!newBounds) {
       return null;
@@ -130,68 +102,5 @@ export class TextAnchorHandler extends BaseAnchorHandler {
     return { x: 0, y: 0 };
   }
   
-  /**
-   * 计算新的边界框
-   */
-  private calculateNewBounds(
-    bounds: Bounds,
-    anchorType: AnchorType,
-    deltaX: number,
-    deltaY: number
-  ): Bounds | null {
-    let newBounds = { ...bounds };
-    
-    switch (anchorType) {
-      case 'top-left':
-        newBounds.x = bounds.x + deltaX;
-        newBounds.y = bounds.y + deltaY;
-        newBounds.width = bounds.width - deltaX;
-        newBounds.height = bounds.height - deltaY;
-        break;
-      case 'top-right':
-        newBounds.y = bounds.y + deltaY;
-        newBounds.width = bounds.width + deltaX;
-        newBounds.height = bounds.height - deltaY;
-        break;
-      case 'bottom-right':
-        newBounds.width = bounds.width + deltaX;
-        newBounds.height = bounds.height + deltaY;
-        break;
-      case 'bottom-left':
-        newBounds.x = bounds.x + deltaX;
-        newBounds.width = bounds.width - deltaX;
-        newBounds.height = bounds.height + deltaY;
-        break;
-      case 'top':
-        newBounds.y = bounds.y + deltaY;
-        newBounds.height = bounds.height - deltaY;
-        break;
-      case 'right':
-        newBounds.width = bounds.width + deltaX;
-        break;
-      case 'bottom':
-        newBounds.height = bounds.height + deltaY;
-        break;
-      case 'left':
-        newBounds.x = bounds.x + deltaX;
-        newBounds.width = bounds.width - deltaX;
-        break;
-      default:
-        return null;
-    }
-    
-    // 限制最小尺寸
-    if (newBounds.width < 10 || newBounds.height < 10) {
-      return null;
-    }
-    
-    // 检查有效性
-    if (!isFinite(newBounds.x) || !isFinite(newBounds.y) || 
-        !isFinite(newBounds.width) || !isFinite(newBounds.height)) {
-      return null;
-    }
-    
-    return newBounds;
-  }
 }
 

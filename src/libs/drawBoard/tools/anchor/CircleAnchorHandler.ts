@@ -16,7 +16,19 @@ export class CircleAnchorHandler extends BaseAnchorHandler {
    * 生成圆形锚点
    */
   public generateAnchors(action: DrawAction, bounds: Bounds): AnchorPoint[] {
+    logger.debug('CircleAnchorHandler.generateAnchors: 开始生成锚点', {
+      actionType: action.type,
+      actionId: action.id,
+      pointsCount: action.points.length,
+      bounds
+    });
+    
     if (action.points.length < 2) {
+      logger.warn('CircleAnchorHandler.generateAnchors: action.points.length < 2，返回空数组', {
+        actionId: action.id,
+        pointsCount: action.points.length,
+        points: action.points
+      });
       return [];
     }
     
@@ -39,7 +51,7 @@ export class CircleAnchorHandler extends BaseAnchorHandler {
     // 圆形边界框应该是以圆心为中心的正方形，但传入的 bounds 可能是基于两个点计算的矩形
     // 因此，我们直接基于圆心和半径计算锚点位置
     
-    // 计算半径：直接使用圆心到边缘点的距离
+    // 计算半径：优先使用圆心到边缘点的距离
     // 注意：CircleTool 使用 points[points.length - 1] 作为边缘点，而不是 points[1]
     let radius: number;
     if (action.points.length >= 2) {
@@ -47,20 +59,26 @@ export class CircleAnchorHandler extends BaseAnchorHandler {
       const distance = Math.sqrt(
         Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
       );
-      // 对于圆形，bounds 应该是以圆心为中心的正方形，所以 width 和 height 应该相等
-      // 但为了兼容性，我们使用实际计算的距离，或者 bounds 的宽度/高度的一半（取较大值）
-      const boundsRadius = Math.max(bounds.width, bounds.height) / 2;
-      // 使用实际计算的距离（这是最准确的）
-      radius = distance > 0 ? distance : boundsRadius;
       
+      // 优先使用实际计算的距离（最准确）
+      if (distance > 0 && isFinite(distance)) {
+        radius = distance;
+      } else {
+        // 如果距离无效，使用 bounds 计算（fallback）
+        // 对于圆形，bounds 应该是以圆心为中心的正方形，所以 width 和 height 应该相等
+        const boundsRadius = Math.max(bounds.width, bounds.height) / 2;
+        radius = boundsRadius > 0 && isFinite(boundsRadius) ? boundsRadius : 10;
+      }
     } else {
       // 如果没有边缘点，使用 bounds 计算
-      radius = Math.max(bounds.width, bounds.height) / 2;
+      const boundsRadius = Math.max(bounds.width, bounds.height) / 2;
+      radius = boundsRadius > 0 && isFinite(boundsRadius) ? boundsRadius : 10;
     }
     
-    // 确保半径有效
-    if (!isFinite(radius) || radius <= 0) {
-      radius = 10; // 默认半径
+    // 确保半径有效（至少为锚点大小，避免锚点重叠）
+    const MIN_VISIBLE_RADIUS = AnchorUtils.DEFAULT_ANCHOR_SIZE;
+    if (!isFinite(radius) || radius < MIN_VISIBLE_RADIUS) {
+      radius = Math.max(MIN_VISIBLE_RADIUS, 10); // 至少为锚点大小或10
     }
     
     // 上、下、左、右四个方向的锚点（基于圆心和半径）
@@ -71,6 +89,16 @@ export class CircleAnchorHandler extends BaseAnchorHandler {
     const rightAnchor = { x: center.x + radius - halfSize, y: center.y - halfSize, type: 'right', cursor: 'e-resize', shapeType: 'circle', isCenter: false };
     
     anchors.push(topAnchor, bottomAnchor, leftAnchor, rightAnchor);
+    
+    logger.info('CircleAnchorHandler.generateAnchors: 锚点生成完成', {
+      actionId: action.id,
+      totalAnchors: anchors.length,
+      centerAnchor: anchors.find(a => a.isCenter) ? true : false,
+      edgeAnchors: anchors.filter(a => !a.isCenter).length,
+      radius,
+      center: { x: center.x, y: center.y },
+      bounds
+    });
     
     return anchors;
   }
@@ -127,17 +155,48 @@ export class CircleAnchorHandler extends BaseAnchorHandler {
     }
     
     // 根据锚点类型计算边缘点位置
-    // 上、下、左、右四个方向，边缘点跟随鼠标方向
+    // 优化：根据锚点类型限制边缘点的方向，提供更直观的拖拽体验
     let newEdgeX: number;
     let newEdgeY: number;
     
     if (anchorType === 'top' || anchorType === 'bottom' || anchorType === 'left' || anchorType === 'right') {
       // 计算鼠标方向的角度
-      const angle = Math.atan2(currentPoint.y - center.y, currentPoint.x - center.x);
+      let angle = Math.atan2(currentPoint.y - center.y, currentPoint.x - center.x);
+      
+      // 根据锚点类型，将角度限制到对应方向（±45度范围内）
+      // 这样拖拽时边缘点会更接近锚点方向，提供更直观的体验
+      const angleRanges: Record<string, { min: number; max: number; preferred: number }> = {
+        'top': { min: -Math.PI * 0.75, max: -Math.PI * 0.25, preferred: -Math.PI / 2 },      // 上：-135° 到 -45°，偏好 -90°
+        'bottom': { min: Math.PI * 0.25, max: Math.PI * 0.75, preferred: Math.PI / 2 },         // 下：45° 到 135°，偏好 90°
+        'left': { min: Math.PI * 0.75, max: -Math.PI * 0.75, preferred: Math.PI },              // 左：135° 到 -135°，偏好 180°
+        'right': { min: -Math.PI * 0.25, max: Math.PI * 0.25, preferred: 0 }                     // 右：-45° 到 45°，偏好 0°
+      };
+      
+      const range = angleRanges[anchorType];
+      if (range) {
+        // 标准化角度到 [-π, π] 范围
+        while (angle > Math.PI) angle -= 2 * Math.PI;
+        while (angle < -Math.PI) angle += 2 * Math.PI;
+        
+        // 检查角度是否在范围内（考虑跨0度的情况）
+        let inRange = false;
+        if (anchorType === 'left') {
+          // 左：135° 到 -135°（跨0度）
+          inRange = angle >= range.min || angle <= range.max;
+        } else {
+          inRange = angle >= range.min && angle <= range.max;
+        }
+        
+        // 如果角度不在范围内，使用偏好角度（锚点方向）
+        if (!inRange) {
+          angle = range.preferred;
+        }
+      }
+      
       newEdgeX = center.x + clampedRadius * Math.cos(angle);
       newEdgeY = center.y + clampedRadius * Math.sin(angle);
     } else {
-      // 兼容其他锚点类型（向后兼容）
+      // 兼容其他锚点类型（向后兼容）：边缘点完全跟随鼠标方向
       const angle = Math.atan2(currentPoint.y - center.y, currentPoint.x - center.x);
       newEdgeX = center.x + clampedRadius * Math.cos(angle);
       newEdgeY = center.y + clampedRadius * Math.sin(angle);
@@ -159,45 +218,6 @@ export class CircleAnchorHandler extends BaseAnchorHandler {
     };
   }
   
-  /**
-   * 处理圆形移动
-   */
-  public handleMove(
-    action: DrawAction,
-    deltaX: number,
-    deltaY: number,
-    canvasBounds?: { width: number; height: number }
-  ): DrawAction | null {
-    if (!isFinite(deltaX) || !isFinite(deltaY)) {
-      return null;
-    }
-    
-    const newPoints = action.points.map(point => {
-      const newPoint = {
-        x: point.x + deltaX,
-        y: point.y + deltaY,
-        timestamp: point.timestamp
-      };
-      
-      // 使用统一的边界验证器限制点在画布范围内
-      if (canvasBounds) {
-        const canvasBoundsType = {
-          x: 0,
-          y: 0,
-          width: canvasBounds.width,
-          height: canvasBounds.height
-        };
-        return BoundsValidator.clampPointToCanvas(newPoint, canvasBoundsType);
-      }
-      
-      return newPoint;
-    });
-    
-    return {
-      ...action,
-      points: newPoints
-    };
-  }
   
   /**
    * 计算圆形中心点（圆心位置）
@@ -209,68 +229,5 @@ export class CircleAnchorHandler extends BaseAnchorHandler {
     return { x: 0, y: 0 };
   }
   
-  /**
-   * 计算新的边界框（基于锚点类型和鼠标移动）
-   */
-  private calculateNewBounds(
-    bounds: Bounds,
-    anchorType: AnchorType,
-    deltaX: number,
-    deltaY: number
-  ): Bounds | null {
-    let newBounds = { ...bounds };
-    
-    switch (anchorType) {
-      case 'top-left':
-        newBounds.x = bounds.x + deltaX;
-        newBounds.y = bounds.y + deltaY;
-        newBounds.width = bounds.width - deltaX;
-        newBounds.height = bounds.height - deltaY;
-        break;
-      case 'top-right':
-        newBounds.y = bounds.y + deltaY;
-        newBounds.width = bounds.width + deltaX;
-        newBounds.height = bounds.height - deltaY;
-        break;
-      case 'bottom-right':
-        newBounds.width = bounds.width + deltaX;
-        newBounds.height = bounds.height + deltaY;
-        break;
-      case 'bottom-left':
-        newBounds.x = bounds.x + deltaX;
-        newBounds.width = bounds.width - deltaX;
-        newBounds.height = bounds.height + deltaY;
-        break;
-      case 'top':
-        newBounds.y = bounds.y + deltaY;
-        newBounds.height = bounds.height - deltaY;
-        break;
-      case 'right':
-        newBounds.width = bounds.width + deltaX;
-        break;
-      case 'bottom':
-        newBounds.height = bounds.height + deltaY;
-        break;
-      case 'left':
-        newBounds.x = bounds.x + deltaX;
-        newBounds.width = bounds.width - deltaX;
-        break;
-      default:
-        return null; // 不支持的类型
-    }
-    
-    // 限制最小尺寸
-    if (newBounds.width < 10 || newBounds.height < 10) {
-      return null; // 返回null表示无效操作
-    }
-    
-    // 检查有效性
-    if (!isFinite(newBounds.x) || !isFinite(newBounds.y) || 
-        !isFinite(newBounds.width) || !isFinite(newBounds.height)) {
-      return null;
-    }
-    
-    return newBounds;
-  }
 }
 

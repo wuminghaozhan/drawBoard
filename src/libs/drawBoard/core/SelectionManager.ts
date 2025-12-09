@@ -22,6 +22,31 @@ export class SelectionManager {
   private cachedHandles: Array<{x: number, y: number}> | null = null;
   private cachedSelectionBox: SelectionBox | null = null;
   private cachedHandleSize: number = 0;
+  
+  // Canvas 尺寸（用于边界检查，默认值为合理的最大尺寸）
+  private canvasWidth: number = 4096;
+  private canvasHeight: number = 4096;
+  
+  /**
+   * 设置 Canvas 尺寸（用于手柄位置的边界检查）
+   * @param width Canvas 宽度
+   * @param height Canvas 高度
+   */
+  public setCanvasSize(width: number, height: number): void {
+    if (width > 0 && height > 0) {
+      this.canvasWidth = width;
+      this.canvasHeight = height;
+      // 尺寸变化时清除手柄缓存
+      this.clearCache();
+    }
+  }
+  
+  /**
+   * 获取当前 Canvas 尺寸
+   */
+  public getCanvasSize(): { width: number; height: number } {
+    return { width: this.canvasWidth, height: this.canvasHeight };
+  }
 
   // 检测动作是否在选择框内
   public detectSelection(selectionBox: SelectionBox, actions: DrawAction[]): string[] {
@@ -183,7 +208,7 @@ export class SelectionManager {
     return movedActions;
   }
 
-  // 删除选中的动作
+  // 获取删除选中的动作ID列表
   public getSelectedActionIdsForDeletion(): string[] {
     return this.getSelectedActionIds();
   }
@@ -263,6 +288,7 @@ export class SelectionManager {
   }
 
   // 获取手柄位置（带边界检查和缓存）
+  // 改进：使用实际 Canvas 尺寸替代硬编码边界值
   private getHandlePositions(selectionBox: SelectionBox, handleSize: number): Array<{x: number, y: number}> {
     // 检查缓存是否有效
     if (this.cachedHandles && 
@@ -275,9 +301,10 @@ export class SelectionManager {
     const { left, top, width, height } = selectionBox;
     const halfHandle = handleSize / 2;
     
-    // 使用合理的边界值（可以后续传入canvas参数进行优化）
-    const maxX = 2000; // 假设最大宽度
-    const maxY = 2000; // 假设最大高度
+    // 使用实际 Canvas 尺寸进行边界检查
+    // 改进：不再使用硬编码的 2000x2000，而是使用 setCanvasSize 设置的实际尺寸
+    const maxX = this.canvasWidth;
+    const maxY = this.canvasHeight;
     
     const handles = [
       // 四个角
@@ -340,5 +367,8 @@ export class SelectionManager {
     this.cachedSelectionBox = null;
     this.cachedHandleSize = 0;
     
+    // 重置 canvas 尺寸到默认值（用于实例复用场景）
+    this.canvasWidth = 4096;
+    this.canvasHeight = 4096;
   }
 } 

@@ -1,8 +1,6 @@
 import type { DrawAction } from '../DrawTool';
 import type { Point } from '../../core/CanvasEngine';
 import type { AnchorPoint, AnchorType, Bounds } from './AnchorTypes';
-import { logger } from '../../utils/Logger';
-import { BoundsValidator } from '../../utils/BoundsValidator';
 import { BaseAnchorHandler } from './BaseAnchorHandler';
 import { AnchorUtils } from '../../utils/AnchorUtils';
 
@@ -23,8 +21,9 @@ export class LineAnchorHandler extends BaseAnchorHandler {
     const anchors: AnchorPoint[] = [];
     const halfSize = AnchorUtils.DEFAULT_ANCHOR_SIZE / 2;
     
+    // 注意：LineTool 使用 points[0] 作为起点，points[points.length - 1] 作为终点
     const start = action.points[0];
-    const end = action.points[1];
+    const end = action.points[action.points.length - 1];
     
     // 计算中心点（线段中点）
     const centerX = (start.x + end.x) / 2;
@@ -78,8 +77,9 @@ export class LineAnchorHandler extends BaseAnchorHandler {
       return null;
     }
     
+    // 注意：LineTool 使用 points[0] 作为起点，points[points.length - 1] 作为终点
     const start = action.points[0];
-    const end = action.points[1];
+    const end = action.points[action.points.length - 1];
     
     // 中心点拖拽：移动整条直线
     if (anchorType === 'center') {
@@ -102,19 +102,18 @@ export class LineAnchorHandler extends BaseAnchorHandler {
         return null;
       }
       
-      // 限制点在画布范围内
-      const canvasBounds = this.getCanvasBounds();
-      const clampedStartX = canvasBounds ? 
-        Math.max(0, Math.min(canvasBounds.width, newStartX)) : newStartX;
-      const clampedStartY = canvasBounds ? 
-        Math.max(0, Math.min(canvasBounds.height, newStartY)) : newStartY;
+      // 注意：边界限制由 SelectTool 统一处理（在调用 handleAnchorDrag 后）
+      // 更新起点，保持其他点不变（如果有中间点的话）
+      const newPoints = action.points.map((point, index) => {
+        if (index === 0) {
+          return { ...point, x: newStartX, y: newStartY };
+        }
+        return point;
+      });
       
       return {
         ...action,
-        points: [
-          { ...start, x: clampedStartX, y: clampedStartY },
-          end // 终点不变
-        ]
+        points: newPoints
       };
     } else if (anchorType === 'end') {
       // 改变终点位置
@@ -126,19 +125,18 @@ export class LineAnchorHandler extends BaseAnchorHandler {
         return null;
       }
       
-      // 限制点在画布范围内
-      const canvasBounds = this.getCanvasBounds();
-      const clampedEndX = canvasBounds ? 
-        Math.max(0, Math.min(canvasBounds.width, newEndX)) : newEndX;
-      const clampedEndY = canvasBounds ? 
-        Math.max(0, Math.min(canvasBounds.height, newEndY)) : newEndY;
+      // 注意：边界限制由 SelectTool 统一处理（在调用 handleAnchorDrag 后）
+      // 更新终点（最后一个点），保持其他点不变
+      const newPoints = action.points.map((point, index) => {
+        if (index === action.points.length - 1) {
+          return { ...point, x: newEndX, y: newEndY };
+        }
+        return point;
+      });
       
       return {
         ...action,
-        points: [
-          start, // 起点不变
-          { ...end, x: clampedEndX, y: clampedEndY }
-        ]
+        points: newPoints
       };
     }
     
@@ -150,8 +148,9 @@ export class LineAnchorHandler extends BaseAnchorHandler {
    */
   public calculateCenterPoint(action: DrawAction): Point {
     if (action.points.length >= 2) {
+      // 注意：LineTool 使用 points[0] 作为起点，points[points.length - 1] 作为终点
       const start = action.points[0];
-      const end = action.points[1];
+      const end = action.points[action.points.length - 1];
       return {
         x: (start.x + end.x) / 2,
         y: (start.y + end.y) / 2
@@ -160,13 +159,5 @@ export class LineAnchorHandler extends BaseAnchorHandler {
     return { x: 0, y: 0 };
   }
   
-  /**
-   * 获取画布边界（用于限制点坐标）
-   */
-  private getCanvasBounds(): { width: number; height: number } | null {
-    // 这个方法需要从外部传入，暂时返回null
-    // 实际实现时应该从CanvasEngine获取
-    return null;
-  }
 }
 

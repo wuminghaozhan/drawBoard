@@ -17,6 +17,7 @@ const SelectionDemo: React.FC = () => {
   const [hasSelection, setHasSelection] = useState(false);
   const [selectedCount, setSelectedCount] = useState(0);
 
+  // DrawBoard 初始化（只执行一次）
   useEffect(() => {
     if (containerRef.current && !drawBoardRef.current) {
       
@@ -33,19 +34,25 @@ const SelectionDemo: React.FC = () => {
           enableShortcuts: true
         });
 
-
-        // 设置初始状态
+        // 设置初始状态（使用初始值）
         drawBoardRef.current.setTool(currentTool);
         drawBoardRef.current.setColor(currentColor);
         drawBoardRef.current.setLineWidth(currentLineWidth);
 
+        // 监听状态变化，实现自动更新
+        const unsubscribe = drawBoardRef.current.onStateChange(() => {
+          updateState();
+        });
+
         updateState();
 
-        // 延迟显示使用提示
-        setTimeout(() => {
-          showUsageTip();
-        }, 1000);
-
+        return () => {
+          unsubscribe();
+          if (drawBoardRef.current) {
+            drawBoardRef.current.destroy();
+            drawBoardRef.current = null;
+          }
+        };
       } catch (error) {
         console.error('=== DrawBoard 初始化失败 ===', error);
       }
@@ -57,7 +64,8 @@ const SelectionDemo: React.FC = () => {
         drawBoardRef.current = null;
       }
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // 只在组件挂载时执行一次，不需要依赖 currentTool/currentColor/currentLineWidth
 
   const updateState = () => {
     if (drawBoardRef.current) {
@@ -122,7 +130,10 @@ const SelectionDemo: React.FC = () => {
 
   // 显示使用提示
   const showUsageTip = () => {
-    alert('欢迎使用选择功能演示！\n\n请按以下步骤操作：\n\n1. 🖊️ 先绘制内容：使用画笔、矩形、圆形等工具绘制一些图形\n2. 🎯 切换选择工具：点击选择工具按钮或按 S 键\n3. 📦 框选图形：拖拽鼠标框选要操作的图形\n4. ⚡ 执行操作：使用工具栏按钮复制、删除或取消选择\n\n现在就开始绘制你的第一个图形吧！');
+    const message = '欢迎使用选择功能演示！\n\n请按以下步骤操作：\n\n1. 🖊️ 先绘制内容：使用画笔、矩形、圆形等工具绘制一些图形\n2. 🎯 切换选择工具：点击选择工具按钮或按 S 键\n3. 📦 框选图形：拖拽鼠标框选要操作的图形\n4. ⚡ 执行操作：使用工具栏按钮复制、删除或取消选择\n\n现在就开始绘制你的第一个图形吧！';
+    // 使用 console 输出而不是 alert，避免阻塞 UI
+    console.info(message);
+    // 如果需要用户可见的提示，可以考虑使用 toast 通知
   };
 
   // 添加示例提示
@@ -136,23 +147,25 @@ const SelectionDemo: React.FC = () => {
     
     const debugInfo = drawBoardRef.current.getSelectionDebugInfo();
     
-    alert(`选择功能调试信息:\n\n` +
-          `当前工具: ${debugInfo.currentTool}\n` +
-          `有选择: ${debugInfo.hasSelection}\n` +
-          `选中数量: ${debugInfo.selectedActionsCount}\n` +
-          `SelectionManager有选择: ${debugInfo.selectionManagerHasSelection}\n\n` +
-          `SelectTool调试信息:\n` +
-          `${debugInfo.selectToolDebugInfo ? 
-            `- 图层actions: ${debugInfo.selectToolDebugInfo.allActionsCount}\n` +
-            `- 选中actions: ${debugInfo.selectToolDebugInfo.selectedActionsCount}\n` +
-            `- 变换模式: ${debugInfo.selectToolDebugInfo.isTransformMode}\n` +
-            `- 正在选择: ${debugInfo.selectToolDebugInfo.isSelecting}\n` +
-            `- 拖拽锚点: ${debugInfo.selectToolDebugInfo.isDraggingAnchor}\n` +
-            `- 锚点数量: ${debugInfo.selectToolDebugInfo.anchorPointsCount}\n` +
-            `- 缓存大小: ${debugInfo.selectToolDebugInfo.boundsCacheSize}` :
-            '未获取到SelectTool信息'
-          }`
-    );
+    const debugMessage = `选择功能调试信息:\n\n` +
+      `当前工具: ${debugInfo.currentTool}\n` +
+      `有选择: ${debugInfo.hasSelection}\n` +
+      `选中数量: ${debugInfo.selectedActionsCount}\n` +
+      `SelectionManager有选择: ${debugInfo.selectionManagerHasSelection}\n\n` +
+      `SelectTool调试信息:\n` +
+      `${debugInfo.selectToolDebugInfo ? 
+        `- 图层actions: ${debugInfo.selectToolDebugInfo.allActionsCount}\n` +
+        `- 选中actions: ${debugInfo.selectToolDebugInfo.selectedActionsCount}\n` +
+        `- 变换模式: ${debugInfo.selectToolDebugInfo.isTransformMode}\n` +
+        `- 正在选择: ${debugInfo.selectToolDebugInfo.isSelecting}\n` +
+        `- 拖拽锚点: ${debugInfo.selectToolDebugInfo.isDraggingAnchor}\n` +
+        `- 锚点数量: ${debugInfo.selectToolDebugInfo.anchorPointsCount}\n` +
+        `- 缓存大小: ${debugInfo.selectToolDebugInfo.boundsCacheSize}` :
+        '未获取到SelectTool信息'
+      }`;
+    
+    console.debug(debugMessage);
+    // 如果需要用户可见的调试信息，可以考虑使用 toast 通知
   };
 
   // 强制同步选择工具数据
@@ -162,7 +175,8 @@ const SelectionDemo: React.FC = () => {
     drawBoardRef.current.forceSyncSelectToolData();
     updateState();
     
-    alert('已强制同步选择工具数据');
+    console.info('已强制同步选择工具数据');
+    // 如果需要用户可见的反馈，可以考虑使用 toast 通知
   };
 
   return (
@@ -304,14 +318,11 @@ const SelectionDemo: React.FC = () => {
           </div>
 
           <div className="demo-controls">
-            <button onClick={addSampleShapes} className="demo-button">
-              📋 使用说明
-            </button>
             <button onClick={debugSelection} className="demo-button">
-              🔍 调试选择
+              🔍 调试选择（查看控制台）
             </button>
             <button onClick={forceSyncSelectTool} className="demo-button">
-              🔄 同步数据
+              🔄 同步数据（查看控制台）
             </button>
           </div>
         </div>

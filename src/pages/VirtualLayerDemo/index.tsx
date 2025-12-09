@@ -79,12 +79,12 @@ const VirtualLayerDemo: React.FC = () => {
     updateVirtualLayerState();
   };
 
-  const handleToggleLayerVisibility = (layerId: string) => {
+  const handleToggleLayerVisibility = async (layerId: string) => {
     if (!drawBoardRef.current) return;
 
     const layer = drawBoardRef.current.getVirtualLayer(layerId);
     if (layer) {
-      drawBoardRef.current.setVirtualLayerVisible(layerId, !layer.visible);
+      await drawBoardRef.current.setVirtualLayerVisible(layerId, !layer.visible);
       updateVirtualLayerState();
     }
   };
@@ -112,7 +112,7 @@ const VirtualLayerDemo: React.FC = () => {
     }
   };
 
-  const handleSetLayerOpacity = (layerId: string) => {
+  const handleSetLayerOpacity = async (layerId: string) => {
     if (!drawBoardRef.current) return;
 
     const layer = drawBoardRef.current.getVirtualLayer(layerId);
@@ -121,7 +121,7 @@ const VirtualLayerDemo: React.FC = () => {
       if (opacity !== null) {
         const opacityValue = parseInt(opacity) / 100;
         if (!isNaN(opacityValue) && opacityValue >= 0 && opacityValue <= 1) {
-          drawBoardRef.current.setVirtualLayerOpacity(layerId, opacityValue);
+          await drawBoardRef.current.setVirtualLayerOpacity(layerId, opacityValue);
           updateVirtualLayerState();
         }
       }
