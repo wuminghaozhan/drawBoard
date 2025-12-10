@@ -50,7 +50,7 @@ export class CanvasEngine {
   
   // 跟踪正在使用的draw层（防止在绘制时删除）
   private drawLayersInUse: Set<string> = new Set();
-  
+
   // 【修复】标记是否已销毁，防止 setTimeout 回调在销毁后执行
   private isDestroyed: boolean = false;
 

@@ -1,478 +1,300 @@
 # 🎨 DrawBoard 架构设计文档
 
-## 📋 文档概述
+## 1. 系统概览
 
-本文档全面描述 DrawBoard 画板系统的架构设计，包括系统架构、核心模块、设计模式、图层系统、性能优化等内容。
+DrawBoard 是一个专业级 Canvas 绘图库，采用 **五层架构** 设计：
+
+```
+┌─────────────────────────────────────────────────────────┐
+│              用户界面层 (UI Layer)                       │
+│  React 组件、Demo 页面                                   │
+├─────────────────────────────────────────────────────────┤
+│              应用层 (Application Layer)                  │
+│  DrawBoard 主类（门面模式）、API 模块                    │
+├─────────────────────────────────────────────────────────┤
+│             业务逻辑层 (Business Layer)                  │
+│  DrawingHandler、StateHandler、CursorHandler             │
+├─────────────────────────────────────────────────────────┤
+│              核心服务层 (Service Layer)                  │
+│  Tool/Event/History/Performance/Selection/VirtualLayer  │
+├─────────────────────────────────────────────────────────┤
+│              渲染引擎层 (Rendering Layer)                │
+│  CanvasEngine（多层 Canvas 系统）                        │
+└─────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 1. 系统架构概览
-
-### 1.1 五层架构模型
+## 2. 模块结构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    用户界面层 (UI Layer)                      │
-│  React组件、工具面板、控制界面、演示页面                        │
-└─────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   应用层 (Application Layer)                 │
-│  DrawBoard主类（门面模式）、API接口、工厂函数                 │
-└─────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  业务逻辑层 (Business Layer)                 │
-│  DrawingHandler、CursorHandler、StateHandler（处理器模式）    │
-└─────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  核心服务层 (Service Layer)                  │
-│  10个管理器：Tool/Event/History/Performance/Selection/      │
-│  VirtualLayer/Complexity/Shortcut/Export/Error               │
-└─────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  渲染引擎层 (Rendering Layer)                │
-│  CanvasEngine（三层物理Canvas）、VirtualLayerManager         │
-└─────────────────────────────────────────────────────────────┘
+src/libs/drawBoard/          # 30,388 行代码
+├── DrawBoard.ts             # 主类 (2,063 行)
+├── index.ts                 # 导出入口
+│
+├── api/                     # API 模块
+│   ├── DrawBoardHistoryAPI.ts
+│   ├── DrawBoardSelectionAPI.ts
+│   ├── DrawBoardToolAPI.ts
+│   └── DrawBoardVirtualLayerAPI.ts
+│
+├── core/                    # 核心引擎
+│   ├── CanvasEngine.ts      # 多层 Canvas 引擎 (1,335 行)
+│   ├── VirtualLayerManager.ts  # 虚拟图层管理 (1,618 行)
+│   ├── SelectionManager.ts  # 选择管理
+│   ├── PerformanceManager.ts   # 性能管理 (599 行)
+│   └── ComplexityManager.ts # 复杂度管理
+│
+├── handlers/                # 处理器
+│   ├── DrawingHandler.ts    # 绘制处理 (1,915 行)
+│   ├── StateHandler.ts      # 状态处理
+│   ├── CursorHandler.ts     # 光标处理
+│   ├── CacheManager.ts      # 缓存管理
+│   ├── RedrawManager.ts     # 重绘管理
+│   └── EventCoordinator.ts  # 事件协调
+│
+├── tools/                   # 绘图工具
+│   ├── DrawTool.ts          # 工具基类
+│   ├── SelectTool.ts        # 选择工具 (3,588 行)
+│   ├── PenToolRefactored.ts # 画笔工具
+│   ├── RectTool.ts          # 矩形工具
+│   ├── CircleTool.ts        # 圆形工具
+│   ├── LineTool.ts          # 直线工具
+│   ├── PolygonTool.ts       # 多边形工具
+│   ├── TextTool.ts          # 文字工具
+│   ├── EraserTool.ts        # 橡皮擦
+│   ├── TransformToolRefactored.ts  # 变换工具
+│   ├── ToolFactory.ts       # 工具工厂
+│   ├── ToolManager.ts       # 工具管理
+│   │
+│   ├── anchor/              # 锚点处理器
+│   │   ├── AnchorTypes.ts
+│   │   ├── CircleAnchorHandler.ts
+│   │   ├── RectAnchorHandler.ts
+│   │   ├── PolygonAnchorHandler.ts
+│   │   └── ...
+│   │
+│   ├── select/              # 选择工具子模块
+│   │   ├── HitTestManager.ts
+│   │   ├── BoxSelectionManager.ts
+│   │   ├── SelectionRenderer.ts
+│   │   ├── AnchorCacheManager.ts
+│   │   ├── DragStateManager.ts
+│   │   └── BoundsCacheManager.ts
+│   │
+│   ├── stroke/              # 笔触渲染
+│   │   ├── StrokeCalculator.ts
+│   │   ├── BezierRenderer.ts
+│   │   └── RealtimeRenderer.ts
+│   │
+│   └── transform/           # 变换工具
+│       └── ControlPointGenerator.ts
+│
+├── events/                  # 事件系统
+│   └── EventManager.ts
+│
+├── history/                 # 历史记录
+│   └── HistoryManager.ts
+│
+├── shortcuts/               # 快捷键
+│   └── ShortcutManager.ts
+│
+├── utils/                   # 工具类
+│   ├── Logger.ts            # 日志
+│   ├── ErrorHandler.ts      # 错误处理
+│   ├── BoundsValidator.ts   # 边界验证
+│   ├── SpatialIndex.ts      # 空间索引（四叉树）
+│   ├── ExportManager.ts     # 导出管理
+│   └── ...
+│
+├── functional/              # 函数式工具
+│   ├── ConfigManager.ts
+│   ├── DataProcessor.ts
+│   └── StateManager.ts
+│
+├── config/                  # 配置
+│   └── Constants.ts
+│
+└── plugins/                 # 插件系统
+    └── examples/
 ```
-
-### 1.2 核心架构模式
-
-#### 门面模式 (Facade Pattern)
-DrawBoard 主类作为系统的统一入口，向外提供简洁的 API 接口，隐藏内部复杂性。
-
-#### 处理器模式 (Handler Pattern)
-将复杂业务逻辑分离到专门的处理器中：
-- **DrawingHandler** - 绘制处理
-- **StateHandler** - 状态管理
-- **CursorHandler** - 光标处理
-
-#### 工厂模式 (Factory Pattern)
-使用工厂模式管理工具的创建和生命周期，支持懒加载和缓存。
-
-#### 观察者模式 (Observer Pattern)
-事件系统使用观察者模式处理用户交互，实现松耦合的事件通信。
-
-#### 策略模式 (Strategy Pattern)
-运笔效果系统使用策略模式支持不同的渲染策略。
 
 ---
 
-## 2. 双层图层系统
+## 3. 核心组件
 
-### 2.1 物理图层 (CanvasEngine)
+### 3.1 CanvasEngine（多层 Canvas 引擎）
 
-物理图层系统基于**3个固定的基础Canvas层**（基础架构），并根据需要动态扩展：
-
-```
-┌─────────────────────────────────────────────┐
-│           交互层 (Interaction Layer)        │ ← z-index: 2
-│  鼠标事件、选择框、实时预览、控制点           │
-├─────────────────────────────────────────────┤
-│            绘制层 (Draw Layer)              │ ← z-index: 1  
-│  最终绘制结果、历史记录、虚拟图层内容        │
-├─────────────────────────────────────────────┤
-│           背景层 (Background Layer)         │ ← z-index: 0
-│  网格、背景色、辅助线                       │
-└─────────────────────────────────────────────┘
-```
-
-**固定基础层说明：**
-- **background层** (z-index: 0) - 背景、网格等静态内容（始终存在）
-- **draw层** (z-index: 1) - 所有虚拟图层的内容都绘制在这个层上（可能被动态拆分）
-- **interaction层** (z-index: 2) - 全局交互元素（实时预览、临时选择框等，始终存在）
-
-**注意：**
-- `draw层` 在未选中图层时作为单一固定层存在
-- 当选中虚拟图层时，`draw层` 会被隐藏，动态拆分为 `draw-bottom`、`draw-selected`、`draw-top` 三个物理层
-- 取消选中后，动态draw层会被合并回单一的 `draw层`
-
-**设计优势：**
-- 🎨 **分层渲染** - 不同功能在不同层，避免冲突
-- ⚡ **性能优化** - 只重绘需要更新的层
-- 🖱️ **事件分离** - 交互层独立处理用户输入
-- 🎛️ **可见性控制** - 每层可独立控制显示状态
-
-### 2.2 虚拟图层 (VirtualLayerManager)
-
-虚拟图层系统管理逻辑图层：
-
-- **逻辑图层管理** - 创建、删除、修改虚拟图层
-- **图层缓存系统** - 每个虚拟图层独立缓存，性能提升80-90%
-- **图层顺序管理** - zIndex管理，支持手动调整和拖拽排序
-- **动作分配** - 自动将绘制动作分配到对应图层
-
-### 2.3 动态物理图层
-
-为了解决选中虚拟图层的交互元素遮挡上层图层的问题，在**3个固定基础层**基础上，实现了动态物理图层系统：
-
-**基础架构（固定3个基础层）：**
-```
-interaction层 (z-index: 2) ← 全局交互（实时预览、临时选择框，始终存在）
-draw层 (z-index: 1)        ← 所有虚拟图层内容（未选中时作为单一层，选中时可能被拆分）
-background层 (z-index: 0)  ← 背景、网格（始终存在）
-```
-
-**draw层拆分状态：**
-- **未选中图层时**：draw层作为单一固定层存在
-- **选中图层时**：draw层被隐藏，动态拆分为：
-  - `draw-bottom` (z-index: 1) - 下层虚拟图层内容
-  - `draw-selected` (z-index: 2) - 选中虚拟图层内容
-  - `draw-top` (z-index: 3) - 上层虚拟图层内容
-
-**动态图层系统（按需创建）：**
-当有虚拟图层被选中时，会动态创建对应的交互层：
+管理 **3 个固定物理层** + **动态图层**：
 
 ```
-interaction层 (z-index: 4)         ← 全局交互（实时预览、临时选择框）
-动态选中层 (z-index: 35)            ← 图层3的交互元素（如果图层3被选中，zIndex=3）
-draw层 (z-index: 1)                ← 虚拟图层3内容（绘制在draw层）
-动态选中层 (z-index: 25)            ← 图层2的交互元素（如果图层2被选中，zIndex=2）
-draw层 (z-index: 1)                ← 虚拟图层2内容（绘制在draw层）
-draw层 (z-index: 1)                ← 虚拟图层1内容（绘制在draw层）
-background层 (z-index: 0)          ← 背景、网格
+┌─────────────────────────────────────────┐
+│       interaction 层 (z-index: 1000)    │ ← 事件接收层
+├─────────────────────────────────────────┤
+│       selection 动态层 (z-index: 100+)   │ ← 选区/锚点（动态创建）
+├─────────────────────────────────────────┤
+│       draw 层 (z-index: 1~3)            │ ← 绘制内容（可拆分）
+├─────────────────────────────────────────┤
+│       background 层 (z-index: 0)        │ ← 背景/网格
+└─────────────────────────────────────────┘
 ```
 
-**重要说明：**
-- 所有虚拟图层的内容都绘制在 `draw层` 系统上（未选中时是单一draw层，选中时是拆分的draw层）
-- 通过虚拟图层的 `zIndex` 控制绘制顺序
-- **性能优化机制**：每个虚拟图层都有独立的**离屏Canvas缓存**（cacheCanvas）
-  - 缓存有效时，直接使用 `ctx.drawImage(cacheCanvas, 0, 0)` 绘制，性能优秀
-  - 只有缓存失效时才重新渲染该图层的内容
-  - 性能提升：缓存命中时性能提升80-90%
-- **为什么不使用独立物理Canvas？**
-  - 当前方案通过离屏Canvas缓存已经实现了高性能
-  - 如果为每个虚拟图层创建独立物理Canvas，会增加DOM元素数量（每个图层一个Canvas）
-  - 在图层数量较多时（如50个图层），50个Canvas元素可能带来额外的内存和渲染开销
-  - 当前方案在性能测试中表现良好，暂无需独立物理Canvas
-- **动态Draw层拆分（已实现）**：✅
-  - 选中虚拟图层时，根据位置动态拆分draw层为 `draw-bottom`/`draw-selected`/`draw-top`
-  - 编辑选中图层时，只重绘`draw-selected`层，性能提升20-50倍
-  - 详见：[动态Draw层架构优化方案](./ARCHITECTURE_DYNAMIC_DRAW_LAYERS.md)
+**Draw 层拆分机制**（选中图层时）：
+- `draw-bottom` - 下层内容
+- `draw-selected` - 选中图层内容
+- `draw-top` - 上层内容
 
-**zIndex计算公式：**
-```typescript
-// 动态图层zIndex = virtualLayerZIndex * 10 + 5
-// 例如：
-// 虚拟图层zIndex=0 → 动态图层zIndex=5
-// 虚拟图层zIndex=1 → 动态图层zIndex=15
-// 虚拟图层zIndex=2 → 动态图层zIndex=25
-```
+### 3.2 VirtualLayerManager（虚拟图层管理）
 
-**优势：**
-- ✅ **视觉正确** - 交互元素显示在正确的位置
-- ✅ **性能可控** - 按需创建，及时销毁
-- ✅ **灵活性强** - 支持任意数量的选中图层
-- ✅ **向后兼容** - 未选中图层时，仍使用interaction层
+管理逻辑图层，每个图层独立缓存：
 
----
-
-## 3. 核心模块
-
-### 3.1 CanvasEngine（物理图层引擎）
-
-**职责：**
-- 管理**3个固定的基础物理Canvas层**（background、draw、interaction）
-- 处理Canvas尺寸和上下文管理
-- 提供图层访问接口
-- 支持**动态图层创建和管理**：
-  - 动态交互图层（按需创建，用于选中图层的交互元素）
-  - 动态Draw层拆分（选中图层时，将draw层拆分为draw-bottom、draw-selected、draw-top）
-
-**固定基础层：**
-- `background` (z-index: 0) - 背景层（始终存在）
-- `draw` (z-index: 1) - 绘制层（未选中时作为单一层，选中时可能被拆分）
-- `interaction` (z-index: 2) - 交互层（全局交互元素，始终存在）
-
-**动态图层：**
-- **动态交互图层**：按需创建，用于选中虚拟图层的交互元素（锚点、控制点等）
-  - zIndex计算公式：`virtualLayerZIndex * 10 + 5`
-  - 图层取消选中时自动删除
-- **动态Draw层拆分**：选中图层时，将draw层拆分为：
-  - `draw-bottom` (z-index: 1) - 下层虚拟图层内容
-  - `draw-selected` (z-index: 2) - 选中虚拟图层内容
-  - `draw-top` (z-index: 3) - 上层虚拟图层内容
-  - 取消选中后自动合并回单一draw层
-
-**注意：**
-- 动态交互图层只用于交互元素，不用于绘制虚拟图层内容
-- 所有虚拟图层内容都绘制在draw层系统上（单一draw层或拆分的draw层），通过离屏Canvas缓存优化性能
-
-**关键方法：**
-```typescript
-// 固定图层
-createLayer(name: string, zIndex: number): void
-getLayer(name: string): CanvasLayer | null
-getDrawLayer(): CanvasRenderingContext2D
-getInteractionLayer(): CanvasRenderingContext2D
-
-// 动态交互图层（用于选中图层的交互元素）
-createDynamicLayer(layerId: string, zIndex: number): CanvasLayer
-removeDynamicLayer(layerId: string): void
-getSelectionLayerForVirtualLayer(virtualLayerZIndex: number): CanvasRenderingContext2D
-
-// 动态Draw层拆分（性能优化）
-splitDrawLayer(selectedLayerZIndex: number, allLayerZIndices: number[]): {...}
-mergeDrawLayers(): void
-getSelectedLayerDrawContext(): CanvasRenderingContext2D | null
-getBottomLayersDrawContext(): CanvasRenderingContext2D | null
-getTopLayersDrawContext(): CanvasRenderingContext2D | null
-isDrawLayerSplit(): boolean
-```
-
-### 3.2 VirtualLayerManager（虚拟图层管理器）
-
-**职责：**
-- 管理虚拟图层的创建、删除、修改
-- 处理动作与图层的关联
-- 管理图层缓存系统
-- 处理图层顺序（zIndex）
-- 支持动态图层集成
-- 与HistoryManager协同工作，获取动作数据
-
-**关键数据结构：**
 ```typescript
 interface VirtualLayer {
-  id: string
-  name: string
-  visible: boolean
-  opacity: number
-  locked: boolean
-  zIndex: number
-  actionIds: string[]
-  cacheCanvas?: HTMLCanvasElement
-  cacheDirty: boolean
+  id: string;
+  name: string;
+  visible: boolean;
+  opacity: number;
+  locked: boolean;
+  zIndex: number;
+  actionIds: string[];
+  cacheCanvas?: HTMLCanvasElement;  // 离屏缓存
+  cacheDirty: boolean;
 }
 ```
 
-**两种模式：**
-- **grouped模式** - 多个动作共享一个图层
-- **individual模式** - 每个动作独立图层
+**两种模式**：
+- `grouped` - 多动作共享图层
+- `individual` - 每动作独立图层
 
-**HistoryManager集成：**
-- 通过 `setHistoryManager()` 设置HistoryManager引用
-- `getLastActionInLayer()` 从HistoryManager获取动作数据
-- 支持工具类型变化检测，自动创建新图层
+### 3.3 SelectTool（选择工具）
 
-### 3.3 BoundsValidator（边界验证器）
+**子模块分解**（3,588 行）：
 
-**职责：**
-- 统一的边界检查和约束工具
-- 限制点和边界框在画布范围内
-- 确保最小尺寸要求
-- 处理移动和缩放约束
+| 模块 | 职责 |
+|------|------|
+| `HitTestManager` | 点击测试、碰撞检测 |
+| `BoxSelectionManager` | 框选逻辑 |
+| `SelectionRenderer` | 选区/锚点渲染 |
+| `AnchorCacheManager` | 锚点缓存 |
+| `DragStateManager` | 拖拽状态 |
+| `BoundsCacheManager` | 边界框缓存 |
 
-**关键方法：**
-```typescript
-clampPointToCanvas(point, canvasBounds): Point
-clampBoundsToCanvas(bounds, canvasBounds): Bounds
-ensureMinSize(bounds, minSize): Bounds
-clampMoveBounds(bounds, deltaX, deltaY, canvasBounds): Bounds
-clampScaleBounds(bounds, scaleX, scaleY, minSize, canvasBounds): Bounds
-```
-
-**应用场景：**
-- 粘贴操作时限制点在画布内
-- 锚点拖拽时限制边界框
-- 移动和缩放操作时确保约束
-
-### 3.4 DrawBoard（主控制器）
-
-**职责：**
-- 提供统一的公共API
-- 协调各个子系统
-- 管理生命周期
-- 单例模式管理
-
-**核心功能：**
-- 工具管理
-- 历史记录（撤销/重做）
-- 图层管理
-- 事件处理
-- 性能优化
-- 剪贴板操作（复制/粘贴/剪切）
-- 全选功能
-- 边界验证和约束
-
-### 3.5 DrawingHandler（绘制处理器）
-
-**职责：**
-- 处理绘制事件（start、move、end）
-- 管理绘制状态
-- 协调工具、历史、图层
-- 优化重绘性能
-- 离屏Canvas缓存优化
-
-**关键流程：**
-1. **drawStart** - 创建DrawAction，分配到图层
-2. **drawMove** - 更新points，实时预览
-3. **drawEnd** - 保存到历史，触发重绘，标记离屏缓存过期
-4. **渲染** - 使用图层缓存和离屏缓存优化性能
-
-**性能优化：**
-- **图层级缓存** - 每个虚拟图层独立缓存
-- **离屏Canvas缓存** - 历史动作超过100个时，使用离屏Canvas缓存
-- **智能缓存失效** - 历史变化时自动标记缓存过期
+**锚点类型**：
+- 圆形：4 锚点 + 中心点
+- 矩形/文字：8 锚点 + 中心点 + 旋转控制点
+- 多边形：顶点锚点 + 中心点
 
 ---
 
-## 4. 绘制流程
+## 4. 设计模式
 
-### 4.1 完整绘制时序
-
-```
-用户鼠标按下
-  ↓
-DrawBoard.handleDrawStart()
-  ↓
-DrawingHandler.handleDrawStart()
-  ↓
-创建DrawAction → 分配到虚拟图层
-  ↓
-标记图层缓存过期
-  ↓
-用户鼠标移动
-  ↓
-DrawingHandler.handleDrawMove()
-  ↓
-更新DrawAction.points → 实时预览（interaction层）
-  ↓
-用户鼠标抬起
-  ↓
-DrawingHandler.handleDrawEnd()
-  ↓
-保存到HistoryManager → 触发重绘
-  ↓
-检查图层缓存 → 使用缓存或重新渲染
-  ↓
-绘制到draw层 → 显示结果
-```
-
-### 4.2 图层缓存渲染流程
-
-```
-获取所有虚拟图层（按zIndex排序）
-  ↓
-遍历每个图层
-  ↓
-检查可见性和锁定状态
-  ↓
-检查缓存有效性
-  ↓
-缓存有效？
-  ├─ 是 → 直接使用缓存绘制
-  └─ 否 → 重新渲染到缓存Canvas → 绘制到主Canvas
-```
+| 模式 | 应用 | 位置 |
+|------|------|------|
+| **门面模式** | 统一 API 入口 | `DrawBoard` |
+| **单例模式** | 实例管理 | `DrawBoard.getInstance()` |
+| **工厂模式** | 工具创建 | `ToolFactory` |
+| **策略模式** | 渲染策略 | `StrokeRenderer` |
+| **观察者模式** | 事件系统 | `EventManager` |
+| **命令模式** | 撤销/重做 | `HistoryManager` |
+| **处理器模式** | 职责分离 | `DrawingHandler` 等 |
 
 ---
 
 ## 5. 性能优化
 
-### 5.1 图层渲染缓存
+### 5.1 多层缓存
 
-- **图层级缓存** - 每个虚拟图层都有独立的离屏Canvas缓存（cacheCanvas）
-- **智能失效** - 只在内容变化时重新渲染（cacheDirty机制）
-- **延迟创建** - 按需创建缓存Canvas，避免不必要的内存占用
-- **尺寸同步** - Canvas尺寸变化时自动更新缓存
-- **性能提升** - 缓存命中时直接使用 `drawImage`，性能提升80-90%
-- **渲染流程**：
-  1. 遍历所有虚拟图层（按zIndex排序）
-  2. 跳过不可见/锁定的图层
-  3. 检查缓存有效性
-  4. 缓存有效 → 直接 `drawImage` 到draw层
-  5. 缓存无效 → 在离屏Canvas上重新渲染 → `drawImage` 到draw层
+```
+┌─────────────────────────────────────┐
+│     离屏 Canvas 缓存                 │ ← 历史动作 > 100 个时启用
+├─────────────────────────────────────┤
+│     虚拟图层缓存                     │ ← 每图层独立 cacheCanvas
+├─────────────────────────────────────┤
+│     边界框缓存                       │ ← LRU 淘汰策略
+├─────────────────────────────────────┤
+│     锚点缓存                         │ ← TTL 过期机制
+└─────────────────────────────────────┘
+```
 
-**性能分析：**
-- **优势**：缓存有效时，每个图层只需一次 `drawImage` 调用，非常高效
-- **潜在瓶颈**：图层数量很多时（如50+），需要多次 `drawImage` 调用
-- **当前表现**：在正常使用场景下（10-20个图层），性能表现优秀
-- **优化建议**：如果发现性能问题，可以考虑为虚拟图层创建独立物理Canvas，但需要权衡DOM元素数量
+### 5.2 空间索引
 
-### 5.2 离屏Canvas缓存（几何图形优化）
+使用 **四叉树** 优化点选/框选：
+- 性能提升：60-80%
+- 文件：`utils/SpatialIndex.ts`
 
-- **触发条件** - 历史动作超过100个时自动启用
-- **缓存机制** - 历史动作绘制到离屏Canvas，只在缓存过期时重新绘制
-- **性能提升** - 历史动作100-500个：提升30-50%；500-1000个：提升50-70%；>1000个：提升70-90%
-- **缓存失效** - 新动作添加、历史变化、撤销/重做时自动标记过期
-- **向后兼容** - 历史动作少于100个时，使用原有逻辑
+### 5.3 事件节流
 
-### 5.3 渲染优化
+- 鼠标移动：16ms 间隔
+- 触摸移动：32ms 间隔
 
-- **按需渲染** - 只渲染可见且未锁定的图层
-- **缓存复用** - 缓存有效时直接使用
-- **批量操作** - 支持批量更新图层
-- **增量重绘** - 支持增量重绘优化
+### 5.4 性能指标
 
-### 5.4 内存管理
-
-- **缓存清理** - 支持手动清理缓存
-- **图层限制** - 最大图层数量限制
-- **动作限制** - 每个图层最大动作数限制
-- **离屏缓存管理** - 按需创建，及时清理
-
-### 5.5 拖拽敏感度优化
-
-- **拖拽阈值** - 最小拖拽距离3像素，减少微小移动导致的意外变形
-- **敏感度因子** - 拖拽敏感度0.7（70%），降低敏感度，提升可控性
-- **圆形平滑处理** - 圆形拖拽使用平滑因子0.6，使变化更平缓
-- **统一应用** - 所有拖拽操作（单选、多选、默认）都应用敏感度控制
+| 指标 | 目标 |
+|------|------|
+| 渲染帧率 | 60fps |
+| 响应延迟 | < 16ms |
+| 缓存命中率 | > 80% |
 
 ---
 
-## 6. 设计模式应用
+## 6. 数据流
 
-| 设计模式 | 应用位置 | 说明 |
-|---------|---------|------|
-| **门面模式** | DrawBoard | 提供统一的API接口，隐藏内部复杂性 |
-| **单例模式** | DrawBoard.getInstance() | 确保每个容器只有一个实例 |
-| **工厂模式** | ToolFactory | 创建和管理工具实例 |
-| **策略模式** | ToolManager | 不同工具使用不同的绘制策略 |
-| **观察者模式** | EventManager | 事件发布订阅机制 |
-| **命令模式** | HistoryManager | 撤销/重做功能 |
-| **处理器模式** | DrawingHandler/CursorHandler/StateHandler | 职责分离，各司其职 |
-| **缓存模式** | VirtualLayerManager | 图层渲染缓存优化 |
-| **工具模式** | BoundsValidator | 统一的边界验证工具 |
+### 6.1 绘制流程
+
+```
+用户输入 → EventManager → DrawingHandler
+                              ↓
+                        创建 DrawAction
+                              ↓
+                        分配到 VirtualLayer
+                              ↓
+                        工具 draw() 方法
+                              ↓
+                        渲染到 Canvas
+                              ↓
+                        保存到 HistoryManager
+```
+
+### 6.2 选择流程
+
+```
+点击 → HitTestManager.isPointInAction()
+         ↓
+   命中 action? ─────────────────────┐
+         │                            │
+         ↓ 是                         ↓ 否
+   进入变换模式                    框选模式
+         ↓                            ↓
+   生成锚点                     BoxSelectionManager
+         ↓                            ↓
+   渲染选区                      选中多个 action
+```
 
 ---
 
 ## 7. 技术栈
 
-### 核心技术
-- **前端框架**: React 18 + TypeScript
-- **画布技术**: HTML5 Canvas API + 多层架构
-- **构建工具**: Vite + 路径别名配置
-- **包管理**: npm
-- **样式方案**: SCSS + 响应式设计
-
-### 架构亮点
-- **模块化**: 34个专业模块，职责分离
-- **高性能**: 多层Canvas + 预渲染缓存
-- **类型安全**: 完整的TypeScript类型定义
-- **可扩展**: 工厂模式 + 事件驱动
-- **响应式**: 桌面端和移动端全平台支持
+| 类别 | 技术 |
+|------|------|
+| 语言 | TypeScript |
+| 框架 | React 18 |
+| 渲染 | HTML5 Canvas API |
+| 构建 | Vite |
+| 样式 | SCSS |
 
 ---
 
-## 8. 总结
+## 8. 质量指标
 
-DrawBoard 通过现代化的架构设计和优秀的工程实践，构建了一个功能强大、性能优越、易于维护的专业级绘图系统。其模块化的设计不仅保证了当前功能的稳定性，也为未来的功能扩展奠定了坚实的基础。
-
-**架构优势：**
-1. **可维护性** ⭐⭐⭐⭐⭐ - 模块化设计，职责分离清晰
-2. **可扩展性** ⭐⭐⭐⭐⭐ - 工厂模式支持动态工具注册
-3. **性能表现** ⭐⭐⭐⭐⭐ - 多层Canvas优化渲染性能
-4. **用户体验** ⭐⭐⭐⭐⭐ - 丰富的工具和预设系统
-5. **代码质量** ⭐⭐⭐⭐⭐ - TypeScript严格类型检查
+| 维度 | 评分 |
+|------|------|
+| 模块化 | ⭐⭐⭐⭐⭐ |
+| 类型安全 | ⭐⭐⭐⭐⭐ |
+| 性能优化 | ⭐⭐⭐⭐⭐ |
+| 可维护性 | ⭐⭐⭐⭐⭐ |
+| 可扩展性 | ⭐⭐⭐⭐⭐ |
 
 ---
 
-**文档版本**: 2.0  
-**最后更新**: 2024  
-**维护者**: DrawBoard开发团队
-
+**文档版本**: 3.0  
+**最后更新**: 2024-12

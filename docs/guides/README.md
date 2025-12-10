@@ -1,36 +1,87 @@
 # 📖 DrawBoard 使用指南
 
-本目录包含 DrawBoard 的各种功能使用指南和快速入门文档。
+## 📋 指南清单
 
-## 📚 指南列表
-
-### 🚀 快速入门
-- **[变换功能快速上手](./QUICK_START_TRANSFORM.md)** - 变换功能的快速入门指南
-- **[测试页面指南](./TEST_PAGE_GUIDE.md)** - 测试页面的完整功能指南
-
-### 🎯 功能使用指南
-- **[选择功能使用指南](./SELECTION_USAGE_GUIDE.md)** - 选择功能的详细使用说明
-- **[插件系统使用指南](./PLUGIN_SYSTEM_USAGE.md)** - 插件化工具系统的使用和扩展
-- **[协议解析器使用说明](./PROTOCOL_PARSER_USAGE.md)** - 协议解析器的使用方法
-
-### 🎨 样式和适配
-- **[鼠标样式功能](./CURSOR_STYLES.md)** - 鼠标样式系统的实现和使用
-- **[移动端适配说明](./MOBILE_ADAPTATION.md)** - 移动端适配的详细说明
-
-## 🎯 按场景查找
-
-### 新手用户
-1. [测试页面指南](./TEST_PAGE_GUIDE.md) - 了解所有功能
-2. [变换功能快速上手](./QUICK_START_TRANSFORM.md) - 学习变换功能
-
-### 开发者
-1. [插件系统使用指南](./PLUGIN_SYSTEM_USAGE.md) - 扩展工具系统
-2. [协议解析器使用说明](./PROTOCOL_PARSER_USAGE.md) - 处理协议数据
-
-### 移动端开发
-1. [移动端适配说明](./MOBILE_ADAPTATION.md) - 了解移动端适配
+| 指南 | 说明 |
+|------|------|
+| [QUICK_START_TRANSFORM.md](./QUICK_START_TRANSFORM.md) | 变换工具快速入门 |
+| [SELECTION_USAGE_GUIDE.md](./SELECTION_USAGE_GUIDE.md) | 选择功能使用指南 |
+| [CURSOR_STYLES.md](./CURSOR_STYLES.md) | 光标样式配置 |
+| [MOBILE_ADAPTATION.md](./MOBILE_ADAPTATION.md) | 移动端适配 |
+| [PLUGIN_SYSTEM_USAGE.md](./PLUGIN_SYSTEM_USAGE.md) | 插件系统使用 |
+| [PROTOCOL_PARSER_USAGE.md](./PROTOCOL_PARSER_USAGE.md) | 协议解析器使用 |
+| [TEST_PAGE_GUIDE.md](./TEST_PAGE_GUIDE.md) | 测试页面指南 |
 
 ---
 
-**开始使用 DrawBoard！** 🚀
+## 🎯 快速开始
 
+### 基础使用
+
+```typescript
+import { DrawBoard } from '@/libs/drawBoard';
+
+// 创建画板实例
+const drawBoard = DrawBoard.getInstance(container, {
+  maxHistorySize: 100,
+  enableShortcuts: true,
+});
+
+// 设置工具
+await drawBoard.setTool('pen');
+
+// 设置颜色和线宽
+drawBoard.setColor('#ff0000');
+drawBoard.setLineWidth(3);
+
+// 撤销/重做
+await drawBoard.undo();
+await drawBoard.redo();
+
+// 销毁实例
+await drawBoard.destroy();
+```
+
+### 选择功能
+
+```typescript
+// 切换到选择工具
+await drawBoard.setTool('select');
+
+// 获取选中的 actions
+const selected = drawBoard.getSelectedActions();
+
+// 全选
+drawBoard.selectAll();
+
+// 删除选中
+await drawBoard.deleteSelection();
+
+// 复制/剪切/粘贴
+drawBoard.copySelection();
+drawBoard.cutSelection();
+await drawBoard.pasteSelection();
+```
+
+### 图层管理
+
+```typescript
+// 创建图层
+const layer = drawBoard.createVirtualLayer('新图层');
+
+// 设置活动图层
+drawBoard.setActiveVirtualLayer(layer.id);
+
+// 获取所有图层
+const layers = drawBoard.getAllVirtualLayers();
+
+// 设置图层可见性
+drawBoard.setVirtualLayerVisible(layer.id, false);
+
+// 删除图层
+drawBoard.deleteVirtualLayer(layer.id);
+```
+
+---
+
+**最后更新**: 2024-12

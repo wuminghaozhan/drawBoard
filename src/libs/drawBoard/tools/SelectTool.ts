@@ -12,6 +12,15 @@ import { PenAnchorHandler } from './anchor/PenAnchorHandler';
 import { PolygonAnchorHandler } from './anchor/PolygonAnchorHandler';
 import { BoundsValidator, type Bounds as BoundsType } from '../utils/BoundsValidator';
 import { SpatialIndex } from '../utils/SpatialIndex';
+// 模块化拆分后的子模块
+import { 
+  HitTestManager, 
+  BoxSelectionManager, 
+  SelectionRenderer,
+  AnchorCacheManager,
+  DragStateManager,
+  BoundsCacheManager
+} from './select';
 
 /**
  * 选择动作接口
@@ -115,9 +124,7 @@ export class SelectTool extends DrawTool {
     return this.dragConfig.sensitivity;
   }
 
-  // 性能优化：边界框缓存
-  private boundsCache: Map<string, { x: number; y: number; width: number; height: number }> = new Map();
-  private readonly MAX_CACHE_SIZE = 100; // 缓存最大大小
+  // 性能优化：锚点更新节流
   private lastAnchorUpdateTime: number = 0;
   private get anchorUpdateInterval(): number {
     return this.dragConfig.anchorCacheTTL;
@@ -160,6 +167,14 @@ export class SelectTool extends DrawTool {
   private readonly SPATIAL_INDEX_THRESHOLD = 1000; // 超过1000个actions时使用空间索引
   private readonly BOX_SELECT_SPATIAL_INDEX_THRESHOLD = 500; // 框选时超过500个actions使用空间索引
 
+  // 模块化子组件
+  private hitTestManager: HitTestManager;
+  private boxSelectionManager: BoxSelectionManager;
+  private anchorCacheManager: AnchorCacheManager;
+  private dragStateManager: DragStateManager;
+  private boundsCacheManager: BoundsCacheManager;
+  private selectionRenderer: SelectionRenderer;
+
   constructor(config?: Partial<{
     sensitivity: number;
     minDragDistance: number;
@@ -168,6 +183,22 @@ export class SelectTool extends DrawTool {
   }>) {
     super('选择', 'select');
     this.transformTool = new TransformToolRefactored();
+    
+    // 初始化模块化子组件
+    this.hitTestManager = new HitTestManager();
+    this.boxSelectionManager = new BoxSelectionManager(this.hitTestManager);
+    this.selectionRenderer = new SelectionRenderer(this.anchorSize);
+    
+    // 初始化缓存和状态管理器
+    this.anchorCacheManager = new AnchorCacheManager({
+      cacheTTL: this.dragConfig.anchorCacheTTL
+    });
+    this.dragStateManager = new DragStateManager({
+      minDragDistance: this.dragConfig.minDragDistance,
+      sensitivity: this.dragConfig.sensitivity,
+      enableCirclePrecisionMode: this.dragConfig.enableCirclePrecisionMode
+    });
+    this.boundsCacheManager = new BoundsCacheManager();
     
     // 应用配置（如果提供）
     if (config) {
@@ -196,6 +227,17 @@ export class SelectTool extends DrawTool {
     enableCirclePrecisionMode: boolean;
   }>): void {
     this.dragConfig = { ...this.dragConfig, ...config };
+    
+    // 同步更新子模块配置
+    this.anchorCacheManager.updateConfig({
+      cacheTTL: this.dragConfig.anchorCacheTTL
+    });
+    this.dragStateManager.updateConfig({
+      minDragDistance: this.dragConfig.minDragDistance,
+      sensitivity: this.dragConfig.sensitivity,
+      enableCirclePrecisionMode: this.dragConfig.enableCirclePrecisionMode
+    });
+    
     logger.debug('SelectTool: 拖拽配置已更新', this.dragConfig);
   }
 
@@ -536,418 +578,127 @@ export class SelectTool extends DrawTool {
 
   /**
    * 检查点是否在action内
-   * 改进：提高精确度，支持更多类型
+   * 委托给 HitTestManager 处理
    */
   private isPointInAction(point: Point, action: DrawAction, tolerance: number): boolean {
-    try {
-      if (!action || !action.points || action.points.length === 0) return false;
-
-      // 根据action类型进行不同的碰撞检测
-      switch (action.type) {
-        case 'text':
-          return this.isPointInTextAction(point, action, tolerance);
-        case 'rect':
-          return this.isPointInRectAction(point, action, tolerance);
-        case 'circle':
-          return this.isPointInCircleAction(point, action, tolerance);
-        case 'polygon':
-          return this.isPointInPolygonAction(point, action, tolerance);
-        case 'line':
-          return this.isPointInLineAction(point, action, tolerance);
-        case 'pen':
-        case 'brush':
-          return this.isPointInPathAction(point, action, tolerance);
-        case 'eraser':
-          // 橡皮擦通常不需要选择，但为了完整性也支持
-          return this.isPointInPathAction(point, action, tolerance);
-        default:
-          return this.isPointInBoundingBox(point, action, tolerance);
-      }
-    } catch (error) {
-      logger.error('SelectTool: 检查点是否在action内时发生错误', error);
-      return false;
-    }
+    return this.hitTestManager.isPointInAction(point, action, tolerance);
   }
 
-  /**
-   * 检查点是否在文字action内
-   * 改进：使用更精确的文字边界框计算
-   */
-  private isPointInTextAction(point: Point, action: DrawAction, tolerance: number): boolean {
-    if (action.points.length === 0) return false;
-    
-    const textPoint = action.points[0];
-    const textAction = action as DrawAction & { 
-      text?: string; 
-      fontSize?: number;
-      fontFamily?: string;
-      textAlign?: CanvasTextAlign;
-      textBaseline?: CanvasTextBaseline;
-    };
-    const text = textAction.text || '文字';
-    const fontSize = textAction.fontSize || 16;
-    const fontFamily = textAction.fontFamily || 'Arial';
-    
-    // 尝试使用 Canvas 精确测量文字宽度
-    let width: number;
-    let height: number;
-    
-    try {
-      // 如果可能，使用临时 canvas 测量文字
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.font = `${fontSize}px ${fontFamily}`;
-        const metrics = ctx.measureText(text);
-        width = metrics.width;
-        // 使用实际边界框高度
-        height = (metrics.actualBoundingBoxAscent || fontSize * 0.8) + 
-                 (metrics.actualBoundingBoxDescent || fontSize * 0.2);
-      } else {
-        // 降级方案：估算
-        width = text.length * fontSize * 0.6;
-        height = fontSize;
-      }
-    } catch {
-      // 降级方案：估算
-      width = text.length * fontSize * 0.6;
-      height = fontSize;
-    }
-    
-    // 考虑文字对齐方式
-    let x = textPoint.x;
-    const textAlign = textAction.textAlign || 'left';
-    if (textAlign === 'center') {
-      x = textPoint.x - width / 2;
-    } else if (textAlign === 'right') {
-      x = textPoint.x - width;
-    }
-    
-    // 考虑文字基线
-    let y = textPoint.y;
-    const textBaseline = textAction.textBaseline || 'top';
-    if (textBaseline === 'middle') {
-      y = textPoint.y - height / 2;
-    } else if (textBaseline === 'bottom') {
-      y = textPoint.y - height;
-    }
-    
-    return point.x >= x - tolerance &&
-           point.x <= x + width + tolerance &&
-           point.y >= y - tolerance &&
-           point.y <= y + height + tolerance;
-  }
-
-  /**
-   * 检查点是否在矩形action内（精确检测）
-   * 改进：考虑线宽，提高精确度
-   */
-  private isPointInRectAction(point: Point, action: DrawAction, tolerance: number): boolean {
-    if (action.points.length < 2) return false;
-    
-    const p1 = action.points[0];
-    const p2 = action.points[action.points.length - 1];
-    
-    // 检查点有效性
-    if (!isFinite(p1.x) || !isFinite(p1.y) || !isFinite(p2.x) || !isFinite(p2.y)) {
-      return false;
-    }
-    
-    const minX = Math.min(p1.x, p2.x);
-    const maxX = Math.max(p1.x, p2.x);
-    const minY = Math.min(p1.y, p2.y);
-    const maxY = Math.max(p1.y, p2.y);
-    
-    // 考虑线宽
-    const lineWidth = action.context?.lineWidth || 2;
-    const effectiveTolerance = tolerance + Math.max(lineWidth / 2, 1);
-    
-    // 检查点是否在矩形内（带容差）
-    return point.x >= minX - effectiveTolerance &&
-           point.x <= maxX + effectiveTolerance &&
-           point.y >= minY - effectiveTolerance &&
-           point.y <= maxY + effectiveTolerance;
-  }
-
-  /**
-   * 检查点是否在圆形action内（精确检测）
-   * 改进：考虑填充和描边，提高精确度
-   */
-  private isPointInCircleAction(point: Point, action: DrawAction, tolerance: number): boolean {
-    if (action.points.length < 2) return false;
-    
-    const center = action.points[0];
-    const edge = action.points[action.points.length - 1];
-    
-    // 检查点有效性
-    if (!isFinite(center.x) || !isFinite(center.y) || 
-        !isFinite(edge.x) || !isFinite(edge.y)) {
-      return false;
-    }
-    
-    const radius = Math.sqrt(
-      Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-    );
-    
-    if (!isFinite(radius) || radius <= 0) return false;
-    
-    const distance = Math.sqrt(
-      Math.pow(point.x - center.x, 2) + Math.pow(point.y - center.y, 2)
-    );
-    
-    // 检查点是否在圆内（带容差）
-    // 对于填充的圆，点在圆内即可；对于描边的圆，需要考虑线宽
-    const lineWidth = action.context?.lineWidth || 2;
-    const effectiveTolerance = tolerance + Math.max(lineWidth / 2, 1);
-    
-    return distance <= radius + effectiveTolerance;
-  }
-
-  /**
-   * 检查点是否在多边形action内（使用射线法）
-   */
-  private isPointInPolygonAction(point: Point, action: DrawAction, tolerance: number): boolean {
-    if (action.points.length < 3) {
-      // 少于3个点，使用边界框检测
-      return this.isPointInBoundingBox(point, action, tolerance);
-    }
-    
-    // 使用射线法判断点是否在多边形内
-    let inside = false;
-    const points = action.points;
-    
-    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-      const xi = points[i].x;
-      const yi = points[i].y;
-      const xj = points[j].x;
-      const yj = points[j].y;
-      
-      // 检查点是否在多边形边界上（带容差）
-      const distToEdge = this.distanceToLineSegment(point, points[j], points[i]);
-      if (distToEdge <= tolerance) {
-        return true;
-      }
-      
-      // 射线法：检查从点向右的射线是否与边相交
-      const intersect = ((yi > point.y) !== (yj > point.y)) &&
-                       (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi);
-      if (intersect) {
-        inside = !inside;
-      }
-    }
-    
-    return inside;
-  }
-
-  /**
-   * 检查点是否在路径action内（pen/brush/eraser）
-   * 改进：更精确的检测，考虑线宽和路径形状
-   */
-  private isPointInPathAction(point: Point, action: DrawAction, tolerance: number): boolean {
-    if (action.points.length === 0) return false;
-    
-    // 对于路径，检查点到路径的距离
-    // 如果路径有宽度，需要考虑线宽
-    const lineWidth = action.context?.lineWidth || 2;
-    // 增加容差，考虑线宽的一半（因为线宽是总宽度）
-    const effectiveTolerance = tolerance + Math.max(lineWidth / 2, 3);
-    
-    // 对于单点路径，检查点是否在点的容差范围内
-    if (action.points.length === 1) {
-      const p = action.points[0];
-      if (!isFinite(p.x) || !isFinite(p.y)) return false;
-      
-      const distance = Math.sqrt(
-        Math.pow(point.x - p.x, 2) + Math.pow(point.y - p.y, 2)
-      );
-      return distance <= effectiveTolerance;
-    }
-    
-    // 检查点到所有线段的距离
-    let minDistance = Infinity;
-    for (let i = 0; i < action.points.length - 1; i++) {
-      const p1 = action.points[i];
-      const p2 = action.points[i + 1];
-      
-      // 检查点有效性
-      if (!isFinite(p1.x) || !isFinite(p1.y) || !isFinite(p2.x) || !isFinite(p2.y)) {
-        continue;
-      }
-      
-      const distance = this.distanceToLineSegment(point, p1, p2);
-      if (distance < minDistance) {
-        minDistance = distance;
-      }
-      
-      // 如果距离在容差范围内，直接返回true（优化性能）
-      if (distance <= effectiveTolerance) {
-        return true;
-      }
-    }
-    
-    // 如果最小距离在容差范围内，返回true
-    return minDistance <= effectiveTolerance;
-  }
-
-  /**
-   * 检查点是否在线条action内
-   * 改进：考虑线宽，提高精确度
-   */
-  private isPointInLineAction(point: Point, action: DrawAction, tolerance: number): boolean {
-    if (action.points.length < 2) return false;
-    
-    // 考虑线宽
-    const lineWidth = action.context?.lineWidth || 2;
-    const effectiveTolerance = tolerance + Math.max(lineWidth / 2, 2);
-    
-    // 检查点到线段的距离
-    for (let i = 0; i < action.points.length - 1; i++) {
-      const p1 = action.points[i];
-      const p2 = action.points[i + 1];
-      
-      // 检查点有效性
-      if (!isFinite(p1.x) || !isFinite(p1.y) || !isFinite(p2.x) || !isFinite(p2.y)) {
-        continue;
-      }
-      
-      if (this.distanceToLineSegment(point, p1, p2) <= effectiveTolerance) {
-        return true;
-      }
-    }
-    
-    return false;
-  }
-
-  /**
-   * 计算点到线段的距离
-   */
-  private distanceToLineSegment(point: Point, lineStart: Point, lineEnd: Point): number {
-    // 检查参数有效性
-    if (!isFinite(point.x) || !isFinite(point.y) ||
-        !isFinite(lineStart.x) || !isFinite(lineStart.y) ||
-        !isFinite(lineEnd.x) || !isFinite(lineEnd.y)) {
-      return Infinity; // 返回一个很大的值，表示不在线段上
-    }
-    
-    const A = point.x - lineStart.x;
-    const B = point.y - lineStart.y;
-    const C = lineEnd.x - lineStart.x;
-    const D = lineEnd.y - lineStart.y;
-
-    const dot = A * C + B * D;
-    const lenSq = C * C + D * D;
-    
-    // 检查lenSq是否溢出或为0
-    if (lenSq === 0 || !isFinite(lenSq)) {
-      return Math.sqrt(A * A + B * B);
-    }
-    
-    let param = dot / lenSq;
-    param = Math.max(0, Math.min(1, param));
-    
-    const x = lineStart.x + param * C;
-    const y = lineStart.y + param * D;
-    
-    const dx = point.x - x;
-    const dy = point.y - y;
-    
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    
-    // 检查计算结果
-    return isFinite(distance) ? distance : Infinity;
-  }
-
-  /**
-   * 检查点是否在边界框内
-   */
-  private isPointInBoundingBox(point: Point, action: DrawAction, tolerance: number): boolean {
-    const bounds = this.getActionBoundingBox(action);
-    return point.x >= bounds.x - tolerance &&
-           point.x <= bounds.x + bounds.width + tolerance &&
-           point.y >= bounds.y - tolerance &&
-           point.y <= bounds.y + bounds.height + tolerance;
-  }
+  // 以下 hit test 方法已移至 HitTestManager 模块
+  // isPointInTextAction, isPointInRectAction, isPointInCircleAction,
+  // isPointInPolygonAction, isPointInPathAction, isPointInLineAction,
+  // distanceToLineSegment, isPointInBoundingBox
 
   /**
    * 获取action的边界框
-   * 对于圆形，返回以圆心为中心的正方形边界框
+   * 对于圆形、矩形、直线：只使用起点和终点计算（与实际绘制一致）
+   * 对于其他图形：使用所有点计算
    */
   private getActionBoundingBox(action: DrawAction): { x: number; y: number; width: number; height: number } {
     if (action.points.length === 0) {
       return { x: 0, y: 0, width: 0, height: 0 };
     }
 
-    // 对于圆形，特殊处理：返回以圆心为中心的正方形边界框
+    // 检查缓存（使用 BoundsCacheManager）
+    const cachedBounds = this.boundsCacheManager.getForAction(action);
+    if (cachedBounds) {
+      return cachedBounds;
+    }
+
+    let bounds: { x: number; y: number; width: number; height: number };
+
+    // 【圆形】特殊处理：返回以圆心为中心的正方形边界框
     if (action.type === 'circle' && action.points.length >= 2) {
       const center = action.points[0];
-      // 注意：CircleTool 使用 points[points.length - 1] 作为边缘点，而不是 points[1]
       const edge = action.points[action.points.length - 1];
       const radius = Math.sqrt(
         Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
       );
       
-      // 确保半径有效（至少为锚点大小，避免边界框太小导致锚点重叠）
       const MIN_VISIBLE_RADIUS = this.anchorSize;
       const validRadius = Math.max(MIN_VISIBLE_RADIUS, radius);
       
-      // 验证中心点和半径的有效性
       if (!isFinite(center.x) || !isFinite(center.y) || !isFinite(validRadius) || validRadius <= 0) {
-        logger.error('SelectTool.getActionBoundingBox: 圆形边界框计算失败', {
-          actionId: action.id,
-          center,
-          edge,
-          radius,
-          validRadius,
-          points: action.points
-        });
-        // 返回一个默认的有效边界框
-        return {
+        bounds = {
           x: (isFinite(center.x) ? center.x : 0) - 50,
           y: (isFinite(center.y) ? center.y : 0) - 50,
           width: 100,
           height: 100
         };
-      }
-      
-      // 返回以圆心为中心的正方形边界框
-      const bounds = {
+      } else {
+        bounds = {
         x: center.x - validRadius,
         y: center.y - validRadius,
         width: validRadius * 2,
         height: validRadius * 2
       };
+      }
+    }
+    // 【矩形】特殊处理：只使用起点和终点
+    else if (action.type === 'rect' && action.points.length >= 2) {
+      const start = action.points[0];
+      const end = action.points[action.points.length - 1];
       
-      // 验证边界框有效性
-      if (!isFinite(bounds.x) || !isFinite(bounds.y) || 
-          !isFinite(bounds.width) || !isFinite(bounds.height) ||
-          bounds.width <= 0 || bounds.height <= 0) {
-        logger.error('SelectTool.getActionBoundingBox: 生成的圆形边界框无效', {
-          actionId: action.id,
-          bounds,
-          center,
-          validRadius
-        });
-        // 返回一个默认的有效边界框
-        return {
-          x: center.x - 50,
-          y: center.y - 50,
-          width: 100,
-          height: 100
+      if (!isFinite(start.x) || !isFinite(start.y) || !isFinite(end.x) || !isFinite(end.y)) {
+        bounds = { x: 0, y: 0, width: 0, height: 0 };
+      } else {
+        const minX = Math.min(start.x, end.x);
+        const minY = Math.min(start.y, end.y);
+        const maxX = Math.max(start.x, end.x);
+        const maxY = Math.max(start.y, end.y);
+        
+        bounds = {
+          x: minX,
+          y: minY,
+          width: Math.max(maxX - minX, 1),
+          height: Math.max(maxY - minY, 1)
         };
       }
+    }
+    // 【直线】特殊处理：只使用起点和终点
+    else if (action.type === 'line' && action.points.length >= 2) {
+      const start = action.points[0];
+      const end = action.points[action.points.length - 1];
       
-      // 缓存结果
-      const cacheKey = `${action.id}_${action.points.length}`;
-      this.setBoundsCache(cacheKey, bounds);
-      return bounds;
+      if (!isFinite(start.x) || !isFinite(start.y) || !isFinite(end.x) || !isFinite(end.y)) {
+        bounds = { x: 0, y: 0, width: 0, height: 0 };
+      } else {
+        const minX = Math.min(start.x, end.x);
+        const minY = Math.min(start.y, end.y);
+        const maxX = Math.max(start.x, end.x);
+        const maxY = Math.max(start.y, end.y);
+        
+        bounds = {
+          x: minX,
+          y: minY,
+          width: Math.max(maxX - minX, 1),
+          height: Math.max(maxY - minY, 1)
+        };
+      }
     }
-
-    // 检查缓存
-    const cacheKey = `${action.id}_${action.points.length}`;
-    if (this.boundsCache.has(cacheKey)) {
-      return this.boundsCache.get(cacheKey)!;
+    // 【多边形】特殊处理：使用中心+半径计算实际顶点的边界框
+    else if (action.type === 'polygon' && action.points.length >= 2) {
+      const center = action.points[0];
+      const edge = action.points[action.points.length - 1];
+      const radius = Math.sqrt(
+        Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
+      );
+      
+      if (!isFinite(center.x) || !isFinite(center.y) || !isFinite(radius) || radius <= 0) {
+        bounds = { x: 0, y: 0, width: 0, height: 0 };
+      } else {
+        // 多边形的边界框是以中心为圆心、半径为radius的正方形
+        // （因为正多边形的顶点都在这个圆上）
+        bounds = {
+          x: center.x - radius,
+          y: center.y - radius,
+          width: radius * 2,
+          height: radius * 2
+        };
+      }
     }
-
+    // 【其他图形】使用所有点计算边界框
+    else {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -955,10 +706,8 @@ export class SelectTool extends DrawTool {
     let validPointCount = 0;
 
     for (const point of action.points) {
-      // 检查点坐标有效性
       if (!isFinite(point.x) || !isFinite(point.y)) {
-        logger.warn('SelectTool: 发现无效的点坐标', { point, actionId: action.id });
-        continue; // 跳过无效点
+          continue;
       }
       
       minX = Math.min(minX, point.x);
@@ -968,58 +717,40 @@ export class SelectTool extends DrawTool {
       validPointCount++;
     }
 
-    // 如果没有有效点，返回默认边界框
     if (validPointCount === 0) {
-      logger.warn('SelectTool: action没有有效的点', { actionId: action.id });
-      return { x: 0, y: 0, width: 0, height: 0 };
-    }
-
-    // 如果所有点在同一位置，返回一个小的默认边界框
+        bounds = { x: 0, y: 0, width: 0, height: 0 };
+      } else {
     const width = Math.max(0, maxX - minX);
     const height = Math.max(0, maxY - minY);
 
-    const bounds = {
+        bounds = {
       x: minX,
       y: minY,
-      width: width === 0 && height === 0 ? 10 : width, // 单点情况返回10x10
+          width: width === 0 && height === 0 ? 10 : width,
       height: width === 0 && height === 0 ? 10 : height
     };
+      }
+    }
 
-    // 缓存结果（限制缓存大小）
-    this.setBoundsCache(cacheKey, bounds);
+    // 缓存结果（使用 BoundsCacheManager）
+    this.boundsCacheManager.setForAction(action, bounds);
     return bounds;
   }
 
   /**
-   * 设置边界框缓存（限制大小）
-   */
-  private setBoundsCache(key: string, bounds: { x: number; y: number; width: number; height: number }): void {
-    // 如果缓存已满，删除最旧的（FIFO策略）
-    if (this.boundsCache.size >= this.MAX_CACHE_SIZE) {
-      const firstKey = this.boundsCache.keys().next().value;
-      if (firstKey) {
-        this.boundsCache.delete(firstKey);
-      }
-    }
-    this.boundsCache.set(key, bounds);
-  }
-
-  /**
    * 清除边界框缓存
+   * 委托给 BoundsCacheManager
    */
   private clearBoundsCache(): void {
-    this.boundsCache.clear();
+    this.boundsCacheManager.clear();
   }
 
   /**
    * 清除特定action的边界框缓存
+   * 委托给 BoundsCacheManager
    */
   private clearActionBoundsCache(actionId: string): void {
-    for (const key of this.boundsCache.keys()) {
-      if (key.startsWith(actionId)) {
-        this.boundsCache.delete(key);
-      }
-    }
+    this.boundsCacheManager.deleteForAction(actionId);
   }
 
   /**
@@ -1034,11 +765,9 @@ export class SelectTool extends DrawTool {
 
   /**
    * 框选多个actions
-   * 改进：更精确的检测，不仅检查边界框，还检查实际形状
+   * 委托给 BoxSelectionManager 处理，同时支持空间索引优化
    */
   public selectActionsInBox(bounds: { x: number; y: number; width: number; height: number }): DrawAction[] {
-    const selected: DrawAction[] = [];
-    
     // 检查选择框是否有效
     if (!isFinite(bounds.x) || !isFinite(bounds.y) || 
         !isFinite(bounds.width) || !isFinite(bounds.height)) {
@@ -1046,23 +775,23 @@ export class SelectTool extends DrawTool {
       return [];
     }
     
-    // 检查选择框最小尺寸（避免误选）
+    // 检查选择框最小尺寸
     if (bounds.width < 5 || bounds.height < 5) {
       logger.debug('SelectTool: 选择框太小，忽略框选', bounds);
       this.selectedActions = [];
       return [];
     }
     
-    // 检查allActions是否为空
     if (this.allActions.length === 0) {
       logger.debug('SelectTool: allActions为空，无法框选');
       this.selectedActions = [];
       return [];
     }
     
-    // 性能优化：如果actions数量超过阈值，使用空间索引
+    let selected: DrawAction[] = [];
+    
+    // 性能优化：使用空间索引
     if (this.allActions.length > this.BOX_SELECT_SPATIAL_INDEX_THRESHOLD) {
-      // 初始化空间索引（如果还没有）
       if (!this.spatialIndex) {
         const canvasBounds = this.getCanvasBounds();
         if (canvasBounds) {
@@ -1074,51 +803,13 @@ export class SelectTool extends DrawTool {
       }
 
       if (this.spatialIndex) {
-        // 使用空间索引查询候选actions
         const candidates = this.spatialIndex.queryBounds(bounds);
-        
-        // 对候选actions进行精确检测
-        for (const action of candidates) {
-          if (!action) continue;
-          
-          // 边界框相交，进行更精确的检测
-          if (this.isActionInBox(bounds, action)) {
-            selected.push(action);
-          }
-        }
+        selected = this.boxSelectionManager.selectActionsInBox(bounds, candidates);
       } else {
-        // 如果空间索引初始化失败，回退到原有方式
-        const actionsSnapshot = [...this.allActions];
-        for (const action of actionsSnapshot) {
-          if (!action) continue;
-          
-          const actionBounds = this.getActionBoundingBox(action);
-          if (this.isBoundingBoxIntersect(bounds, actionBounds) && this.isActionInBox(bounds, action)) {
-            selected.push(action);
-          }
-        }
+        selected = this.boxSelectionManager.selectActionsInBox(bounds, this.allActions);
       }
     } else {
-      // 使用原有的遍历方式（actions数量较少时）
-      // 创建快照，避免在迭代过程中数组被修改
-      const actionsSnapshot = [...this.allActions];
-      for (const action of actionsSnapshot) {
-        if (!action) {
-          logger.warn('SelectTool: 发现空的action');
-          continue;
-        }
-        
-        // 首先快速检查边界框是否相交
-        const actionBounds = this.getActionBoundingBox(action);
-        if (!this.isBoundingBoxIntersect(bounds, actionBounds)) {
-          continue; // 边界框不相交，跳过
-        }
-        
-        // 边界框相交，进行更精确的检测
-        if (this.isActionInBox(bounds, action)) {
-          selected.push(action);
-        }
-      }
+      selected = this.boxSelectionManager.selectActionsInBox(bounds, this.allActions);
     }
     
     this.selectedActions = selected;
@@ -1129,240 +820,9 @@ export class SelectTool extends DrawTool {
     return selected;
   }
 
-  /**
-   * 检查action是否在选择框内（精确检测）
-   */
-  private isActionInBox(bounds: { x: number; y: number; width: number; height: number }, action: DrawAction): boolean {
-    if (!action || !action.points || action.points.length === 0) {
-      return false;
-    }
-    
-    // 根据action类型进行不同的检测
-    switch (action.type) {
-      case 'rect':
-        // 矩形：检查是否有任何点在框内，或者矩形完全包含选择框
-        return this.isRectInBox(bounds, action);
-      
-      case 'circle':
-        // 圆形：检查圆心是否在框内，或者圆与框相交
-        return this.isCircleInBox(bounds, action);
-      
-      case 'polygon':
-        // 多边形：检查是否有任何点在框内，或者多边形与框相交
-        return this.isPolygonInBox(bounds, action);
-      
-      case 'line':
-      case 'pen':
-      case 'brush':
-        // 路径：检查是否有任何点在框内，或者路径与框相交
-        return this.isPathInBox(bounds, action);
-      
-      case 'text':
-        // 文字：检查文字边界框是否与选择框相交
-        return this.isBoundingBoxIntersect(bounds, this.getActionBoundingBox(action));
-      
-      default:
-        // 默认：使用边界框检测
-        return this.isBoundingBoxIntersect(bounds, this.getActionBoundingBox(action));
-    }
-  }
-
-  /**
-   * 检查矩形是否在选择框内
-   */
-  private isRectInBox(bounds: { x: number; y: number; width: number; height: number }, action: DrawAction): boolean {
-    if (action.points.length < 2) return false;
-    
-    const p1 = action.points[0];
-    const p2 = action.points[action.points.length - 1];
-    
-    const rectMinX = Math.min(p1.x, p2.x);
-    const rectMaxX = Math.max(p1.x, p2.x);
-    const rectMinY = Math.min(p1.y, p2.y);
-    const rectMaxY = Math.max(p1.y, p2.y);
-    
-    const boxRight = bounds.x + bounds.width;
-    const boxBottom = bounds.y + bounds.height;
-    
-    // 检查矩形是否与选择框相交
-    return rectMinX < boxRight &&
-           rectMaxX > bounds.x &&
-           rectMinY < boxBottom &&
-           rectMaxY > bounds.y;
-  }
-
-  /**
-   * 检查圆形是否在选择框内
-   */
-  private isCircleInBox(bounds: { x: number; y: number; width: number; height: number }, action: DrawAction): boolean {
-    if (action.points.length < 2) return false;
-    
-    const center = action.points[0];
-    const edge = action.points[action.points.length - 1];
-    
-    const radius = Math.sqrt(
-      Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-    );
-    
-    if (!isFinite(radius) || radius <= 0) return false;
-    
-    const boxRight = bounds.x + bounds.width;
-    const boxBottom = bounds.y + bounds.height;
-    
-    // 找到选择框上离圆心最近的点
-    const closestX = Math.max(bounds.x, Math.min(center.x, boxRight));
-    const closestY = Math.max(bounds.y, Math.min(center.y, boxBottom));
-    
-    // 计算选择框上最近点到圆心的距离
-    const distance = Math.sqrt(
-      Math.pow(center.x - closestX, 2) + Math.pow(center.y - closestY, 2)
-    );
-    
-    // 如果距离小于半径，说明圆与选择框相交
-    return distance <= radius;
-  }
-
-  /**
-   * 检查多边形是否在选择框内
-   */
-  private isPolygonInBox(bounds: { x: number; y: number; width: number; height: number }, action: DrawAction): boolean {
-    if (action.points.length < 3) {
-      // 少于3个点，使用边界框检测
-      return this.isBoundingBoxIntersect(bounds, this.getActionBoundingBox(action));
-    }
-    
-    const boxRight = bounds.x + bounds.width;
-    const boxBottom = bounds.y + bounds.height;
-    
-    // 检查是否有任何点在框内
-    for (const point of action.points) {
-      if (point.x >= bounds.x && point.x <= boxRight &&
-          point.y >= bounds.y && point.y <= boxBottom) {
-        return true;
-      }
-    }
-    
-    // 检查是否有任何边与选择框相交
-    for (let i = 0; i < action.points.length; i++) {
-      const p1 = action.points[i];
-      const p2 = action.points[(i + 1) % action.points.length];
-      
-      if (this.isLineSegmentIntersectBox(p1, p2, bounds)) {
-        return true;
-      }
-    }
-    
-    // 检查选择框的角是否在多边形内
-    const corners = [
-      { x: bounds.x, y: bounds.y },
-      { x: boxRight, y: bounds.y },
-      { x: boxRight, y: boxBottom },
-      { x: bounds.x, y: boxBottom }
-    ];
-    
-    for (const corner of corners) {
-      if (this.isPointInPolygonAction(corner, action, 0)) {
-        return true;
-      }
-    }
-    
-    return false;
-  }
-
-  /**
-   * 检查路径是否在选择框内
-   */
-  private isPathInBox(bounds: { x: number; y: number; width: number; height: number }, action: DrawAction): boolean {
-    if (action.points.length === 0) return false;
-    
-    const boxRight = bounds.x + bounds.width;
-    const boxBottom = bounds.y + bounds.height;
-    
-    // 检查是否有任何点在框内
-    for (const point of action.points) {
-      if (point.x >= bounds.x && point.x <= boxRight &&
-          point.y >= bounds.y && point.y <= boxBottom) {
-        return true;
-      }
-    }
-    
-    // 检查是否有任何线段与选择框相交
-    for (let i = 0; i < action.points.length - 1; i++) {
-      const p1 = action.points[i];
-      const p2 = action.points[i + 1];
-      
-      if (this.isLineSegmentIntersectBox(p1, p2, bounds)) {
-        return true;
-      }
-    }
-    
-    return false;
-  }
-
-  /**
-   * 检查线段是否与选择框相交
-   */
-  private isLineSegmentIntersectBox(
-    p1: Point, 
-    p2: Point, 
-    box: { x: number; y: number; width: number; height: number }
-  ): boolean {
-    const boxRight = box.x + box.width;
-    const boxBottom = box.y + box.height;
-    
-    // 快速拒绝：如果线段完全在框外
-    if ((p1.x < box.x && p2.x < box.x) ||
-        (p1.x > boxRight && p2.x > boxRight) ||
-        (p1.y < box.y && p2.y < box.y) ||
-        (p1.y > boxBottom && p2.y > boxBottom)) {
-      return false;
-    }
-    
-    // 如果线段的一个端点在框内
-    if ((p1.x >= box.x && p1.x <= boxRight && p1.y >= box.y && p1.y <= boxBottom) ||
-        (p2.x >= box.x && p2.x <= boxRight && p2.y >= box.y && p2.y <= boxBottom)) {
-      return true;
-    }
-    
-    // 检查线段是否与框的边相交
-    const boxEdges = [
-      [{ x: box.x, y: box.y }, { x: boxRight, y: box.y }], // 上边
-      [{ x: boxRight, y: box.y }, { x: boxRight, y: boxBottom }], // 右边
-      [{ x: boxRight, y: boxBottom }, { x: box.x, y: boxBottom }], // 下边
-      [{ x: box.x, y: boxBottom }, { x: box.x, y: box.y }] // 左边
-    ];
-    
-    for (const edge of boxEdges) {
-      if (this.doLineSegmentsIntersect(p1, p2, edge[0], edge[1])) {
-        return true;
-      }
-    }
-    
-    return false;
-  }
-
-  /**
-   * 检查两条线段是否相交
-   */
-  private doLineSegmentsIntersect(p1: Point, p2: Point, p3: Point, p4: Point): boolean {
-    const ccw = (A: Point, B: Point, C: Point): number => {
-      return (C.y - A.y) * (B.x - A.x) - (B.y - A.y) * (C.x - A.x);
-    };
-    
-    return (ccw(p1, p3, p4) * ccw(p2, p3, p4) <= 0) &&
-           (ccw(p3, p1, p2) * ccw(p4, p1, p2) <= 0);
-  }
-
-  /**
-   * 检查两个边界框是否相交
-   */
-  private isBoundingBoxIntersect(box1: { x: number; y: number; width: number; height: number }, 
-                                box2: { x: number; y: number; width: number; height: number }): boolean {
-    return box1.x < box2.x + box2.width &&
-           box1.x + box1.width > box2.x &&
-           box1.y < box2.y + box2.height &&
-           box1.y + box1.height > box2.y;
-  }
+  // 以下框选检测方法已移至 BoxSelectionManager 模块
+  // isActionInBox, isRectInBox, isCircleInBox, isPolygonInBox,
+  // isPathInBox, isLineSegmentIntersectBox, doLineSegmentsIntersect, isBoundingBoxIntersect
 
   /**
    * 清空选择
@@ -1790,146 +1250,26 @@ export class SelectTool extends DrawTool {
 
   /**
    * 绘制选择边界框
+   * 委托给 SelectionRenderer
    */
   private drawSelectionBounds(ctx: CanvasRenderingContext2D, bounds: { x: number; y: number; width: number; height: number }): void {
-    ctx.save();
-    
-    // 绘制半透明背景
-    ctx.fillStyle = 'rgba(0, 122, 255, 0.05)';
-    ctx.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
-    
-    // 绘制边界框
-    ctx.strokeStyle = '#007AFF';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
-    ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
-    
-    ctx.restore();
+    this.selectionRenderer.drawSelectionBounds(ctx, bounds);
   }
 
   /**
    * 绘制锚点（包括边锚点和中心点）
-   * 改进：支持圆形锚点（圆形边界锚点）和方形锚点（矩形边界锚点）
-   * 支持hover状态（放大、加粗）
+   * 委托给 SelectionRenderer
    */
   private drawResizeAnchorPoints(ctx: CanvasRenderingContext2D): void {
-    logger.debug('SelectTool.drawResizeAnchorPoints: 开始绘制锚点', {
-      anchorPointsCount: this.anchorPoints.length,
-      centerAnchorPoint: !!this.centerAnchorPoint,
-      selectedActionsCount: this.selectedActions.length,
-      canvasWidth: ctx.canvas.width,
-      canvasHeight: ctx.canvas.height
-    });
-    
-    ctx.save();
-    
-    // 绘制边锚点
-    if (this.anchorPoints.length > 0) {
-      logger.debug('SelectTool.drawResizeAnchorPoints: 绘制边锚点', {
-        count: this.anchorPoints.length,
-        anchors: this.anchorPoints.map((a, i) => ({
-          index: i,
-          x: a.x,
-          y: a.y,
-          type: a.type,
-          shapeType: a.shapeType
-        }))
-      });
-      
-      for (let i = 0; i < this.anchorPoints.length; i++) {
-        const anchor = this.anchorPoints[i];
-        const isHovered = this.hoverAnchorInfo && 
-                          !this.hoverAnchorInfo.isCenter && 
-                          this.hoverAnchorInfo.index === i;
-        const isDragging = i === this.draggedAnchorIndex;
-        
-        // 根据锚点类型决定绘制形状
-        const isCircle = anchor.shapeType === 'circle';
-        
-        // 计算锚点大小（hover时放大）
-        let anchorSize = this.anchorSize;
-        if (isHovered) {
-          anchorSize = 10; // hover时放大至10px
-        } else if (isDragging) {
-          anchorSize = 12; // 拖拽时放大至12px
-        }
-        
-        const halfSize = anchorSize / 2;
-        // 注意：anchor.x 和 anchor.y 是锚点左上角的位置，需要加上 halfSize 得到中心点
-        const centerX = anchor.x + halfSize;
-        const centerY = anchor.y + halfSize;
-        
-        // 设置样式
-        ctx.fillStyle = '#FFFFFF';
-        if (isDragging) {
-          ctx.strokeStyle = '#FF9500'; // 拖拽时橙色
-        } else {
-          ctx.strokeStyle = '#007AFF'; // 默认蓝色
-        }
-        ctx.lineWidth = isHovered || isDragging ? 3 : 2; // hover或拖拽时加粗
-        
-        if (isCircle) {
-          // 绘制圆形锚点（圆形边界锚点）
-          ctx.beginPath();
-          ctx.arc(centerX, centerY, halfSize, 0, 2 * Math.PI);
-          ctx.fill();
-          ctx.stroke();
-        } else {
-          // 绘制方形锚点（矩形边界锚点）
-          ctx.beginPath();
-          ctx.rect(centerX - halfSize, centerY - halfSize, anchorSize, anchorSize);
-          ctx.fill();
-          ctx.stroke();
-        }
-      }
-    }
-    
-    // 绘制中心点（圆形，仅在单选时显示）
-    if (this.centerAnchorPoint && this.selectedActions.length === 1) {
-      logger.debug('SelectTool.drawResizeAnchorPoints: 绘制中心点', {
-        x: this.centerAnchorPoint.x,
-        y: this.centerAnchorPoint.y
-      });
-      
-      const isHovered = this.hoverAnchorInfo && this.hoverAnchorInfo.isCenter;
-      const isDragging = this.isDraggingCenter;
-      
-      // 计算锚点大小（hover时放大）
-      let anchorSize = this.anchorSize;
-      if (isHovered) {
-        anchorSize = 10; // hover时放大至10px
-      } else if (isDragging) {
-        anchorSize = 12; // 拖拽时放大至12px
-      }
-      
-      const halfSize = anchorSize / 2;
-      // 注意：centerAnchorPoint.x 和 centerAnchorPoint.y 是锚点左上角的位置，需要加上 halfSize 得到中心点
-      const centerX = this.centerAnchorPoint.x + halfSize;
-      const centerY = this.centerAnchorPoint.y + halfSize;
-      const radius = halfSize;
-      
-      // 设置样式
-      ctx.fillStyle = '#FFFFFF';
-      if (isDragging) {
-        ctx.strokeStyle = '#34C759'; // 拖拽时绿色（中心点）
-      } else {
-        ctx.strokeStyle = '#007AFF'; // 默认蓝色
-      }
-      ctx.lineWidth = isHovered || isDragging ? 3 : 2; // hover或拖拽时加粗
-      
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.stroke();
-    } else {
-      logger.debug('SelectTool.drawResizeAnchorPoints: 跳过中心点绘制', {
-        hasCenterAnchorPoint: !!this.centerAnchorPoint,
-        selectedActionsCount: this.selectedActions.length
-      });
-    }
-    
-    ctx.restore();
-    logger.debug('SelectTool.drawResizeAnchorPoints: 完成绘制锚点');
+    this.selectionRenderer.drawResizeAnchorPoints(
+      ctx,
+      this.anchorPoints,
+      this.centerAnchorPoint,
+      this.selectedActions.length,
+      this.hoverAnchorInfo,
+      this.draggedAnchorIndex,
+      this.isDraggingCenter
+    );
   }
 
   /**
@@ -3960,7 +3300,7 @@ export class SelectTool extends DrawTool {
       isDraggingAnchor: this.isDraggingResizeAnchor,
       isDraggingMove: this.isDraggingMove,
       anchorPointsCount: this.anchorPoints.length + (this.centerAnchorPoint ? 1 : 0),
-      boundsCacheSize: this.boundsCache.size
+      boundsCacheSize: this.boundsCacheManager.size()
     };
   }
 

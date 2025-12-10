@@ -63,37 +63,33 @@ export class PolygonAnchorHandler extends BaseAnchorHandler {
   
   /**
    * 获取多边形的实际顶点
-   * 如果 action.points 包含所有顶点，直接使用
-   * 否则根据多边形类型计算顶点（基于中心点和半径）
+   * 
+   * 多边形有两种数据格式：
+   * 1. 中心+边缘点格式（绘制时产生）：points[0] = 中心点，points[last] = 边缘点
+   *    需要根据中心和半径计算实际顶点
+   * 2. 顶点列表格式（变换后产生）：points 包含所有顶点坐标
+   *    通过 isVertexList 标记区分
    */
   private getPolygonVertices(action: DrawAction): Point[] {
-    // 如果 points 包含3个或更多点，且不是中心+边缘的结构，则认为是顶点列表
-    if (action.points.length >= 3) {
-      // 检查是否是顶点列表（通过检查是否形成闭合多边形）
-      // 简单判断：如果第一个点和最后一个点距离较远，可能是顶点列表
-      const first = action.points[0];
-      const last = action.points[action.points.length - 1];
-      const distance = Math.sqrt(
-        Math.pow(last.x - first.x, 2) + Math.pow(last.y - first.y, 2)
-      );
-      
-      // 如果第一个点和最后一个点距离较远（不是闭合的），认为是顶点列表
-      if (distance > 10) {
-        return action.points;
-      }
-      
-      // 否则，检查是否是中心+边缘的结构（只有2个有效点）
-      // 如果 points.length === 3 且前两个点距离很近，可能是中心+边缘+某个点
-      // 这里简化处理：如果 points.length >= 3，尝试作为顶点列表
+    if (action.points.length < 2) {
+      return [];
+    }
+    
+    // 检查是否是顶点列表格式（变换后的多边形）
+    const polygonAction = action as DrawAction & {
+      isVertexList?: boolean;
+      polygonType?: string;
+      sides?: number;
+    };
+    
+    if (polygonAction.isVertexList === true) {
+      // 已标记为顶点列表，直接使用
       return action.points;
     }
     
-    // 如果只有2个点（中心点和边缘点），需要计算顶点
-    if (action.points.length === 2) {
-      return this.calculateVerticesFromCenterAndRadius(action);
-    }
-    
-    return [];
+    // 默认认为是中心+边缘点格式，计算实际顶点
+    // 这是绘制多边形时的标准格式
+    return this.calculateVerticesFromCenterAndRadius(action);
   }
   
   /**
@@ -260,8 +256,11 @@ export class PolygonAnchorHandler extends BaseAnchorHandler {
     // 检查原始 action.points 的结构
     const originalVertices = this.getPolygonVertices(action);
     
-    // 如果原始是顶点列表结构，直接更新 points
-    if (action.points.length >= 3 && originalVertices.length === action.points.length) {
+    // 检查是否已经是顶点列表格式
+    const polygonAction = action as DrawAction & { isVertexList?: boolean };
+    
+    if (polygonAction.isVertexList === true) {
+      // 已经是顶点列表格式，直接更新对应顶点
       const newPoints = action.points.map((point, index) => {
         if (index === closestVertexIndex) {
           return { ...point, x: newX, y: newY };
@@ -274,27 +273,41 @@ export class PolygonAnchorHandler extends BaseAnchorHandler {
         points: newPoints
       };
     } else {
-      // 如果原始是中心+边缘结构，转换为顶点列表
+      // 中心+边缘格式，转换为顶点列表格式
+      // 标记为顶点列表，以便后续正确处理
       return {
         ...action,
-        points: newVertices
-      };
+        points: newVertices,
+        isVertexList: true
+      } as DrawAction;
     }
   }
   
   
   
   /**
-   * 计算多边形中心点（边界框中心或点集中心）
+   * 计算多边形中心点
+   * 对于中心+边缘格式：直接使用第一个点（中心）
+   * 对于顶点列表格式：使用边界框中心
    */
   public calculateCenterPoint(action: DrawAction, bounds?: Bounds): Point {
-    // 先尝试从边界框计算（如果有的话）
-    if (bounds && bounds.width > 0 && bounds.height > 0) {
-      return ShapeUtils.getBoundsCenter(bounds);
+    if (action.points.length < 2) {
+      return { x: 0, y: 0 };
     }
     
-    // 否则使用基类的通用实现（点集中心）
-    return super.calculateCenterPoint(action);
+    // 检查是否是顶点列表格式
+    const polygonAction = action as DrawAction & { isVertexList?: boolean };
+    
+    if (polygonAction.isVertexList === true) {
+      // 顶点列表格式：使用边界框中心或点集中心
+      if (bounds && bounds.width > 0 && bounds.height > 0) {
+        return ShapeUtils.getBoundsCenter(bounds);
+      }
+      return super.calculateCenterPoint(action);
+    }
+    
+    // 中心+边缘格式：直接使用第一个点作为中心
+    return action.points[0];
   }
 }
 

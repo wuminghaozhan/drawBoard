@@ -12,6 +12,14 @@ export class EraserTool extends DrawTool {
 
     const originalContext = this.saveContext(ctx);
     
+    // 设置复杂度评分和缓存支持
+    if (!action.complexityScore) {
+      action.complexityScore = this.calculateComplexity(action);
+    }
+    if (action.supportsCaching === undefined) {
+      action.supportsCaching = false; // 橡皮擦不需要缓存
+    }
+    
     // 设置橡皮擦模式
     ctx.globalCompositeOperation = 'destination-out';
     ctx.strokeStyle = 'rgba(0,0,0,1)';
@@ -37,6 +45,16 @@ export class EraserTool extends DrawTool {
   }
 
   public getActionType(): string {
-    return 'eraser'; // 修复：返回工具类型
+    return 'eraser';
+  }
+
+  /**
+   * 计算橡皮擦工具的复杂度评分
+   */
+  private calculateComplexity(action: DrawAction): number {
+    // 基于点数和线宽计算复杂度
+    const pointsComplexity = Math.min(action.points.length / 10, 5);
+    const lineWidthComplexity = action.context.lineWidth * 0.3;
+    return Math.round(pointsComplexity + lineWidthComplexity + 2);
   }
 } 

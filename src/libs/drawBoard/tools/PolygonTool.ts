@@ -81,102 +81,23 @@ export class PolygonTool extends DrawTool {
   /**
    * 判断 action.points 是否是顶点列表格式
    * 
-   * 判断规则：
-   * 1. 如果 points.length === 2，肯定是中心+半径格式
-   * 2. 如果 points.length >= 3：
-   *    - 检查是否等于多边形的边数（对于正多边形）
-   *    - 或者，检查第一个点和最后一个点是否距离较远（未闭合的顶点列表）
-   *    - 注意：拖拽绘制时，points 可能包含很多中间点，但这些不是顶点列表
+   * 使用 isVertexList 标记（由 PolygonAnchorHandler 设置）
+   * 只有在变换后的多边形才会有 isVertexList = true
    * 
-   * 关键区别：
-   * - 中心+半径格式：points[0] 是中心，points[points.length-1] 是边缘点，中间的点是拖拽过程中的中间点
-   * - 顶点列表格式：points 中的每个点都是多边形的实际顶点，且 points.length 应该等于或接近预期边数
+   * 这与 PolygonAnchorHandler.getPolygonVertices() 保持一致
    */
   private isVertexListFormat(action: PolygonAction): boolean {
-    // 如果只有2个点，肯定是中心+半径格式
-    if (action.points.length === 2) {
-      return false;
-    }
-
-    // 如果少于3个点，无法形成多边形
-    if (action.points.length < 3) {
-      return false;
-    }
-
-    // 获取多边形的预期边数
-    const expectedSides = this.getExpectedSides(action);
-
-    // 如果 points.length 等于预期边数，很可能是顶点列表
-    if (action.points.length === expectedSides) {
+    // 检查是否有明确的 isVertexList 标记
+    const polygonAction = action as PolygonAction & { isVertexList?: boolean };
+    
+    if (polygonAction.isVertexList === true) {
       return true;
     }
-
-    // 如果 points.length 在预期边数附近（允许一些容差），可能是顶点列表
-    // 容差范围：expectedSides ± 2（允许一些重复点或中间点）
-    if (action.points.length >= expectedSides - 2 && action.points.length <= expectedSides + 2) {
-      // 进一步检查：如果第一个点和最后一个点距离很近（闭合的顶点列表），很可能是顶点列表
-      const first = action.points[0];
-      const last = action.points[action.points.length - 1];
-      const distance = Math.sqrt(
-        Math.pow(last.x - first.x, 2) + Math.pow(last.y - first.y, 2)
-      );
-      
-      // 如果距离很近（<= 10px），可能是闭合的顶点列表
-      if (distance <= 10) {
-        return true;
-      }
-      
-      // 如果距离较远，但 points.length 正好等于 expectedSides，也可能是未闭合的顶点列表
-      if (action.points.length === expectedSides) {
-        return true;
-      }
-    }
-
-    // 如果 points.length 远大于预期边数（比如 > expectedSides * 3），
-    // 很可能是拖拽绘制过程中的中间点，不是顶点列表
-    if (action.points.length > expectedSides * 3) {
-      return false;
-    }
-
-    // 其他情况：如果 points.length 在 expectedSides + 2 到 expectedSides * 3 之间
-    // 需要进一步判断：检查点的分布是否像顶点列表
-    // 简单判断：如果第一个点和最后一个点距离较远（> 10px），且 points.length 不太大，可能是未闭合的顶点列表
-    if (action.points.length > expectedSides + 2 && action.points.length <= expectedSides * 2) {
-      const first = action.points[0];
-      const last = action.points[action.points.length - 1];
-      const distance = Math.sqrt(
-        Math.pow(last.x - first.x, 2) + Math.pow(last.y - first.y, 2)
-      );
-      
-      // 如果距离较远（> 10px），可能是未闭合的顶点列表
-      if (distance > 10) {
-        return true;
-      }
-    }
-
-    // 默认：认为是中心+半径格式（拖拽绘制时的中间点）
+    
+    // 默认：认为是中心+半径格式（绘制时的标准格式）
     return false;
   }
 
-  /**
-   * 获取多边形的预期边数
-   */
-  private getExpectedSides(action: PolygonAction): number {
-    switch (action.polygonType) {
-      case 'triangle':
-        return 3;
-      case 'pentagon':
-        return 5;
-      case 'hexagon':
-        return 6;
-      case 'star':
-        return 5; // 星形有5个外顶点
-      case 'custom':
-        return action.sides || 6;
-      default:
-        return 6; // 默认六边形
-    }
-  }
   
   /**
    * 从顶点列表绘制多边形

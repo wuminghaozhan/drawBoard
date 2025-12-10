@@ -94,24 +94,18 @@ export class DrawBoardToolAPI {
       toolInstance: !!this.toolManager?.getCurrentToolInstance()
     });
     
-    // 如果从select工具切换到其他工具，标记需要清除选择UI
+    // 如果从select工具切换到其他工具，立即清除选择UI并触发重绘
     if (currentTool === 'select' && toolType !== 'select') {
-      // 标记需要清除选择UI，而不是立即触发重绘
-      // 这样可以在下次重绘时统一处理，减少不必要的重绘
+      // 【修复】直接触发重绘来清除选区UI，而不是只标记
+      // 否则选区会一直保留直到下次完整重绘
       if (this.markNeedsClearSelectionUI) {
         this.markNeedsClearSelectionUI();
-        logger.debug('DrawBoardToolAPI.setTool: 已标记需要清除选择UI', {
-          previousTool: currentTool,
-          newTool: toolType
-        });
-      } else {
-        // 如果没有标记方法，直接触发重绘（向后兼容）
-        await this.forceRedraw();
-        logger.debug('DrawBoardToolAPI.setTool: 已触发重绘以清除选择UI', {
-          previousTool: currentTool,
-          newTool: toolType
-        });
       }
+      await this.forceRedraw();
+      logger.debug('DrawBoardToolAPI.setTool: 已触发重绘以清除选择UI', {
+        previousTool: currentTool,
+        newTool: toolType
+      });
     }
     
     // 切换到选择工具时，同步图层数据

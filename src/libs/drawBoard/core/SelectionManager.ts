@@ -22,7 +22,7 @@ export class SelectionManager {
   private cachedHandles: Array<{x: number, y: number}> | null = null;
   private cachedSelectionBox: SelectionBox | null = null;
   private cachedHandleSize: number = 0;
-  
+
   // Canvas 尺寸（用于边界检查，默认值为合理的最大尺寸）
   private canvasWidth: number = 4096;
   private canvasHeight: number = 4096;

@@ -535,16 +535,16 @@ export class PerformanceManager {
         // 【修复】设置标志位，防止循环调用
         this.isAutoSwitching = true;
         try {
-          if (stats.underMemoryPressure) {
+        if (stats.underMemoryPressure) {
             // 【修复】传入 isAutoSwitch = true，避免重启监控器
             this.setPerformanceMode(PerformanceMode.BALANCED, true);
-            
-            // 触发复杂度重新计算
-            if (this.drawBoard) {
-              this.drawBoard.recalculateComplexity();
-            }
-          } else if (stats.currentCacheMemoryMB < this.config.maxCacheMemoryMB * 0.5) {
-            // 内存充足时切换到高性能模式
+          
+          // 触发复杂度重新计算
+          if (this.drawBoard) {
+            this.drawBoard.recalculateComplexity();
+          }
+        } else if (stats.currentCacheMemoryMB < this.config.maxCacheMemoryMB * 0.5) {
+          // 内存充足时切换到高性能模式
             // 【修复】传入 isAutoSwitch = true，避免重启监控器
             this.setPerformanceMode(PerformanceMode.HIGH_PERFORMANCE, true);
           }
