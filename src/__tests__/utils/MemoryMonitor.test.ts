@@ -1,4 +1,4 @@
-import { MemoryMonitor } from '../../libs/drawBoard/utils/MemoryMonitor';
+import { MemoryMonitor } from '../../libs/drawBoard/infrastructure/performance/MemoryMonitor';
 
 describe('MemoryMonitor', () => {
   let monitor: MemoryMonitor;

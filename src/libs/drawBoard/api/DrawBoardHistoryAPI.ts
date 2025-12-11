@@ -3,7 +3,7 @@ import type { HistoryManager } from '../history/HistoryManager';
 import type { DrawingHandler } from '../handlers/DrawingHandler';
 import type { ToolManager } from '../tools/ToolManager';
 import { ToolTypeGuards } from '../tools/ToolInterfaces';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 /**
  * DrawBoard 历史记录 API

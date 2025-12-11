@@ -4,7 +4,7 @@ import type { HistoryManager } from '../history/HistoryManager';
 import type { ToolManager } from '../tools/ToolManager';
 import type { SelectionManager } from '../core/SelectionManager';
 import type { DrawingHandler } from './DrawingHandler';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 /**
  * 绘制状态接口 - 包含所有绘制相关状态

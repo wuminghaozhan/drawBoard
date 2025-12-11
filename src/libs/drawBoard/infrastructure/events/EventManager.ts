@@ -1,6 +1,6 @@
-import type { Point } from '../core/CanvasEngine';
-import { Throttle } from '../utils/Throttle';
-import { logger } from '../utils/Logger';
+import type { Point } from '../../core/CanvasEngine';
+import { Throttle } from '../performance/Throttle';
+import { logger } from '../../infrastructure/logging/Logger';
 
 export interface DrawEvent {
   type: 'mousedown' | 'mousemove' | 'mouseup' | 'touchstart' | 'touchmove' | 'touchend';

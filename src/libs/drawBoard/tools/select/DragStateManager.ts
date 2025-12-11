@@ -7,7 +7,7 @@
 
 import type { DrawAction } from '../DrawTool';
 import type { Point } from '../../core/CanvasEngine';
-import { logger } from '../../utils/Logger';
+import { logger } from '../../infrastructure/logging/Logger';
 
 /**
  * 拖拽类型

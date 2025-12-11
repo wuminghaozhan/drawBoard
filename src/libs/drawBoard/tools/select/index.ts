@@ -32,3 +32,54 @@ export {
   type Bounds as BoundsCacheBounds, 
   type BoundsCacheConfig 
 } from './BoundsCacheManager';
+
+// 变换操作模块
+export { 
+  TransformOperations,
+  type TransformResult,
+  type BatchTransformResult
+} from './TransformOperations';
+
+// 锚点生成模块
+export {
+  AnchorGenerator,
+  type AnchorPoint,
+  type AnchorType,
+  type AnchorGeneratorConfig,
+  type AnchorGeneratorResult,
+  type Bounds as AnchorBounds
+} from './AnchorGenerator';
+
+// 锚点拖拽处理模块
+export {
+  AnchorDragHandler,
+  type DragHandlerConfig,
+  type DragHandlerState,
+  type DragResult
+} from './AnchorDragHandler';
+
+// 边界框计算模块
+export {
+  BoundsCalculator,
+  boundsCalculator,
+  type BoundsCalculatorConfig
+} from './BoundsCalculator';
+
+// 鼠标事件处理模块
+export {
+  getAnchorPointAt,
+  isPointInMoveArea,
+  determineMouseDownOperation,
+  createInitialDragState,
+  resetDragState,
+  type DragOperationType,
+  type DragState as MouseEventDragState,
+  type DragStartState,
+  type MouseEventContext,
+  type AnchorQueryResult
+} from './MouseEventHandler';
+
+// 空间选择助手（基于空间索引的选择算法）
+export {
+  SpatialSelectionHelper
+} from './SpatialSelectionHelper';

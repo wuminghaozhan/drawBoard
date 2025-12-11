@@ -2,9 +2,14 @@ import type { Point } from '../../core/CanvasEngine';
 import type { DrawAction } from '../DrawTool';
 
 /**
- * 锚点类型
+ * 锚点类型 - 统一定义
+ * 
+ * 包含两种命名风格：
+ * 1. 位置描述型：'top-left', 'bottom-right' 等 - 用于形状特定锚点
+ * 2. 功能描述型：'resize-nw', 'resize-se' 等 - 用于通用缩放锚点
  */
 export type AnchorType = 
+  // ===== 位置描述型锚点（形状特定） =====
   | 'center'           // 中心点（用于移动）
   | 'top-left'         // 左上角
   | 'top-right'        // 右上角
@@ -17,10 +22,22 @@ export type AnchorType =
   | 'start'            // 起点（用于直线）
   | 'end'              // 终点（用于直线）
   | 'vertex'           // 顶点（用于多边形）
-  | 'key-point';       // 关键点（用于路径）
+  | 'key-point'        // 关键点（用于路径）
+  // ===== 功能描述型锚点（通用缩放） =====
+  | 'resize-nw'        // 左上角缩放
+  | 'resize-n'         // 上边缩放
+  | 'resize-ne'        // 右上角缩放
+  | 'resize-w'         // 左边缩放
+  | 'resize-e'         // 右边缩放
+  | 'resize-sw'        // 左下角缩放
+  | 'resize-s'         // 下边缩放
+  | 'resize-se'        // 右下角缩放
+  | 'rotate'           // 旋转锚点
+  | 'move'             // 移动锚点
+  | 'custom';          // 自定义锚点
 
 /**
- * 锚点接口
+ * 锚点接口 - 统一定义
  */
 export interface AnchorPoint {
   /** 锚点X坐标 */
@@ -31,10 +48,14 @@ export interface AnchorPoint {
   type: AnchorType;
   /** CSS光标样式 */
   cursor: string;
-  /** 图形类型 */
-  shapeType: string;
+  /** 图形类型（可选，用于形状特定锚点） */
+  shapeType?: string;
   /** 是否为中心点 */
   isCenter?: boolean;
+  /** 关联的动作 ID（可选，用于多选场景） */
+  actionId?: string;
+  /** 原始边界框（可选，用于拖拽时参考） */
+  originalBounds?: Bounds;
 }
 
 /**

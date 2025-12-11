@@ -1,6 +1,6 @@
 import { DrawBoardError, type DrawBoardErrorCode as DrawBoardErrorCodeType } from './ErrorHandler';
 import { ErrorHandler } from './ErrorHandler';
-import { logger } from './Logger';
+import { logger } from '../logging/Logger';
 
 /**
  * API 错误处理包装器

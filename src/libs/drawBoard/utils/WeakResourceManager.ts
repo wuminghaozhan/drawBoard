@@ -1,4 +1,4 @@
-import { logger } from './Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 /**
  * 可销毁资源接口

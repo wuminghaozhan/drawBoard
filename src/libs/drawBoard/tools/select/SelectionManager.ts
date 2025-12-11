@@ -1,9 +1,9 @@
 import type { DrawAction } from '../DrawTool';
 import type { Point } from '../../core/CanvasEngine';
 import type { Bounds } from '../anchor/AnchorTypes';
-import { SpatialIndex } from '../../utils/SpatialIndex';
+import { SpatialIndex } from '../../infrastructure/performance/SpatialIndex';
 import { ConfigConstants } from '../../config/Constants';
-import { logger } from '../../utils/Logger';
+import { logger } from '../../infrastructure/logging/Logger';
 import { SafeExecutor } from '../../utils/SafeExecutor';
 
 /**

@@ -1,4 +1,4 @@
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 export type ShortcutHandler = () => void;
 

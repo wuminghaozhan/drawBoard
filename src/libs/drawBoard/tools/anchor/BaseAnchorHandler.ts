@@ -3,7 +3,7 @@ import type { Point } from '../../core/CanvasEngine';
 import type { AnchorPoint, AnchorType, Bounds, ShapeAnchorHandler } from './AnchorTypes';
 import { AnchorUtils } from '../../utils/AnchorUtils';
 import { ShapeUtils } from '../../utils/ShapeUtils';
-import { logger } from '../../utils/Logger';
+import { logger } from '../../infrastructure/logging/Logger';
 
 /**
  * 基础锚点处理器

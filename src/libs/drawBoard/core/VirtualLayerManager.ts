@@ -1,7 +1,8 @@
 import type { DrawAction } from '../tools/DrawTool';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 import { CanvasEngine } from './CanvasEngine';
 import type { HistoryManager } from '../history/HistoryManager';
+import { EventBus } from '../infrastructure/events/EventBus';
 
 /**
  * 虚拟图层接口
@@ -45,6 +46,24 @@ export interface VirtualLayerConfig {
   timeThreshold?: number;
   /** 分组模式下的工具类型变化是否创建新图层 */
   createLayerOnToolChange?: boolean;
+  
+  // ============================================
+  // 渲染优化配置
+  // ============================================
+  
+  /** 
+   * 是否启用动态图层拆分优化
+   * 启用后，选择元素时会将 draw 层拆分为 bottom/selected/top 三层
+   * 注意：此功能会增加内存占用和初始化开销，脏矩形算法已足够优化，一般不需要启用
+   * @default false
+   */
+  enableDynamicLayerSplit?: boolean;
+  
+  /**
+   * 动态拆分阈值：只有当 bottom/top 层元素数量超过此值时才启用拆分
+   * @default 100
+   */
+  dynamicSplitThreshold?: number;
 }
 
 /**
@@ -80,6 +99,10 @@ export class VirtualLayerManager {
   private timeThreshold: number = 5000; // 时间间隔阈值（毫秒）
   private createLayerOnToolChange: boolean = true; // 工具类型变化是否创建新图层
   
+  // 渲染优化配置
+  private enableDynamicLayerSplit: boolean = false; // 是否启用动态图层拆分（默认关闭）
+  private dynamicSplitThreshold: number = 100; // 动态拆分阈值
+  
   // 性能优化：缓存统计信息
   private statsCache: {
     totalLayers: number; // 总虚拟图层数量
@@ -105,8 +128,12 @@ export class VirtualLayerManager {
   
   // HistoryManager引用（用于获取动作数据）
   private historyManager?: HistoryManager;
+  
+  // EventBus 引用（用于组件解耦）
+  private eventBus?: EventBus;
+  private eventUnsubscribers: (() => void)[] = [];
 
-  constructor(config: VirtualLayerConfig = {}, canvasEngine?: CanvasEngine) {
+  constructor(config: VirtualLayerConfig = {}, canvasEngine?: CanvasEngine, eventBus?: EventBus) {
     this.mode = config.mode || 'individual';
     this.maxLayers = config.maxLayers || 50;
     this.defaultLayerName = config.defaultLayerName || '图层';
@@ -114,6 +141,20 @@ export class VirtualLayerManager {
     this.timeThreshold = config.timeThreshold || 5000;
     this.createLayerOnToolChange = config.createLayerOnToolChange !== false;
     this.canvasEngine = canvasEngine;
+    this.eventBus = eventBus;
+    
+    // 渲染优化配置
+    this.enableDynamicLayerSplit = config.enableDynamicLayerSplit ?? false; // 默认关闭
+    this.dynamicSplitThreshold = config.dynamicSplitThreshold ?? 100;
+    
+    // 订阅 EventBus 事件
+    this.subscribeToEvents();
+    
+    logger.debug('VirtualLayerManager 初始化', {
+      mode: this.mode,
+      enableDynamicLayerSplit: this.enableDynamicLayerSplit,
+      dynamicSplitThreshold: this.dynamicSplitThreshold
+    });
     
     // 创建默认虚拟图层
     this.createDefaultLayer();
@@ -140,6 +181,46 @@ export class VirtualLayerManager {
   public setHistoryManager(historyManager: HistoryManager): void {
     this.historyManager = historyManager;
     logger.debug('VirtualLayerManager已设置HistoryManager引用');
+  }
+
+  /**
+   * 设置 EventBus 引用
+   */
+  public setEventBus(eventBus: EventBus): void {
+    // 先取消旧的订阅
+    this.unsubscribeFromEvents();
+    this.eventBus = eventBus;
+    this.subscribeToEvents();
+  }
+
+  /**
+   * 订阅 EventBus 事件
+   */
+  private subscribeToEvents(): void {
+    if (!this.eventBus) return;
+
+    // 订阅 action 更新事件 - 自动标记图层缓存过期
+    const unsubAction = this.eventBus.on('action:updated', ({ actionId }) => {
+      const layerId = this.actionLayerMap.get(actionId);
+      if (layerId) {
+        this.markLayerCacheDirty(layerId);
+      }
+    });
+    this.eventUnsubscribers.push(unsubAction);
+
+    // 订阅选择变更事件 - 可用于日志或其他处理
+    const unsubSelection = this.eventBus.on('selection:changed', ({ selectedIds }) => {
+      logger.debug('VirtualLayerManager: 收到选择变更', { count: selectedIds.length });
+    });
+    this.eventUnsubscribers.push(unsubSelection);
+  }
+
+  /**
+   * 取消 EventBus 订阅
+   */
+  private unsubscribeFromEvents(): void {
+    this.eventUnsubscribers.forEach(unsub => unsub());
+    this.eventUnsubscribers = [];
   }
 
   /**
@@ -309,19 +390,25 @@ export class VirtualLayerManager {
           logger.error('创建动态图层失败:', error);
         }
         
-        // 拆分draw层以实现性能优化
-        try {
-          const allLayers = this.getAllVirtualLayers(); // 已按zIndex排序
-          const allLayerZIndices = allLayers.map(l => l.zIndex); // 已排序的zIndex数组
-          const splitResult = this.canvasEngine.splitDrawLayer(layer.zIndex, allLayerZIndices);
-          logger.debug('拆分draw层完成:', layer.name, 'zIndex:', layer.zIndex, splitResult);
-          
-          // 拆分后需要初始化绘制bottom和top层的内容
-          // 注意：这里只标记需要重绘，实际绘制由DrawingHandler处理
-          // 因为DrawingHandler需要访问HistoryManager来获取动作数据
-          this.markLayersForInitialDraw(splitResult, layer.zIndex, allLayers);
-        } catch (error) {
-          logger.error('拆分draw层失败:', error);
+        // 拆分draw层以实现性能优化（仅在启用时执行）
+        if (this.shouldSplitDrawLayers()) {
+          try {
+            const allLayers = this.getAllVirtualLayers(); // 已按zIndex排序
+            const allLayerZIndices = allLayers.map(l => l.zIndex); // 已排序的zIndex数组
+            const splitResult = this.canvasEngine.splitDrawLayer(layer.zIndex, allLayerZIndices);
+            logger.debug('拆分draw层完成:', layer.name, 'zIndex:', layer.zIndex, splitResult);
+            
+            // 拆分后需要初始化绘制bottom和top层的内容
+            // 注意：这里只标记需要重绘，实际绘制由DrawingHandler处理
+            // 因为DrawingHandler需要访问HistoryManager来获取动作数据
+            this.markLayersForInitialDraw(splitResult, layer.zIndex, allLayers);
+          } catch (error) {
+            logger.error('拆分draw层失败:', error);
+          }
+        } else {
+          logger.debug('动态图层拆分已禁用，跳过拆分', {
+            enableDynamicLayerSplit: this.enableDynamicLayerSplit
+          });
         }
       }
     } finally {
@@ -330,6 +417,51 @@ export class VirtualLayerManager {
     
     logger.debug('切换到虚拟图层:', layer.name);
     return true;
+  }
+
+  /**
+   * 判断是否应该拆分 draw 层
+   * 根据配置和实际情况决定是否启用动态图层拆分
+   */
+  private shouldSplitDrawLayers(): boolean {
+    // 如果明确禁用，直接返回 false
+    if (!this.enableDynamicLayerSplit) {
+      return false;
+    }
+    
+    // 如果启用了动态拆分，检查是否满足阈值条件
+    // 只有当 bottom/top 层元素足够多时才值得拆分
+    const allLayers = this.getAllVirtualLayers();
+    const activeLayer = this.getVirtualLayer(this.activeLayerId);
+    
+    if (!activeLayer) {
+      return false;
+    }
+    
+    // 计算 bottom 和 top 层的总动作数
+    let bottomActionCount = 0;
+    let topActionCount = 0;
+    
+    for (const layer of allLayers) {
+      if (layer.zIndex < activeLayer.zIndex) {
+        bottomActionCount += layer.actionIds.length;
+      } else if (layer.zIndex > activeLayer.zIndex) {
+        topActionCount += layer.actionIds.length;
+      }
+    }
+    
+    // 只有当任一层超过阈值时才值得拆分
+    const shouldSplit = bottomActionCount > this.dynamicSplitThreshold || 
+                        topActionCount > this.dynamicSplitThreshold;
+    
+    logger.debug('动态拆分判断', {
+      bottomActionCount,
+      topActionCount,
+      threshold: this.dynamicSplitThreshold,
+      shouldSplit
+    });
+    
+    return shouldSplit;
   }
 
   /**
@@ -416,11 +548,54 @@ export class VirtualLayerManager {
     return this.virtualLayers.get(layerId) || null;
   }
 
+  // ============================================
+  // 优化配置 API
+  // ============================================
+
+  /**
+   * 获取是否启用动态图层拆分
+   */
+  public isDynamicLayerSplitEnabled(): boolean {
+    return this.enableDynamicLayerSplit;
+  }
+
+  /**
+   * 设置是否启用动态图层拆分
+   */
+  public setDynamicLayerSplitEnabled(enabled: boolean): void {
+    this.enableDynamicLayerSplit = enabled;
+    logger.info(`VirtualLayerManager: 动态图层拆分 ${enabled ? '启用' : '禁用'}`);
+    
+    // 如果禁用，立即合并现有拆分
+    if (!enabled && this.canvasEngine) {
+      this.canvasEngine.mergeDrawLayers();
+    }
+  }
+
+  /**
+   * 获取动态拆分阈值
+   */
+  public getDynamicSplitThreshold(): number {
+    return this.dynamicSplitThreshold;
+  }
+
+  /**
+   * 设置动态拆分阈值
+   */
+  public setDynamicSplitThreshold(threshold: number): void {
+    this.dynamicSplitThreshold = Math.max(1, threshold);
+    logger.debug('VirtualLayerManager: 动态拆分阈值更新为', this.dynamicSplitThreshold);
+  }
+
   /**
    * 销毁VirtualLayerManager，清理所有资源
    */
   public destroy(): void {
     logger.debug('🗑️ 开始销毁VirtualLayerManager...');
+    
+    // 0. 取消 EventBus 订阅
+    this.unsubscribeFromEvents();
+    this.eventBus = undefined;
     
     // 1. 清理所有动态图层
     if (this.canvasEngine && this.activeLayerId) {

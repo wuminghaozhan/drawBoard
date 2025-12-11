@@ -1,7 +1,7 @@
 import { DrawTool } from './DrawTool';
 import type { ToolType } from './DrawTool';
 import type { DrawAction } from './DrawTool';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 /**
  * 工具元数据接口

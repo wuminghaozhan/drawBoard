@@ -1,5 +1,5 @@
-import { logger } from './Logger';
-import { ErrorHandler, DrawBoardError, DrawBoardErrorCode } from './ErrorHandler';
+import { logger } from '../infrastructure/logging/Logger';
+import { ErrorHandler, DrawBoardError, DrawBoardErrorCode } from '../infrastructure/error/ErrorHandler';
 
 /**
  * 可销毁资源接口

@@ -1,5 +1,5 @@
-import type { DrawAction } from '../tools/DrawTool';
-import type { Point } from '../core/CanvasEngine';
+import type { DrawAction } from '../../tools/DrawTool';
+import type { Point } from '../../core/CanvasEngine';
 
 /**
  * 四叉树节点接口

@@ -3,7 +3,7 @@ import type { VirtualLayerManager } from '../core/VirtualLayerManager';
 import type { DrawingHandler } from '../handlers/DrawingHandler';
 import type { ToolManager } from '../tools/ToolManager';
 import type { CanvasEngine } from '../core/CanvasEngine';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 /**
  * DrawBoard 虚拟图层 API

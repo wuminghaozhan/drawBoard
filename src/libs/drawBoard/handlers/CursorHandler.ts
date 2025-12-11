@@ -1,5 +1,5 @@
 import type { ToolType } from '../tools/DrawTool';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 /**
  * 鼠标样式处理器 - 负责管理画板的鼠标样式

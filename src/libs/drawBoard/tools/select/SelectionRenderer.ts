@@ -6,7 +6,7 @@
  */
 
 import type { AnchorPoint } from '../anchor/AnchorTypes';
-import { logger } from '../../utils/Logger';
+import { logger } from '../../infrastructure/logging/Logger';
 
 /**
  * 选择框样式配置

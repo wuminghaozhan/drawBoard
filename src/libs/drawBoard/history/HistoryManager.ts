@@ -1,5 +1,6 @@
 import type { DrawAction } from '../tools/DrawTool';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
+import type { EventBus } from '../infrastructure/events/EventBus';
 
 /**
  * 历史管理器 - 优化版本
@@ -9,6 +10,7 @@ import { logger } from '../utils/Logger';
  * - 更精确的内存使用计算
  * - 智能清理策略
  * - 性能监控
+ * - EventBus 集成
  */
 export class HistoryManager {
   private history: DrawAction[] = [];
@@ -37,6 +39,10 @@ export class HistoryManager {
     enableDetailedLogging: false, // 是否启用详细日志
     memoryCalculationPrecision: 'high' as 'low' | 'medium' | 'high' // 内存计算精度
   };
+
+  // EventBus 相关
+  private eventBus?: EventBus;
+  private eventUnsubscribers: (() => void)[] = [];
   
   /**
    * 添加动作到历史记录（智能内存管理）
@@ -305,6 +311,10 @@ export class HistoryManager {
    * 销毁历史管理器，清理所有资源
    */
   public destroy(): void {
+    // 取消 EventBus 订阅
+    this.unsubscribeFromEvents();
+    this.eventBus = undefined;
+    
     // 清空历史记录
     this.history = [];
     this.undoneActions = [];
@@ -471,5 +481,50 @@ export class HistoryManager {
       averageOperationTime: 0
     };
     logger.info('性能指标已重置');
+  }
+
+  /**
+   * 设置 EventBus 引用
+   */
+  public setEventBus(eventBus: EventBus): void {
+    this.unsubscribeFromEvents();
+    this.eventBus = eventBus;
+    this.subscribeToEvents();
+  }
+
+  /**
+   * 订阅 EventBus 事件
+   */
+  private subscribeToEvents(): void {
+    if (!this.eventBus) return;
+
+    // 订阅 action 更新事件 - 自动更新历史记录
+    const unsubAction = this.eventBus.on('action:updated', ({ actionId, changes }) => {
+      const action = this.getActionById(actionId);
+      if (action) {
+        const updatedAction = { ...action, ...changes };
+        this.updateAction(updatedAction as DrawAction);
+      }
+    });
+    this.eventUnsubscribers.push(unsubAction);
+
+    // 订阅撤销/重做事件
+    const unsubUndo = this.eventBus.on('history:undo', () => {
+      this.undo();
+    });
+    this.eventUnsubscribers.push(unsubUndo);
+
+    const unsubRedo = this.eventBus.on('history:redo', () => {
+      this.redo();
+    });
+    this.eventUnsubscribers.push(unsubRedo);
+  }
+
+  /**
+   * 取消 EventBus 订阅
+   */
+  private unsubscribeFromEvents(): void {
+    this.eventUnsubscribers.forEach(unsub => unsub());
+    this.eventUnsubscribers = [];
   }
 } 

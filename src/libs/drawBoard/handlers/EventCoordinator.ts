@@ -1,11 +1,11 @@
 import type { ToolManager } from '../tools/ToolManager';
 import type { DrawingHandler } from './DrawingHandler';
 import type { CursorHandler } from './CursorHandler';
-import type { DrawEvent } from '../events/EventManager';
+import type { DrawEvent } from '../infrastructure/events/EventManager';
 import type { DrawAction } from '../tools/DrawTool';
 import type { Point } from '../core/CanvasEngine';
-import { logger } from '../utils/Logger';
-import { SafeExecutor } from '../utils/SafeExecutor';
+import { logger } from '../infrastructure/logging/Logger';
+import { SafeExecutor } from '../infrastructure/error/SafeExecutor';
 import { ConfigConstants } from '../config/Constants';
 
 /**
@@ -94,7 +94,7 @@ export class EventCoordinator {
       }
       
       // 其他工具走正常的绘制流程
-      await this.drawingHandler.handleDrawEnd(event);
+      this.drawingHandler.handleDrawEnd(event);
       this.updateCursor();
     }, undefined, '处理绘制结束事件失败');
   }

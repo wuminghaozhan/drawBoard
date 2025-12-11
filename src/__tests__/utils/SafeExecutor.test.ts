@@ -1,4 +1,4 @@
-import { SafeExecutor } from '../../libs/drawBoard/utils/SafeExecutor';
+import { SafeExecutor } from '../../libs/drawBoard/infrastructure/error/SafeExecutor';
 
 describe('SafeExecutor', () => {
   describe('execute', () => {

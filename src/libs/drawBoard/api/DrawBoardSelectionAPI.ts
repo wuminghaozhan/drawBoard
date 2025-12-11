@@ -6,7 +6,7 @@ import type { VirtualLayerManager } from '../core/VirtualLayerManager';
 import type { DrawingHandler } from '../handlers/DrawingHandler';
 import type { CanvasEngine } from '../core/CanvasEngine';
 import { BoundsValidator, type Bounds as BoundsType } from '../utils/BoundsValidator';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 import { ToolTypeGuards } from '../tools/ToolInterfaces';
 
 /**

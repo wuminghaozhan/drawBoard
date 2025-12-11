@@ -6,7 +6,7 @@
  */
 
 import type { DrawAction } from '../DrawTool';
-import { logger } from '../../utils/Logger';
+import { logger } from '../../infrastructure/logging/Logger';
 
 /**
  * 边界框类型

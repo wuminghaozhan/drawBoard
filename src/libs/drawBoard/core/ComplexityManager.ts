@@ -1,5 +1,5 @@
 import type { DrawAction } from '../tools/DrawTool';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 /**
  * 历史管理器接口

@@ -16,7 +16,7 @@ export interface CanvasLayer {
   visible: boolean;
 }
 
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 export class CanvasEngine {
   protected container: HTMLDivElement;

@@ -4,7 +4,7 @@ import type { StrokePresetType } from '../tools/StrokePresets';
 import type { ToolManager } from '../tools/ToolManager';
 import type { CanvasEngine } from '../core/CanvasEngine';
 import type { ComplexityManager } from '../core/ComplexityManager';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 import { ToolTypeGuards } from '../tools/ToolInterfaces';
 
 /**

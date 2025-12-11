@@ -1,6 +1,6 @@
 import type { DrawAction, PreRenderedCache } from '../tools/DrawTool';
 import { PerformanceMode } from '../tools/DrawTool';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 
 // 重新导出PerformanceMode供外部使用

@@ -7,7 +7,7 @@ import { SelectionManager } from '../../libs/drawBoard/core/SelectionManager';
 import { PerformanceManager } from '../../libs/drawBoard/core/PerformanceManager';
 import { ComplexityManager } from '../../libs/drawBoard/core/ComplexityManager';
 import { VirtualLayerManager } from '../../libs/drawBoard/core/VirtualLayerManager';
-import { EventManager } from '../../libs/drawBoard/events/EventManager';
+import { EventManager } from '../../libs/drawBoard/infrastructure/events/EventManager';
 import { ShortcutManager } from '../../libs/drawBoard/shortcuts/ShortcutManager';
 import { ExportManager } from '../../libs/drawBoard/utils/ExportManager';
 import { DrawingHandler } from '../../libs/drawBoard/handlers/DrawingHandler';

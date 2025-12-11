@@ -1,7 +1,7 @@
 import type { DrawAction } from '../DrawTool';
 import type { Point } from '../../core/CanvasEngine';
 import type { AnchorPoint, AnchorType, Bounds } from './AnchorTypes';
-import { logger } from '../../utils/Logger';
+import { logger } from '../../infrastructure/logging/Logger';
 import { BaseAnchorHandler } from './BaseAnchorHandler';
 import { AnchorUtils } from '../../utils/AnchorUtils';
 

@@ -108,7 +108,7 @@ export { ComplexityManager } from './core/ComplexityManager';
 export { VirtualLayerManager } from './core/VirtualLayerManager';
 
 /** 事件管理器 - 处理鼠标、触摸等输入事件 */
-export { EventManager } from './events/EventManager';
+export { EventManager } from './infrastructure/events/EventManager';
 
 /** 快捷键管理器 - 管理键盘快捷键 */
 export { ShortcutManager } from './shortcuts/ShortcutManager';
@@ -146,7 +146,7 @@ export {
   DrawBoardError, 
   DrawBoardErrorCode,
   type ErrorRecoveryStrategy 
-} from './utils/ErrorHandler';
+} from './infrastructure/error/ErrorHandler';
 
 export { 
   ResourceManager, 
@@ -155,11 +155,61 @@ export {
 } from './utils/ResourceManager';
 
 // ============================================
+// 性能优化基础设施
+// ============================================
+
+export { 
+  DirtyRectManager,
+  type DirtyRectConfig,
+  type DirtyRectStats,
+  type DirtyRectDebugController
+} from './infrastructure/performance/DirtyRectManager';
+
+export { SpatialIndex } from './infrastructure/performance/SpatialIndex';
+export { MemoryMonitor, type MemoryStats } from './infrastructure/performance/MemoryMonitor';
+export { Throttle, throttle, debounce } from './infrastructure/performance/Throttle';
+
+// 缓存基础设施
+export { 
+  CacheFactory,
+  SimpleCache,
+  type SimpleCacheConfig,
+  type UnifiedCacheConfig,
+  type CacheStats
+} from './infrastructure/cache/CacheFactory';
+
+export { 
+  LRUCache,
+  type LRUCacheConfig,
+  type LRUCacheStats
+} from './infrastructure/cache/LRUCache';
+
+export { 
+  ComplexityAwareCache,
+  type ComplexityConfig,
+  type ComplexityAwareCacheConfig
+} from './infrastructure/cache/ComplexityAwareCache';
+
+// 事件基础设施
+export { 
+  EventBus,
+  globalEventBus,
+  type DrawBoardEvents,
+  type EventHandler,
+  type SubscribeOptions
+} from './infrastructure/events/EventBus';
+
+export { 
+  SelectToolCoordinator,
+  type SelectToolCoordinatorConfig
+} from './handlers/SelectToolCoordinator';
+
+// ============================================
 // 类型导出 - 完整的类型定义
 // ============================================
 
 /** DrawBoard配置接口 */
-export type { DrawBoardConfig } from './DrawBoard';
+export type { DrawBoardConfig, OptimizationConfig } from './DrawBoard';
 
 /** 工具类型枚举 */
 export type { ToolType } from './tools/DrawTool';
@@ -168,7 +218,7 @@ export type { ToolType } from './tools/DrawTool';
 export type { DrawAction, DrawContext } from './tools/DrawTool';
 
 /** 绘制事件类型 */
-export type { DrawEvent } from './events/EventManager';
+export type { DrawEvent } from './infrastructure/events/EventManager';
 
 /** DrawBoard状态接口 */
 export type { DrawBoardState } from './handlers/StateHandler';

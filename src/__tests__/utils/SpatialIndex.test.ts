@@ -1,4 +1,4 @@
-import { SpatialIndex } from '../../libs/drawBoard/utils/SpatialIndex';
+import { SpatialIndex } from '../../libs/drawBoard/infrastructure/performance/SpatialIndex';
 import type { DrawAction } from '../../libs/drawBoard/tools/DrawTool';
 
 describe('SpatialIndex', () => {

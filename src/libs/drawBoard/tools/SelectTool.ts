@@ -2,7 +2,7 @@ import { DrawTool, type DrawAction } from './DrawTool';
 import { TransformToolRefactored } from './TransformToolRefactored';
 import type { ControlPoint } from './transform/TransformTypes';
 import type { Point, CanvasEngine } from '../core/CanvasEngine';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 import type { AnchorPoint, AnchorType, Bounds, ShapeAnchorHandler } from './anchor/AnchorTypes';
 import { CircleAnchorHandler } from './anchor/CircleAnchorHandler';
 import { RectAnchorHandler } from './anchor/RectAnchorHandler';
@@ -11,7 +11,7 @@ import { LineAnchorHandler } from './anchor/LineAnchorHandler';
 import { PenAnchorHandler } from './anchor/PenAnchorHandler';
 import { PolygonAnchorHandler } from './anchor/PolygonAnchorHandler';
 import { BoundsValidator, type Bounds as BoundsType } from '../utils/BoundsValidator';
-import { SpatialIndex } from '../utils/SpatialIndex';
+import { SpatialIndex } from '../infrastructure/performance/SpatialIndex';
 // 模块化拆分后的子模块
 import { 
   HitTestManager, 
@@ -19,7 +19,11 @@ import {
   SelectionRenderer,
   AnchorCacheManager,
   DragStateManager,
-  BoundsCacheManager
+  BoundsCacheManager,
+  TransformOperations,
+  AnchorGenerator,
+  BoundsCalculator,
+  AnchorDragHandler
 } from './select';
 
 /**
@@ -174,6 +178,8 @@ export class SelectTool extends DrawTool {
   private dragStateManager: DragStateManager;
   private boundsCacheManager: BoundsCacheManager;
   private selectionRenderer: SelectionRenderer;
+  private boundsCalculator: BoundsCalculator;
+  private anchorDragHandler: AnchorDragHandler;
 
   constructor(config?: Partial<{
     sensitivity: number;
@@ -199,11 +205,7 @@ export class SelectTool extends DrawTool {
       enableCirclePrecisionMode: this.dragConfig.enableCirclePrecisionMode
     });
     this.boundsCacheManager = new BoundsCacheManager();
-    
-    // 应用配置（如果提供）
-    if (config) {
-      this.updateDragConfig(config);
-    }
+    this.boundsCalculator = new BoundsCalculator({ anchorSize: this.anchorSize });
     
     // 初始化图形处理器
     this.shapeHandlers.set('circle', new CircleAnchorHandler());
@@ -211,6 +213,17 @@ export class SelectTool extends DrawTool {
     this.shapeHandlers.set('text', new TextAnchorHandler());
     this.shapeHandlers.set('line', new LineAnchorHandler());
     this.shapeHandlers.set('polygon', new PolygonAnchorHandler());
+    
+    // 初始化锚点拖拽处理器（传入 shapeHandlers）
+    this.anchorDragHandler = new AnchorDragHandler(
+      { minDragDistance: this.MIN_DRAG_DISTANCE, dragSensitivity: this.DRAG_SENSITIVITY },
+      this.shapeHandlers
+    );
+    
+    // 应用配置（如果提供）
+    if (config) {
+      this.updateDragConfig(config);
+    }
     // 路径类型（pen/brush/eraser）使用相同的锚点处理器
     this.shapeHandlers.set('pen', new PenAnchorHandler());
     this.shapeHandlers.set('brush', new PenAnchorHandler());
@@ -238,7 +251,6 @@ export class SelectTool extends DrawTool {
       enableCirclePrecisionMode: this.dragConfig.enableCirclePrecisionMode
     });
     
-    logger.debug('SelectTool: 拖拽配置已更新', this.dragConfig);
   }
 
   /**
@@ -257,11 +269,6 @@ export class SelectTool extends DrawTool {
    * 设置CanvasEngine和选中图层zIndex（用于动态图层）
    */
   public setCanvasEngine(canvasEngine: CanvasEngine, selectedLayerZIndex?: number | null): void {
-    logger.debug('SelectTool.setCanvasEngine', {
-      selectedLayerZIndex,
-      previousSelectedLayerZIndex: this.selectedLayerZIndex,
-      hasCanvasEngine: !!canvasEngine
-    });
     this.canvasEngine = canvasEngine;
     this.selectedLayerZIndex = selectedLayerZIndex;
     // 同时传递给TransformTool
@@ -276,24 +283,10 @@ export class SelectTool extends DrawTool {
    * 如果选中图层存在，使用动态图层；否则使用interaction层
    */
   private getInteractionContext(): CanvasRenderingContext2D {
-    logger.debug('SelectTool.getInteractionContext', {
-      hasCanvasEngine: !!this.canvasEngine,
-      selectedLayerZIndex: this.selectedLayerZIndex
-    });
-    
     if (this.canvasEngine && this.selectedLayerZIndex !== null && this.selectedLayerZIndex !== undefined) {
       try {
-        const ctx = this.canvasEngine.getSelectionLayerForVirtualLayer(this.selectedLayerZIndex);
-        logger.debug('SelectTool.getInteractionContext: 成功获取动态图层', {
-          selectedLayerZIndex: this.selectedLayerZIndex,
-          canvasWidth: ctx.canvas.width,
-          canvasHeight: ctx.canvas.height
-        });
-        return ctx;
-      } catch (error) {
-        logger.error('获取动态图层失败，回退到interaction层:', error, {
-          selectedLayerZIndex: this.selectedLayerZIndex
-        });
+        return this.canvasEngine.getSelectionLayerForVirtualLayer(this.selectedLayerZIndex);
+      } catch {
         return this.canvasEngine.getInteractionLayer();
       }
     }
@@ -325,10 +318,6 @@ export class SelectTool extends DrawTool {
     
     if (clearSelection) {
       // 图层切换时，完全清空选择
-      logger.info('SelectTool.setLayerActions: 清空选择（clearSelection=true）', {
-        previousSelectedCount,
-        previousSelectedIds
-      });
       this.clearSelection();
     } else {
       // 清理不在当前图层中的选中actions
@@ -370,47 +359,21 @@ export class SelectTool extends DrawTool {
       
       this.selectedActions = filteredActions;
       
-      // 【性能优化】日志中也使用 Set 避免 O(n²)
-      if (filteredActions.length < beforeFilterCount && beforeFilterCount > 0) {
-        const filteredActionIdSet = new Set(filteredActions.map(a => a.id));
-        const filteredOutIds = previousSelectedIds.filter(id => !filteredActionIdSet.has(id));
-        logger.warn('SelectTool.setLayerActions: 部分actions被过滤', {
-          before: beforeFilterCount,
-          after: filteredActions.length,
-          filteredOut: filteredOutIds
-        });
-      }
-      
-      // 如果选中的actions发生变化，更新变换模式
+      // 如果选中的 actions 发生变化，更新变换模式
       if (this.selectedActions.length === 1) {
-        // 【修复】先清除缓存，再进入变换模式
         this.clearAnchorCache();
         this.enterTransformMode(this.selectedActions[0]);
-        logger.debug('SelectTool.setLayerActions: 进入变换模式', {
-          actionId: this.selectedActions[0].id,
-          actionType: this.selectedActions[0].type
-        });
       } else if (this.selectedActions.length === 0) {
         this.exitTransformMode();
         this.clearAnchorCache();
       } else {
-        // 多选时，清除变换模式
         this.exitTransformMode();
         this.clearAnchorCache();
       }
     }
     
-    // 【统一】在函数末尾清除 bounds 缓存，避免重复调用
     this.clearBoundsCache();
-    
-    // 清空空间索引缓存（图层切换时重建）
     this.clearSpatialIndex();
-    
-    logger.info(`SelectTool: 设置图层actions，共${actions.length}个，当前选中${this.selectedActions.length}个`, {
-      clearedSelection: clearSelection,
-      previousSelectedCount,
-      currentSelectedCount: this.selectedActions.length
-    });
   }
 
   /**
@@ -570,148 +533,19 @@ export class SelectTool extends DrawTool {
 
   /**
    * 获取action的边界框
-   * 对于圆形、矩形、直线：只使用起点和终点计算（与实际绘制一致）
-   * 对于其他图形：使用所有点计算
+   * 委托给 BoundsCalculator 处理，使用 BoundsCacheManager 缓存
    */
   private getActionBoundingBox(action: DrawAction): { x: number; y: number; width: number; height: number } {
-    if (action.points.length === 0) {
-      return { x: 0, y: 0, width: 0, height: 0 };
-    }
-
-    // 检查缓存（使用 BoundsCacheManager）
+    // 检查缓存
     const cachedBounds = this.boundsCacheManager.getForAction(action);
     if (cachedBounds) {
       return cachedBounds;
     }
 
-    let bounds: { x: number; y: number; width: number; height: number };
+    // 使用 BoundsCalculator 计算
+    const bounds = this.boundsCalculator.calculate(action);
 
-    // 【圆形】特殊处理：返回以圆心为中心的正方形边界框
-    if (action.type === 'circle' && action.points.length >= 2) {
-      const center = action.points[0];
-      const edge = action.points[action.points.length - 1];
-      const radius = Math.sqrt(
-        Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-      );
-      
-      const MIN_VISIBLE_RADIUS = this.anchorSize;
-      const validRadius = Math.max(MIN_VISIBLE_RADIUS, radius);
-      
-      if (!isFinite(center.x) || !isFinite(center.y) || !isFinite(validRadius) || validRadius <= 0) {
-        bounds = {
-          x: (isFinite(center.x) ? center.x : 0) - 50,
-          y: (isFinite(center.y) ? center.y : 0) - 50,
-          width: 100,
-          height: 100
-        };
-      } else {
-        bounds = {
-        x: center.x - validRadius,
-        y: center.y - validRadius,
-        width: validRadius * 2,
-        height: validRadius * 2
-      };
-      }
-    }
-    // 【矩形】特殊处理：只使用起点和终点
-    else if (action.type === 'rect' && action.points.length >= 2) {
-      const start = action.points[0];
-      const end = action.points[action.points.length - 1];
-      
-      if (!isFinite(start.x) || !isFinite(start.y) || !isFinite(end.x) || !isFinite(end.y)) {
-        bounds = { x: 0, y: 0, width: 0, height: 0 };
-      } else {
-        const minX = Math.min(start.x, end.x);
-        const minY = Math.min(start.y, end.y);
-        const maxX = Math.max(start.x, end.x);
-        const maxY = Math.max(start.y, end.y);
-        
-        bounds = {
-          x: minX,
-          y: minY,
-          width: Math.max(maxX - minX, 1),
-          height: Math.max(maxY - minY, 1)
-        };
-      }
-    }
-    // 【直线】特殊处理：只使用起点和终点
-    else if (action.type === 'line' && action.points.length >= 2) {
-      const start = action.points[0];
-      const end = action.points[action.points.length - 1];
-      
-      if (!isFinite(start.x) || !isFinite(start.y) || !isFinite(end.x) || !isFinite(end.y)) {
-        bounds = { x: 0, y: 0, width: 0, height: 0 };
-      } else {
-        const minX = Math.min(start.x, end.x);
-        const minY = Math.min(start.y, end.y);
-        const maxX = Math.max(start.x, end.x);
-        const maxY = Math.max(start.y, end.y);
-        
-        bounds = {
-          x: minX,
-          y: minY,
-          width: Math.max(maxX - minX, 1),
-          height: Math.max(maxY - minY, 1)
-        };
-      }
-    }
-    // 【多边形】特殊处理：使用中心+半径计算实际顶点的边界框
-    else if (action.type === 'polygon' && action.points.length >= 2) {
-      const center = action.points[0];
-      const edge = action.points[action.points.length - 1];
-      const radius = Math.sqrt(
-        Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-      );
-      
-      if (!isFinite(center.x) || !isFinite(center.y) || !isFinite(radius) || radius <= 0) {
-        bounds = { x: 0, y: 0, width: 0, height: 0 };
-      } else {
-        // 多边形的边界框是以中心为圆心、半径为radius的正方形
-        // （因为正多边形的顶点都在这个圆上）
-        bounds = {
-          x: center.x - radius,
-          y: center.y - radius,
-          width: radius * 2,
-          height: radius * 2
-        };
-      }
-    }
-    // 【其他图形】使用所有点计算边界框
-    else {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    let validPointCount = 0;
-
-    for (const point of action.points) {
-      if (!isFinite(point.x) || !isFinite(point.y)) {
-          continue;
-      }
-      
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-      validPointCount++;
-    }
-
-    if (validPointCount === 0) {
-        bounds = { x: 0, y: 0, width: 0, height: 0 };
-      } else {
-    const width = Math.max(0, maxX - minX);
-    const height = Math.max(0, maxY - minY);
-
-        bounds = {
-      x: minX,
-      y: minY,
-          width: width === 0 && height === 0 ? 10 : width,
-      height: width === 0 && height === 0 ? 10 : height
-    };
-      }
-    }
-
-    // 缓存结果（使用 BoundsCacheManager）
+    // 缓存结果
     this.boundsCacheManager.setForAction(action, bounds);
     return bounds;
   }
@@ -739,7 +573,6 @@ export class SelectTool extends DrawTool {
     // 使用 setSelectedActions 确保缓存清除和锚点重新生成
     this.setSelectedActions([action]);
     this.enterTransformMode(action);
-    logger.debug(`SelectTool: 选中单个action，ID: ${action.id}`);
   }
 
   /**
@@ -817,7 +650,6 @@ export class SelectTool extends DrawTool {
     this.isDraggingCenter = false;
     this.clearBoundsCache(); // 清除边界框缓存
     this.exitTransformMode();
-    logger.debug('SelectTool: 清空选择');
   }
 
   /**
@@ -853,324 +685,178 @@ export class SelectTool extends DrawTool {
       this.getSelectedActionsBounds(); // 确保边界框缓存也被更新
     }
     
-    logger.debug(`SelectTool: 设置选中actions，共${actions.length}个`);
   }
 
   /**
    * 生成锚点（根据图形类型使用不同的处理器）
-   * 改进：支持中心点和图形特定的锚点布局
-   * 优化：添加缓存机制，减少重复计算
    */
   private generateResizeAnchorPoints(): void {
-    logger.debug('SelectTool.generateResizeAnchorPoints: 开始生成锚点', {
-      selectedActionsCount: this.selectedActions.length,
-      selectedActionIds: this.selectedActions.map(a => a.id),
-      isDraggingResizeAnchor: this.isDraggingResizeAnchor
-    });
-    
-    // 如果正在拖拽，强制清除缓存，确保使用最新的 selectedActionForTransform
     if (this.isDraggingResizeAnchor) {
       this.clearAnchorCache();
     }
     
-    // 检查缓存是否有效
-    // 【修复】缓存键必须包含 action 的内容变化指示器（不仅仅是 ID）
-    // 否则变形/位移后，ID 相同但 points 改变，会错误地使用旧缓存
-    // 使用 action 的第一个和最后一个点的坐标作为内容指纹
-    const currentActionIds = this.selectedActions.map(a => a.id).sort();
-    const contentFingerprint = this.selectedActions.map(a => {
-      if (a.points.length === 0) return `${a.id}:empty`;
-      const first = a.points[0];
-      const last = a.points[a.points.length - 1];
-      // 使用四舍五入减少浮点精度问题
-      return `${a.id}:${Math.round(first.x)},${Math.round(first.y)},${Math.round(last.x)},${Math.round(last.y)},${a.points.length}`;
-    }).join('|');
-    const cacheKey = `${currentActionIds.join(',')}_${contentFingerprint}`;
+    const cacheKey = this.getAnchorCacheKey();
+    const currentTime = Date.now();
     
-    // 拖拽时不使用缓存，确保实时更新
-    if (!this.isDraggingResizeAnchor && 
-        this.anchorCache && 
-        this.anchorCache.actionIds.sort().join(',') === cacheKey &&
-        Date.now() - this.anchorCache.timestamp < this.dragConfig.anchorCacheTTL) {
-      // 使用缓存
-      this.anchorPoints = this.anchorCache.anchors;
-      this.centerAnchorPoint = this.anchorCache.centerAnchor;
-      this.moveArea = this.anchorCache.moveArea;
-      
-      logger.debug('SelectTool.generateResizeAnchorPoints: 使用缓存锚点', {
-        anchorPointsCount: this.anchorPoints.length,
-        centerAnchorPoint: !!this.centerAnchorPoint
-      });
+    // 尝试使用缓存
+    if (this.tryUseAnchorCache(cacheKey, currentTime)) {
       return;
     }
 
-    // 获取当前时间（用于节流和缓存时间戳）
-    const currentTime = Date.now();
-    
-    // 检查是否需要更新（节流）
-    // 拖拽时不节流，确保实时更新
-    // 注意：如果缓存键不匹配或缓存不存在，必须重新生成锚点，不能直接返回
-    if (!this.isDraggingResizeAnchor) {
-      if (currentTime - this.lastAnchorUpdateTime < this.anchorUpdateInterval) {
-        // 如果缓存存在且缓存键匹配，使用缓存（避免频繁更新）
-        if (this.anchorCache && this.anchorCache.actionIds.sort().join(',') === cacheKey) {
-          this.anchorPoints = this.anchorCache.anchors;
-          this.centerAnchorPoint = this.anchorCache.centerAnchor;
-          this.moveArea = this.anchorCache.moveArea;
-          
-          logger.debug('SelectTool.generateResizeAnchorPoints: 使用节流缓存锚点', {
-            anchorPointsCount: this.anchorPoints.length,
-            centerAnchorPoint: !!this.centerAnchorPoint
-          });
-          return;
-        }
-        // 如果缓存键不匹配，说明选中的actions变了，必须重新生成，不能节流
-        logger.debug('SelectTool.generateResizeAnchorPoints: 缓存键不匹配，跳过节流，重新生成锚点', {
-          cacheKey,
-          cachedKey: this.anchorCache?.actionIds.sort().join(',')
-        });
-      }
-    }
-
-    // 在拖拽过程中，使用 selectedActionForTransform 计算边界框
+    // 计算边界框
     const bounds = this.isDraggingResizeAnchor && this.selectedActionForTransform
       ? this.getActionBoundingBox(this.selectedActionForTransform)
       : this.getSelectedActionsBounds();
+      
     if (!bounds) {
-      logger.error('SelectTool.generateResizeAnchorPoints: 边界框为空，无法生成锚点', {
-        selectedActionsCount: this.selectedActions.length,
-        selectedActionIds: this.selectedActions.map(a => a.id),
-        isDraggingResizeAnchor: this.isDraggingResizeAnchor,
-        hasSelectedActionForTransform: !!this.selectedActionForTransform,
-        selectedActions: this.selectedActions.map(a => ({
-          id: a.id,
-          type: a.type,
-          pointsCount: a.points.length,
-          points: a.points
-        }))
-      });
+      this.clearAnchorPointsState();
+      return;
+    }
+
+    // 多选场景
+    if (this.selectedActions.length > 1) {
+      this.generateMultiSelectionAnchors(bounds);
+      return;
+    }
+
+    // 单选场景
+    this.generateSingleSelectionAnchors(bounds, currentTime, cacheKey);
+  }
+
+  /**
+   * 生成锚点缓存 key
+   */
+  private getAnchorCacheKey(): string {
+    const actionIds = this.selectedActions.map(a => a.id).sort();
+    const fingerprint = this.selectedActions.map(a => {
+      if (a.points.length === 0) return `${a.id}:empty`;
+      const first = a.points[0];
+      const last = a.points[a.points.length - 1];
+      return `${a.id}:${Math.round(first.x)},${Math.round(first.y)},${Math.round(last.x)},${Math.round(last.y)},${a.points.length}`;
+    }).join('|');
+    return `${actionIds.join(',')}_${fingerprint}`;
+  }
+
+  /**
+   * 尝试使用缓存
+   */
+  private tryUseAnchorCache(cacheKey: string, currentTime: number): boolean {
+    if (this.isDraggingResizeAnchor) return false;
+    
+    const isValidCache = this.anchorCache && 
+        this.anchorCache.actionIds.sort().join(',') === cacheKey &&
+      currentTime - this.anchorCache.timestamp < this.dragConfig.anchorCacheTTL;
+    
+    const isThrottled = currentTime - this.lastAnchorUpdateTime < this.anchorUpdateInterval;
+    
+    if ((isValidCache || isThrottled) && this.anchorCache) {
+          this.anchorPoints = this.anchorCache.anchors;
+          this.centerAnchorPoint = this.anchorCache.centerAnchor;
+          this.moveArea = this.anchorCache.moveArea;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 清除锚点状态
+   */
+  private clearAnchorPointsState(): void {
       this.clearAnchorCache();
       this.anchorPoints = [];
       this.centerAnchorPoint = null;
       this.moveArea = null;
-      return;
-    }
+  }
 
-    logger.debug('SelectTool.generateResizeAnchorPoints: 计算边界框', bounds);
-
-    // 多选场景：使用统一边界框，不显示中心点
-    if (this.selectedActions.length > 1) {
-      logger.debug('SelectTool.generateResizeAnchorPoints: 多选场景，生成多选锚点');
-      this.generateMultiSelectionAnchors(bounds);
-      logger.debug('SelectTool.generateResizeAnchorPoints: 多选锚点生成完成', {
-        anchorPointsCount: this.anchorPoints.length
-      });
-      return;
-    }
-
-    // 单选场景：使用图形特定的处理器
-    // 注意：如果正在拖拽，使用 selectedActionForTransform（最新的action），否则使用 selectedActions[0]
+  /**
+   * 生成单选场景的锚点
+   */
+  private generateSingleSelectionAnchors(
+    bounds: { x: number; y: number; width: number; height: number },
+    currentTime: number,
+    cacheKey: string
+  ): void {
     const action = (this.isDraggingResizeAnchor && this.selectedActionForTransform) 
       ? this.selectedActionForTransform 
       : this.selectedActions[0];
+      
     if (!action) {
-      logger.warn('SelectTool.generateResizeAnchorPoints: 没有选中的action，清除锚点');
-      this.anchorPoints = [];
-      this.centerAnchorPoint = null;
-      this.moveArea = null;
+      this.clearAnchorPointsState();
       return;
     }
 
-    logger.debug('SelectTool.generateResizeAnchorPoints: 单选场景，使用图形处理器', {
-      actionType: action.type,
-      actionId: action.id
-    });
-
     const handler = this.shapeHandlers.get(action.type);
     if (handler) {
-      // 对于圆形，使用单个 action 的边界框（而不是统一边界框）
-      // 这样可以确保边界框是以圆心为中心的正方形
       const actionBounds = action.type === 'circle' 
         ? this.getActionBoundingBox(action)
         : bounds;
-      
-      // 验证边界框有效性
-      if (!actionBounds || actionBounds.width <= 0 || actionBounds.height <= 0) {
-        logger.warn('SelectTool.generateResizeAnchorPoints: 边界框无效，使用默认边界框', {
-          actionType: action.type,
-          actionId: action.id,
-          actionBounds,
-          bounds,
-          actionPointsCount: action.points.length,
-          actionPoints: action.points
-        });
-        // 使用传入的bounds作为fallback
-        const fallbackBounds = bounds || { x: 0, y: 0, width: 100, height: 100 };
-        const anchors = handler.generateAnchors(action, fallbackBounds);
-        this.anchorPoints = anchors.filter(anchor => !anchor.isCenter);
-        this.centerAnchorPoint = anchors.find(anchor => anchor.isCenter) || null;
-        
-        logger.info('SelectTool.generateResizeAnchorPoints: 使用fallback边界框生成锚点', {
-          fallbackBounds,
-          totalAnchors: anchors.length,
-          edgeAnchors: this.anchorPoints.length,
-          centerAnchor: !!this.centerAnchorPoint
-        });
+      this.generateAnchorsWithHandler(handler, action, actionBounds || bounds);
       } else {
-        // 使用图形特定的处理器生成锚点
-        logger.debug('SelectTool.generateResizeAnchorPoints: 调用handler.generateAnchors', {
-          actionType: action.type,
-          actionId: action.id,
-          actionBounds,
-          actionPointsCount: action.points.length,
-          handlerType: handler.constructor.name
-        });
-        
-        const anchors = handler.generateAnchors(action, actionBounds);
-        
-        // 详细记录handler返回的锚点
-        logger.info('SelectTool.generateResizeAnchorPoints: handler.generateAnchors返回原始锚点', {
-          totalAnchors: anchors.length,
-          anchors: anchors.map((a, i) => ({
-            index: i,
-            type: a.type,
-            isCenter: a.isCenter,
-            x: a.x,
-            y: a.y
-          }))
-        });
-        
-        // 赋值锚点
-        const edgeAnchors = anchors.filter(anchor => !anchor.isCenter);
-        const centerAnchor = anchors.find(anchor => anchor.isCenter) || null;
-        
-        // 立即赋值并记录
-        this.anchorPoints = edgeAnchors;
-        this.centerAnchorPoint = centerAnchor;
-        
-        logger.info('SelectTool.generateResizeAnchorPoints: 锚点赋值完成', {
-          totalAnchors: anchors.length,
-          edgeAnchorsCount: edgeAnchors.length,
-          centerAnchor: !!centerAnchor,
-          thisAnchorPointsLength: this.anchorPoints.length,
-          thisCenterAnchorPoint: !!this.centerAnchorPoint,
-          edgeAnchors: edgeAnchors.map((a, i) => ({
-            index: i,
-            type: a.type,
-            x: a.x,
-            y: a.y
-          }))
-        });
-      }
-      
-      // 在方法结束前再次验证锚点状态
-      logger.info('SelectTool.generateResizeAnchorPoints: 图形处理器生成锚点完成（方法结束前验证）', {
-        actionType: action.type,
-        actionId: action.id,
-        totalAnchors: this.anchorPoints.length + (this.centerAnchorPoint ? 1 : 0),
-        edgeAnchors: this.anchorPoints.length,
-        centerAnchor: !!this.centerAnchorPoint,
-        actionBounds: action.type === 'circle' ? this.getActionBoundingBox(action) : bounds,
-        handlerExists: !!handler,
-        anchorPointsArray: this.anchorPoints.map((a, i) => ({
-          index: i,
-          type: a.type,
-          x: a.x,
-          y: a.y
-        }))
-      });
-      
-      // 如果锚点数量为0，记录详细日志用于调试并尝试修复
-      if (this.anchorPoints.length === 0 && !this.centerAnchorPoint) {
-        logger.error('SelectTool.generateResizeAnchorPoints: 锚点生成失败，返回空数组', {
-          actionType: action.type,
-          actionId: action.id,
-          actionPointsCount: action.points.length,
-          actionPoints: action.points,
-          actionBounds: action.type === 'circle' ? this.getActionBoundingBox(action) : bounds,
-          handlerType: handler.constructor.name,
-          handlerExists: !!handler,
-          shapeHandlersKeys: Array.from(this.shapeHandlers.keys())
-        });
-        
-        // 尝试使用fallback边界框重新生成锚点
-        const fallbackBounds = bounds || { x: 0, y: 0, width: 100, height: 100 };
-        try {
-          const fallbackAnchors = handler.generateAnchors(action, fallbackBounds);
-          if (fallbackAnchors.length > 0) {
-            logger.warn('SelectTool.generateResizeAnchorPoints: 使用fallback边界框成功生成锚点', {
-              fallbackAnchorsCount: fallbackAnchors.length
-            });
-            this.anchorPoints = fallbackAnchors.filter(anchor => !anchor.isCenter);
-            this.centerAnchorPoint = fallbackAnchors.find(anchor => anchor.isCenter) || null;
-          }
-        } catch (error) {
-          logger.error('SelectTool.generateResizeAnchorPoints: fallback生成锚点也失败', error);
-        }
-      }
-    } else {
-      // 默认：生成8个标准锚点（无中心点）
-      logger.warn(`❌ SelectTool: 未找到图形类型 "${action.type}" 的处理器，使用默认8个锚点`);
-      logger.warn(`   已注册的处理器: ${Array.from(this.shapeHandlers.keys()).join(', ')}`);
       this.generateDefaultAnchors(bounds);
       this.centerAnchorPoint = null;
-      logger.debug('SelectTool.generateResizeAnchorPoints: 默认锚点生成完成', {
-        anchorPointsCount: this.anchorPoints.length
-      });
     }
 
-    // 生成移动区域（选区内部，排除锚点区域）
-    // 改进：扩大移动区域，让用户更容易点击到移动区域
-    const { x, y, width, height } = bounds;
-    // 减小padding，扩大移动区域（只排除锚点本身，不包括容差区域）
-    const moveAreaPadding = this.anchorSize / 2;
-    this.moveArea = {
-      x: x + moveAreaPadding,
-      y: y + moveAreaPadding,
-      width: Math.max(0, width - moveAreaPadding * 2),
-      height: Math.max(0, height - moveAreaPadding * 2)
-    };
-
+    this.updateMoveArea(bounds);
     this.lastAnchorUpdateTime = currentTime;
-    
-    // 更新缓存
-    // 注意：拖拽时不更新缓存，确保每次都重新计算
-    // 拖拽结束后，selectedActions[0] 已更新，此时会基于新的 selectedActions 生成缓存
-    if (!this.isDraggingResizeAnchor) {
-      // 确保缓存中存储的是锚点数组的副本，而不是引用
-      // 这样可以避免后续对 this.anchorPoints 的修改影响缓存
-      this.anchorCache = {
-        actionIds: [...currentActionIds], // 副本
-        bounds: { ...bounds }, // 副本
-        anchors: [...this.anchorPoints], // 副本，避免引用问题
-        centerAnchor: this.centerAnchorPoint ? { ...this.centerAnchorPoint } : null, // 副本
-        moveArea: this.moveArea ? { ...this.moveArea } : null, // 副本
-        timestamp: currentTime
-      };
+    this.updateAnchorCache(cacheKey, bounds, currentTime);
+  }
+
+  /**
+   * 使用 handler 生成锚点
+   */
+  private generateAnchorsWithHandler(
+    handler: ShapeAnchorHandler,
+    action: DrawAction,
+    bounds: { x: number; y: number; width: number; height: number }
+  ): void {
+    const effectiveBounds = (!bounds || bounds.width <= 0 || bounds.height <= 0)
+      ? { x: 0, y: 0, width: 100, height: 100 }
+      : bounds;
       
-      logger.debug('SelectTool.generateResizeAnchorPoints: 缓存已更新', {
-        actionIds: this.anchorCache.actionIds,
-        anchorsCount: this.anchorCache.anchors.length,
-        centerAnchor: !!this.anchorCache.centerAnchor,
-        thisAnchorPointsLength: this.anchorPoints.length
-      });
-    }
+    const anchors = handler.generateAnchors(action, effectiveBounds);
+    this.anchorPoints = anchors.filter(anchor => !anchor.isCenter);
+    this.centerAnchorPoint = anchors.find(anchor => anchor.isCenter) || null;
+  }
+
+  /**
+   * 更新移动区域
+   */
+  private updateMoveArea(bounds: { x: number; y: number; width: number; height: number }): void {
+    const padding = this.anchorSize / 2;
+    this.moveArea = {
+      x: bounds.x + padding,
+      y: bounds.y + padding,
+      width: Math.max(0, bounds.width - padding * 2),
+      height: Math.max(0, bounds.height - padding * 2)
+    };
+  }
+
+  /**
+   * 更新锚点缓存
+   */
+  private updateAnchorCache(
+    cacheKey: string,
+    bounds: { x: number; y: number; width: number; height: number },
+    timestamp: number
+  ): void {
+    if (this.isDraggingResizeAnchor) return;
+    
+      this.anchorCache = {
+      actionIds: cacheKey.split('_')[0].split(','),
+      bounds: { ...bounds },
+      anchors: [...this.anchorPoints],
+      centerAnchor: this.centerAnchorPoint ? { ...this.centerAnchorPoint } : null,
+      moveArea: this.moveArea ? { ...this.moveArea } : null,
+      timestamp
+    };
   }
   
   /**
    * 清除锚点缓存
    */
   private clearAnchorCache(): void {
-    // 注意：清空缓存时，不要清空 anchorPoints，因为可能正在使用
-    // 只有在真正需要清除时才清空 anchorPoints（比如选择被清空）
-    // 这里只清空缓存，让下次调用 generateResizeAnchorPoints 时重新生成
     this.anchorCache = null;
-    // 重置节流时间，确保下次调用时会重新生成
     this.lastAnchorUpdateTime = 0;
-    logger.debug('SelectTool.clearAnchorCache: 已清除锚点缓存', {
-      anchorPointsCount: this.anchorPoints.length,
-      centerAnchorPoint: !!this.centerAnchorPoint
-    });
   }
   
   /**
@@ -1365,538 +1051,122 @@ export class SelectTool extends DrawTool {
    */
   private handleResizeAnchorDrag(point: Point): DrawAction | DrawAction[] | null {
     if (this.draggedAnchorIndex === -1 || !this.dragStartPoint) return null;
-    
-    // 检查拖拽状态缓存（如果移动距离很小，使用上次结果）
-    if (this.dragState && this.dragState.lastResult) {
-      const distance = Math.sqrt(
-        Math.pow(point.x - this.dragState.lastPoint.x, 2) +
-        Math.pow(point.y - this.dragState.lastPoint.y, 2)
-      );
-      if (distance < 1) { // 小于1像素，使用缓存
-        return this.dragState.lastResult;
-      }
-    }
-    
-    // 确保不是中心点拖拽（中心点拖拽应该走移动逻辑）
-    if (this.isDraggingCenter) {
-      logger.warn('SelectTool: 中心点拖拽不应该进入handleResizeAnchorDrag');
-      return null;
-    }
-
-    // 多选场景：使用统一处理
-    if (this.selectedActions.length > 1) {
-      return this.handleMultiSelectionAnchorDrag(point);
-    }
-
-    // 单选场景：使用图形特定的处理器
-    const action = this.selectedActions[0];
-    if (!action) return null;
+    if (this.isDraggingCenter) return null;
 
     const anchor = this.anchorPoints[this.draggedAnchorIndex];
     if (!anchor) return null;
 
-    const handler = this.shapeHandlers.get(action.type);
-    if (!handler) {
-      // 没有处理器，使用默认处理
-      return this.handleDefaultAnchorDrag(point);
-    }
-
-    // 在拖拽开始时保存原始边界框（只计算一次）
-    if (!this.dragStartBounds) {
+    // 确保拖拽处理器已开始
+    if (!this.anchorDragHandler.isDragging()) {
     const bounds = this.getSelectedActionsBounds();
     if (!bounds) return null;
-      this.dragStartBounds = { ...bounds };
-    }
-
-    const bounds = this.dragStartBounds;
-    if (!bounds) return null;
-    
-    // 检查点坐标有效性
-    if (!isFinite(point.x) || !isFinite(point.y)) {
-      return null;
-    }
-    
-    // 使用鼠标的实际移动距离来计算边界框变化
-    // 直接使用当前鼠标位置和起始位置计算
-    const rawMouseDeltaX = point.x - this.dragStartPoint.x;
-    const rawMouseDeltaY = point.y - this.dragStartPoint.y;
-    
-    // 检查delta是否有效
-    if (!isFinite(rawMouseDeltaX) || !isFinite(rawMouseDeltaY)) {
-      return null;
-    }
-    
-    // 平滑处理：如果移动距离太小，忽略（避免微小抖动）
-    const moveDistance = Math.sqrt(rawMouseDeltaX * rawMouseDeltaX + rawMouseDeltaY * rawMouseDeltaY);
-    if (moveDistance < this.MIN_DRAG_DISTANCE) {
-      return null; // 移动距离太小，忽略
-    }
-
-    // 对于圆形，直接使用原始点（不应用敏感度），让半径精确跟随鼠标
-    // 对于其他图形，可以选择性应用敏感度
-    const isCircle = action.type === 'circle';
-    let targetPoint: Point;
-    
-    if (isCircle) {
-      // 圆形：直接使用原始点，让半径精确跟随鼠标移动
-      targetPoint = point;
-    } else {
-      // 其他图形：应用敏感度因子，减少拖拽敏感度（让变形更可控）
-      const mouseDeltaX = rawMouseDeltaX * this.DRAG_SENSITIVITY;
-      const mouseDeltaY = rawMouseDeltaY * this.DRAG_SENSITIVITY;
-      targetPoint = {
-        x: this.dragStartPoint.x + mouseDeltaX,
-        y: this.dragStartPoint.y + mouseDeltaY,
-        timestamp: point.timestamp
-      };
-    }
-
-    // 使用图形特定的处理器处理锚点拖拽
-    // 对于圆形，处理器会直接计算鼠标到圆心的距离，提供精确控制
-    const canvasBounds = this.getCanvasBounds();
-    const updatedAction = handler.handleAnchorDrag(
-      this.dragStartAction || action,
-      anchor.type,
+      this.anchorDragHandler.startDrag(
       this.dragStartPoint,
-      targetPoint, // 圆形使用原始点，其他图形使用调整后的点
       bounds,
-      this.dragStartAction || undefined
-    );
-
-    if (!updatedAction) {
-      return null;
+        this.selectedActions.length === 1 ? this.dragStartAction : null
+      );
     }
 
-    // 限制点在画布范围内（如果处理器没有处理）
-    if (canvasBounds) {
-      const clampedAction = {
-        ...updatedAction,
-        points: updatedAction.points.map(p => {
-          const clampedPoint = {
-          ...p,
-          x: Math.max(0, Math.min(canvasBounds.width, p.x)),
-          y: Math.max(0, Math.min(canvasBounds.height, p.y))
-          };
-          return clampedPoint;
-        })
-      };
-      
-      // 更新selectedActionForTransform
-      this.selectedActionForTransform = clampedAction;
-      this.transformTool.setSelectedAction(clampedAction);
-      
-      return clampedAction;
-    }
+    const canvasBounds = this.getCanvasBounds() || undefined;
 
-    // 更新selectedActionForTransform
-    this.selectedActionForTransform = updatedAction;
-    this.transformTool.setSelectedAction(updatedAction);
-    
-    // 更新拖拽状态缓存
-    if (!this.dragState) {
-      const bounds = this.getSelectedActionsBounds();
-      if (bounds) {
-        this.dragState = {
-          startBounds: bounds,
-          startAction: action,
-          lastPoint: point,
-          lastResult: null
-        };
+    // 多选场景
+    if (this.selectedActions.length > 1) {
+      const result = this.anchorDragHandler.handleMultiSelectionDrag(
+        this.selectedActions,
+        anchor,
+        point,
+        canvasBounds
+      );
+      if (result.success && result.actions) {
+        return result.actions;
       }
-    }
-    if (this.dragState) {
-      this.dragState.lastPoint = point;
-      this.dragState.lastResult = updatedAction;
-    }
-    
-    return updatedAction;
-  }
-
-  /**
-   * 处理多选场景的锚点拖拽
-   * 所有选中图形按统一边界框进行缩放
-   */
-  private handleMultiSelectionAnchorDrag(point: Point): DrawAction[] | null {
-    if (!this.dragStartPoint || !this.dragStartBounds) return null;
-
-    const anchor = this.anchorPoints[this.draggedAnchorIndex];
-    if (!anchor) return null;
-
-    // 计算鼠标移动距离
-    const rawMouseDeltaX = point.x - this.dragStartPoint.x;
-    const rawMouseDeltaY = point.y - this.dragStartPoint.y;
-
-    // 检查delta是否有效
-    if (!isFinite(rawMouseDeltaX) || !isFinite(rawMouseDeltaY)) {
-      return null;
-    }
-    
-    // 平滑处理：如果移动距离太小，忽略（避免微小抖动）
-    const moveDistance = Math.sqrt(rawMouseDeltaX * rawMouseDeltaX + rawMouseDeltaY * rawMouseDeltaY);
-    if (moveDistance < this.MIN_DRAG_DISTANCE) {
-      return null; // 移动距离太小，忽略
-    }
-    
-    // 应用敏感度因子，减少拖拽敏感度（让变形更可控）
-    const mouseDeltaX = rawMouseDeltaX * this.DRAG_SENSITIVITY;
-    const mouseDeltaY = rawMouseDeltaY * this.DRAG_SENSITIVITY;
-
-    // 根据锚点类型计算新的边界框
-    const newBounds = this.calculateNewBoundsForAnchor(
-      this.dragStartBounds,
-      anchor.type,
-      mouseDeltaX,
-      mouseDeltaY
-    );
-
-    if (!newBounds) {
       return null;
     }
 
-    // 使用统一边界框进行缩放
-    const result = this.applyBoundsTransform(newBounds, this.dragStartBounds);
-    if (!result) {
-      return null;
-    }
-
-    // 确保返回数组
-    const updatedActions = Array.isArray(result) ? result : [result];
-    
-    // 更新拖拽状态缓存
-    if (!this.dragState) {
-      const bounds = this.getSelectedActionsBounds();
-      if (bounds && updatedActions.length > 0) {
-        this.dragState = {
-          startBounds: bounds,
-          startAction: updatedActions[0],
-          lastPoint: point,
-          lastResult: null
-        };
-      }
-    }
-    if (this.dragState) {
-      this.dragState.lastPoint = point;
-      this.dragState.lastResult = updatedActions;
-    }
-
-    return updatedActions;
-  }
-
-  /**
-   * 处理默认锚点拖拽（用于没有处理器的图形类型）
-   */
-  private handleDefaultAnchorDrag(point: Point): DrawAction | null {
-    if (!this.dragStartPoint || !this.dragStartBounds) return null;
-
+    // 单选场景
     const action = this.selectedActions[0];
     if (!action) return null;
 
-    const anchor = this.anchorPoints[this.draggedAnchorIndex];
-    if (!anchor) return null;
-
-    // 计算鼠标移动距离
-    const rawMouseDeltaX = point.x - this.dragStartPoint.x;
-    const rawMouseDeltaY = point.y - this.dragStartPoint.y;
-
-    // 检查delta是否有效
-    if (!isFinite(rawMouseDeltaX) || !isFinite(rawMouseDeltaY)) {
-      return null;
-    }
-    
-    // 平滑处理：如果移动距离太小，忽略（避免微小抖动）
-    const moveDistance = Math.sqrt(rawMouseDeltaX * rawMouseDeltaX + rawMouseDeltaY * rawMouseDeltaY);
-    if (moveDistance < this.MIN_DRAG_DISTANCE) {
-      return null; // 移动距离太小，忽略
-    }
-    
-    // 应用敏感度因子，减少拖拽敏感度（让变形更可控）
-    const mouseDeltaX = rawMouseDeltaX * this.DRAG_SENSITIVITY;
-    const mouseDeltaY = rawMouseDeltaY * this.DRAG_SENSITIVITY;
-
-    // 根据锚点类型计算新的边界框
-    const newBounds = this.calculateNewBoundsForAnchor(
-      this.dragStartBounds,
-      anchor.type,
-      mouseDeltaX,
-      mouseDeltaY
+    const result = this.anchorDragHandler.handleSingleSelectionDrag(
+      action,
+      anchor,
+      point,
+      canvasBounds
     );
 
-    if (!newBounds) {
+    if (result.success && result.action) {
+      this.selectedActionForTransform = result.action;
+      this.transformTool.setSelectedAction(result.action);
+      return result.action;
+    }
+
       return null;
     }
 
-    // 使用通用缩放逻辑
-    const result = this.applyBoundsTransform(newBounds, this.dragStartBounds);
-    if (!result) {
-      return null;
-    }
 
-    // 返回单个action
-    return Array.isArray(result) ? result[0] : result;
-  }
-
-  /**
-   * 根据锚点类型和鼠标移动计算新的边界框
-   */
-  private calculateNewBoundsForAnchor(
-    bounds: { x: number; y: number; width: number; height: number },
-    anchorType: AnchorType,
-    deltaX: number,
-    deltaY: number
-  ): { x: number; y: number; width: number; height: number } | null {
-    const newBounds = { ...bounds };
-
-    switch (anchorType) {
-      case 'top-left':
-        newBounds.x = bounds.x + deltaX;
-        newBounds.y = bounds.y + deltaY;
-        newBounds.width = bounds.width - deltaX;
-        newBounds.height = bounds.height - deltaY;
-        break;
-      case 'top-right':
-        newBounds.y = bounds.y + deltaY;
-        newBounds.width = bounds.width + deltaX;
-        newBounds.height = bounds.height - deltaY;
-        break;
-      case 'bottom-right':
-        newBounds.width = bounds.width + deltaX;
-        newBounds.height = bounds.height + deltaY;
-        break;
-      case 'bottom-left':
-        newBounds.x = bounds.x + deltaX;
-        newBounds.width = bounds.width - deltaX;
-        newBounds.height = bounds.height + deltaY;
-        break;
-      case 'top':
-        newBounds.y = bounds.y + deltaY;
-        newBounds.height = bounds.height - deltaY;
-        break;
-      case 'right':
-        newBounds.width = bounds.width + deltaX;
-        break;
-      case 'bottom':
-        newBounds.height = bounds.height + deltaY;
-        break;
-      case 'left':
-        newBounds.x = bounds.x + deltaX;
-        newBounds.width = bounds.width - deltaX;
-        break;
-      default:
-        return null;
-    }
-
-    // 检查最小尺寸
-    if (newBounds.width < 10 || newBounds.height < 10) {
-      return null;
-    }
-
-    return newBounds;
-  }
-
-  /**
-   * 应用边界框变换
-   * 改进：限制缩放比例范围，防止元素变得过大或过小
-   * 对于圆形，使用等比例缩放并保持圆心位置
-   */
-  private applyBoundsTransform(newBounds: { x: number; y: number; width: number; height: number }, 
-                              oldBounds: { x: number; y: number; width: number; height: number }): DrawAction | DrawAction[] | null {
-    // 检查边界框是否有效
-    if (oldBounds.width <= 0 || oldBounds.height <= 0) {
-      logger.warn('SelectTool: 原始边界框无效', oldBounds);
-      return null;
-    }
-    
-    if (newBounds.width <= 0 || newBounds.height <= 0) {
-      logger.warn('SelectTool: 新边界框无效', newBounds);
-      return null;
-    }
-    
-    let scaleX = newBounds.width / oldBounds.width;
-    let scaleY = newBounds.height / oldBounds.height;
-    
-    // 检查缩放比例是否有效
-    if (!isFinite(scaleX) || !isFinite(scaleY) || scaleX <= 0 || scaleY <= 0) {
-      logger.warn('SelectTool: 无效的缩放比例', { scaleX, scaleY, newBounds, oldBounds });
-      return null;
-    }
-    
-    // 限制缩放比例范围（防止元素变得过大或过小）
-    const MIN_SCALE = 0.1; // 最小缩放比例：10%
-    const MAX_SCALE = 10;  // 最大缩放比例：1000%
-    scaleX = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scaleX));
-    scaleY = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scaleY));
-    
-    // 对于圆形，使用等比例缩放（使用较小的缩放比例，保持圆形）
-    // 对于其他形状，使用边界框中心作为缩放中心
-    const isCircle = this.selectedActions.length === 1 && 
-                     this.selectedActions[0]?.type === 'circle';
-    
-    if (isCircle) {
-      // 圆形：使用等比例缩放，缩放中心是圆的实际圆心
-      const circleAction = this.selectedActions[0];
-      const circleCenter = circleAction.points[0];
-      const uniformScale = Math.min(scaleX, scaleY); // 使用较小的缩放比例，保持圆形
-      
-      // 注意：scaleCircleAction 不使用 centerX 和 centerY，圆心固定
-      return this.scaleSelectedAction(uniformScale, uniformScale, circleCenter.x, circleCenter.y);
-    } else {
-      // 其他形状：使用边界框的中心点作为缩放中心
-      const centerX = oldBounds.x + oldBounds.width / 2;
-      const centerY = oldBounds.y + oldBounds.height / 2;
-
-    if (this.selectedActions.length === 1) {
-        return this.scaleSelectedAction(scaleX, scaleY, centerX, centerY);
-    } else {
-        return this.scaleSelectedActions(scaleX, scaleY, centerX, centerY);
-      }
-    }
-  }
 
   public draw(ctx: CanvasRenderingContext2D, action: SelectAction): void {
-    // 获取交互层上下文（动态图层或interaction层）
-    // 优先使用传入的ctx（由drawSelectToolUI传入，已正确获取动态图层）
-    // 如果传入的ctx无效，再尝试使用getInteractionContext()
-    let interactionCtx: CanvasRenderingContext2D;
-    if (ctx && ctx.canvas) {
-      // 使用传入的ctx（通常来自drawSelectToolUI，已正确获取动态图层）
-      interactionCtx = ctx;
-      logger.debug('SelectTool.draw: 使用传入的ctx', {
-        canvasWidth: ctx.canvas.width,
-        canvasHeight: ctx.canvas.height,
-        selectedActionsCount: this.selectedActions.length
-      });
-    } else {
-      try {
-        interactionCtx = this.getInteractionContext();
-        logger.debug('SelectTool.draw: 使用getInteractionContext获取的ctx', {
-          canvasWidth: interactionCtx.canvas.width,
-          canvasHeight: interactionCtx.canvas.height,
-          selectedActionsCount: this.selectedActions.length
-        });
-      } catch {
-        // 如果无法获取交互层，使用传入的ctx（兼容性）
-        interactionCtx = ctx;
-        logger.warn('SelectTool.draw: 无法获取交互层，使用传入的ctx');
-      }
+    // 获取交互层上下文
+    const interactionCtx = this.resolveInteractionContext(ctx);
+
+    // 绘制选中 actions 的边界框和锚点
+    if (this.selectedActions.length > 0) {
+      this.drawSelectedActionsUI(interactionCtx);
     }
 
-    // 如果有选中的actions，绘制边界框和锚点
-    if (this.selectedActions.length > 0) {
-      logger.info('SelectTool.draw: 开始绘制选中actions的锚点', {
-        selectedActionsCount: this.selectedActions.length,
-        selectedActionIds: this.selectedActions.map(a => a.id),
-        anchorPointsCount: this.anchorPoints.length,
-        isTransformMode: this.isTransformMode,
-        interactionCtxCanvas: interactionCtx.canvas,
-        interactionCtxWidth: interactionCtx.canvas.width,
-        interactionCtxHeight: interactionCtx.canvas.height,
-        canvasZIndex: getComputedStyle(interactionCtx.canvas).zIndex,
-        canvasPointerEvents: getComputedStyle(interactionCtx.canvas).pointerEvents
-      });
-      
-      // generateResizeAnchorPoints 内部已经处理了拖拽时的缓存清除
-      // 注意：在draw()中调用时，必须确保锚点已生成，不能因为节流而跳过
-      const anchorPointsBefore = this.anchorPoints.length;
-      const centerAnchorBefore = !!this.centerAnchorPoint;
-      const anchorPointsRefBefore = this.anchorPoints; // 保存引用用于比较
-      
-      logger.info('SelectTool.draw: 调用generateResizeAnchorPoints前', {
-        anchorPointsCountBefore: anchorPointsBefore,
-        centerAnchorBefore,
-        selectedActionsCount: this.selectedActions.length,
-        selectedActionIds: this.selectedActions.map(a => a.id),
-        anchorPointsRef: anchorPointsRefBefore
-      });
-      
+    // 绘制选择框（框选过程中）
+    this.drawSelectionBox(interactionCtx, action);
+  }
+
+  /**
+   * 解析交互层上下文
+   */
+  private resolveInteractionContext(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D {
+    if (ctx && ctx.canvas) {
+      return ctx;
+    }
+    try {
+      return this.getInteractionContext();
+      } catch {
+      logger.warn('SelectTool: 无法获取交互层，使用传入的ctx');
+      return ctx;
+    }
+  }
+
+  /**
+   * 绘制选中 actions 的 UI（边界框和锚点）
+   */
+  private drawSelectedActionsUI(ctx: CanvasRenderingContext2D): void {
+    // 生成锚点
       this.generateResizeAnchorPoints();
       
-      // 立即检查锚点状态
-      const anchorPointsAfter = this.anchorPoints.length;
-      const centerAnchorAfter = !!this.centerAnchorPoint;
-      const anchorPointsRefAfter = this.anchorPoints; // 保存引用用于比较
-      
-      logger.info('SelectTool.draw: 生成锚点后（立即检查）', {
-        anchorPointsCountBefore: anchorPointsBefore,
-        anchorPointsCountAfter: anchorPointsAfter,
-        centerAnchorBefore,
-        centerAnchorAfter,
-        selectedActionsCount: this.selectedActions.length,
-        selectedActionIds: this.selectedActions.map(a => a.id),
-        anchorPointsRefChanged: anchorPointsRefBefore !== anchorPointsRefAfter,
-        anchorPointsArray: this.anchorPoints.map((a, i) => ({
-          index: i,
-          type: a.type,
-          x: a.x,
-          y: a.y
-        }))
-      });
-      
-      // 如果锚点数量为0，记录错误并尝试强制重新生成
+    // 如果锚点生成失败，强制重新生成
       if (this.anchorPoints.length === 0 && !this.centerAnchorPoint && this.selectedActions.length > 0) {
-        logger.error('SelectTool.draw: 锚点生成失败，尝试强制重新生成', {
-          selectedActionsCount: this.selectedActions.length,
-          selectedActionIds: this.selectedActions.map(a => a.id),
-          hasAnchorCache: !!this.anchorCache,
-          anchorCacheKey: this.anchorCache?.actionIds.sort().join(',')
-        });
-        // 强制清除缓存并重新生成
+      logger.warn('SelectTool: 锚点生成失败，强制重新生成');
         this.clearAnchorCache();
-        this.lastAnchorUpdateTime = 0; // 重置节流时间，强制重新生成
+      this.lastAnchorUpdateTime = 0;
         this.generateResizeAnchorPoints();
-        
-        logger.info('SelectTool.draw: 强制重新生成锚点后', {
-          anchorPointsCount: this.anchorPoints.length,
-          centerAnchorPoint: !!this.centerAnchorPoint
-        });
       }
       
       // 绘制边界框
-      // 在拖拽过程中，使用 selectedActionForTransform 计算边界框
       const bounds = this.isDraggingResizeAnchor && this.selectedActionForTransform
         ? this.getActionBoundingBox(this.selectedActionForTransform)
         : this.getSelectedActionsBounds();
+    
       if (bounds) {
-        logger.info('SelectTool.draw: 绘制边界框', bounds);
-        this.drawSelectionBounds(interactionCtx, bounds);
-      } else {
-        logger.warn('SelectTool.draw: 边界框为空，无法绘制');
-      }
-      
-      // 绘制变形锚点（使用 SelectTool 的锚点系统，而不是 TransformTool 的控制点）
-      // 注意：对于圆形，应该使用 SelectTool 的4个边界锚点 + 1个中心点，而不是 TransformTool 的8个控制点
-      logger.info('SelectTool.draw: 绘制锚点', {
-        anchorPointsCount: this.anchorPoints.length,
-        centerAnchorPoint: !!this.centerAnchorPoint,
-        anchorPoints: this.anchorPoints.map((a, i) => ({
-          index: i,
-          x: a.x,
-          y: a.y,
-          type: a.type
-        }))
-      });
-      this.drawResizeAnchorPoints(interactionCtx);
-      logger.info('SelectTool.draw: 锚点绘制完成');
-    } else {
-      logger.info('SelectTool.draw: 没有选中的actions，跳过绘制锚点', {
-        selectedActionsCount: this.selectedActions.length
-      });
+      this.drawSelectionBounds(ctx, bounds);
     }
     
-    // 如果处于变换模式且有选中的图形，也绘制 TransformTool 的控制点（用于其他功能）
-    // 但 SelectTool 的锚点系统是主要的交互方式
-    if (this.isTransformMode && this.selectedActionForTransform) {
-      // 注意：TransformTool 的控制点可能会覆盖 SelectTool 的锚点
-      // 对于圆形，应该禁用 TransformTool 的控制点，只使用 SelectTool 的锚点
-      // 暂时注释掉，让 SelectTool 的锚点系统作为主要交互方式
-      // this.transformTool.draw(interactionCtx);
-    }
+    // 绘制锚点
+    this.drawResizeAnchorPoints(ctx);
+  }
 
-    // 否则绘制选择框
+  /**
+   * 绘制选择框（框选过程中）
+   */
+  private drawSelectionBox(ctx: CanvasRenderingContext2D, action: SelectAction): void {
     if (action.points.length < 2) return;
 
-    const originalContext = this.saveContext(interactionCtx);
-    
-    // 计算选择框区域
     const start = action.points[0];
     const end = action.points[action.points.length - 1];
     
@@ -1906,21 +1176,15 @@ export class SelectTool extends DrawTool {
     const height = Math.abs(end.y - start.y);
 
     // 只有当选择框有一定大小时才绘制
-    if (width < 5 || height < 5) {
-      this.restoreContext(interactionCtx, originalContext);
-      return;
-    }
+    if (width < 5 || height < 5) return;
 
-    // 绘制选择框背景
-    this.drawSelectionBackground(interactionCtx, left, top, width, height, action);
+    const originalContext = this.saveContext(ctx);
     
-    // 绘制选择框边框
-    this.drawSelectionBorder(interactionCtx, left, top, width, height, action);
+    this.drawSelectionBackground(ctx, left, top, width, height, action);
+    this.drawSelectionBorder(ctx, left, top, width, height, action);
+    this.drawCornerIndicators(ctx, left, top, width, height);
     
-    // 绘制选择框角标
-    this.drawCornerIndicators(interactionCtx, left, top, width, height);
-    
-    this.restoreContext(interactionCtx, originalContext);
+    this.restoreContext(ctx, originalContext);
   }
 
   private drawSelectionBackground(
@@ -2094,35 +1358,20 @@ export class SelectTool extends DrawTool {
    * 改进：清晰区分移动和变形操作
    */
   public handleMouseDown(point: Point): 'select' | 'transform' | 'move' | 'box-select' | 'resize' | null {
-    logger.info('SelectTool.handleMouseDown 被调用', {
-      point,
-      allActionsCount: this.allActions.length,
-      selectedActionsCount: this.selectedActions.length,
-      isTransformMode: this.isTransformMode,
-      selectedLayerZIndex: this.selectedLayerZIndex
-    });
-    
     // 如果有选中的actions，检查交互区域
     if (this.selectedActions.length > 0) {
       // 1. 优先检查是否点击了边锚点（变形锚点优先级最高）
       const anchorInfo = this.getAnchorPointAt(point);
       if (anchorInfo && !anchorInfo.isCenter) {
-        // 边锚点：缩放/变形（明确区分：这是变形操作，不是移动操作）
-          logger.debug('点击了变形锚点，开始缩放/变形', { 
-            index: anchorInfo.index, 
-            anchorType: anchorInfo.anchor.type 
-          });
+        // 边锚点：缩放/变形
           this.isDraggingResizeAnchor = true;
-        this.isDraggingMove = false; // 明确不是移动操作
-        this.isDraggingCenter = false; // 明确不是中心点拖拽
+        this.isDraggingMove = false;
+        this.isDraggingCenter = false;
           this.draggedAnchorIndex = anchorInfo.index;
           this.dragStartPoint = point;
-          // 清除之前的拖拽边界框缓存和位置
           this.dragStartBounds = null;
-          // 保存拖拽开始时的action（用于圆形等需要保持原始状态的图形）
           this.dragStartAction = this.selectedActions.length === 1 ? 
             { ...this.selectedActions[0] } : null;
-          // 保存拖拽前的状态（用于取消）
           this.saveDragStartState();
           return 'resize';
         }
@@ -2419,12 +1668,36 @@ export class SelectTool extends DrawTool {
   public handleMouseUp(): DrawAction | DrawAction[] | null {
     // 1. 处理框选结束
     if (this.isSelecting && this.currentSelectionBounds) {
-      const selectedActions = this.selectActionsInBox(this.currentSelectionBounds);
+      return this.finishBoxSelection();
+    }
+
+    // 2. 处理变形锚点拖拽结束
+    if (this.isDraggingResizeAnchor) {
+      return this.finishResizeAnchorDrag();
+    }
+
+    // 3. 处理移动结束（包括中心点拖拽）
+    if (this.isDraggingMove) {
+      return this.finishMoveDrag();
+    }
+
+    // 4. 处理变换模式（TransformTool的控制点）
+    if (this.isTransformMode && this.isDragging) {
+      return this.finishControlPointDrag();
+    }
+
+    return null;
+  }
+
+  /**
+   * 完成框选操作
+   */
+  private finishBoxSelection(): DrawAction | DrawAction[] | null {
+    const selectedActions = this.selectActionsInBox(this.currentSelectionBounds!);
       this.isSelecting = false;
       this.selectionStartPoint = null;
       this.currentSelectionBounds = null;
       
-      // 使用 setSelectedActions 确保缓存清除和锚点重新生成
       this.setSelectedActions(selectedActions);
       
       if (selectedActions.length === 1) {
@@ -2437,102 +1710,64 @@ export class SelectTool extends DrawTool {
       return null;
     }
 
-    // 2. 处理变形锚点拖拽结束
-    if (this.isDraggingResizeAnchor) {
+  /**
+   * 完成锚点拖拽操作
+   */
+  private finishResizeAnchorDrag(): DrawAction | DrawAction[] | null {
       this.isDraggingResizeAnchor = false;
       this.draggedAnchorIndex = -1;
       this.dragStartPoint = null;
-      this.clearDragState();
-      
-      // 清除拖拽时的原始边界框缓存和位置
       this.dragStartBounds = null;
       this.dragStartAction = null;
-      // 清除拖拽状态
       this.dragStartState = null;
-      
-      // 更新selectedActions（同步变形后的action）
-      if (this.selectedActions.length === 1 && this.selectedActionForTransform) {
-        this.selectedActions[0] = this.selectedActionForTransform;
-      }
-      
-      // 清除所有缓存，强制重新计算并更新
-      // 注意：必须在更新 selectedActions 之后清除缓存，这样新的缓存会基于更新后的 selectedActions
-      this.clearBoundsCache(); // 清除边界框缓存
-      this.clearAnchorCache(); // 清除锚点缓存
-      
-      // 强制重新生成锚点和边界框，并更新缓存
-      // 此时 isDraggingResizeAnchor 已为 false，所以会更新缓存
-      this.generateResizeAnchorPoints(); // 重新生成锚点（会重新计算边界框并更新缓存）
-      
-      // 确保边界框缓存也被更新（通过调用 getSelectedActionsBounds）
-      this.getSelectedActionsBounds(); // 这会更新边界框缓存
-      
-      if (this.selectedActions.length > 1) {
-        return this.selectedActions;
-      } else {
-        return this.selectedActionForTransform;
-      }
-    }
+    this.clearDragState();
+    this.anchorDragHandler.endDrag();
+    
+    return this.syncAndRefreshAfterDrag();
+  }
 
-    // 3. 处理移动结束（包括中心点拖拽）
-    if (this.isDraggingMove) {
+  /**
+   * 完成移动拖拽操作
+   */
+  private finishMoveDrag(): DrawAction | DrawAction[] | null {
       this.isDraggingMove = false;
       this.isDraggingCenter = false;
       this.dragStartPoint = null;
       this.dragStartAction = null;
       this.clearDragState();
       
-      // 更新selectedActions（同步移动后的action）
-      if (this.selectedActions.length === 1 && this.selectedActionForTransform) {
-        this.selectedActions[0] = this.selectedActionForTransform;
-      }
-      
-      // 清除所有缓存，强制重新计算并更新
-      // 注意：必须在更新 selectedActions 之后清除缓存，这样新的缓存会基于更新后的 selectedActions
-      this.clearBoundsCache(); // 清除边界框缓存
-      this.clearAnchorCache(); // 清除锚点缓存
-      
-      // 强制重新生成锚点和边界框，并更新缓存
-      // 此时 isDraggingMove 已为 false，所以会更新缓存
-      this.generateResizeAnchorPoints(); // 重新生成锚点（会重新计算边界框并更新缓存）
-      
-      // 确保边界框缓存也被更新（通过调用 getSelectedActionsBounds）
-      this.getSelectedActionsBounds(); // 这会更新边界框缓存
-      
-      if (this.selectedActions.length > 1) {
-        return this.selectedActions;
-      } else {
-        return this.selectedActionForTransform;
-      }
-    }
+    return this.syncAndRefreshAfterDrag();
+  }
 
-    // 4. 处理变换模式（TransformTool的控制点）
-    if (!this.isTransformMode || !this.isDragging) {
-      return null;
-    }
-
+  /**
+   * 完成控制点拖拽操作
+   */
+  private finishControlPointDrag(): DrawAction | DrawAction[] | null {
     this.isDragging = false;
     this.dragStartPoint = null;
     this.currentHoverControlPoint = null;
     
-    // 更新selectedActions（同步变换后的action）
+    return this.syncAndRefreshAfterDrag();
+  }
+
+  /**
+   * 拖拽结束后同步状态并刷新缓存
+   */
+  private syncAndRefreshAfterDrag(): DrawAction | DrawAction[] | null {
+    // 同步变形后的 action
     if (this.selectedActions.length === 1 && this.selectedActionForTransform) {
       this.selectedActions[0] = this.selectedActionForTransform;
     }
     
-    // 清除所有缓存，强制重新计算并更新
-    this.clearBoundsCache(); // 清除边界框缓存
-    this.clearAnchorCache(); // 清除锚点缓存
+    // 清除并重新生成缓存
+    this.clearBoundsCache();
+    this.clearAnchorCache();
+    this.generateResizeAnchorPoints();
+    this.getSelectedActionsBounds();
     
-    // 强制重新生成锚点和边界框，并更新缓存
-    this.generateResizeAnchorPoints(); // 重新生成锚点（会重新计算边界框并更新缓存）
-    this.getSelectedActionsBounds(); // 确保边界框缓存也被更新
-    
-    if (this.selectedActions.length > 1) {
-      return this.selectedActions;
-    } else {
-      return this.selectedActionForTransform;
-    }
+    return this.selectedActions.length > 1 
+      ? this.selectedActions 
+      : this.selectedActionForTransform;
   }
 
   /**
@@ -2641,364 +1876,99 @@ export class SelectTool extends DrawTool {
 
   /**
    * 移动所有选中的actions
+   * 使用 TransformOperations 模块
    */
   public moveSelectedActions(deltaX: number, deltaY: number): DrawAction[] {
-    // 检查delta有效性
-    if (!isFinite(deltaX) || !isFinite(deltaY)) {
-      logger.warn('SelectTool: 无效的移动偏移量', { deltaX, deltaY });
-      return [];
+    const canvasBounds = this.getCanvasBounds() || undefined;
+    
+    const result = TransformOperations.moveActions(
+      this.selectedActions,
+      deltaX,
+      deltaY,
+      canvasBounds
+    );
+
+    if (!result.success) {
+      logger.warn('SelectTool: 移动失败', { errors: result.errors });
     }
+
+    this.selectedActions = result.actions;
     
-    const transformFn = (point: Point) => this.clampPointToCanvas(this.createMoveTransform(deltaX, deltaY)(point));
-    const updatedActions = this.applyTransformToActions(this.selectedActions, transformFn);
-    
-    logger.debug(`SelectTool: 移动${updatedActions.length}个actions，偏移量: (${deltaX}, ${deltaY})`);
-    return updatedActions;
+    logger.debug(`SelectTool: 移动${result.actions.length}个actions，偏移量: (${deltaX}, ${deltaY})`);
+    return result.actions;
   }
 
   /**
    * 缩放选中的action
-   * 改进：针对不同形状类型使用不同的缩放逻辑
+   * 使用 TransformOperations 模块
    */
   public scaleSelectedAction(scaleX: number, scaleY: number, centerX: number, centerY: number): DrawAction | null {
     if (!this.isTransformMode || !this.selectedActionForTransform) {
       return null;
     }
 
-    // 检查参数有效性
-    if (!isFinite(scaleX) || !isFinite(scaleY) || scaleX <= 0 || scaleY <= 0) {
-      logger.warn('SelectTool: 无效的缩放参数', { scaleX, scaleY, centerX, centerY });
+    const canvasBounds = this.getCanvasBounds() || undefined;
+    
+    const result = TransformOperations.scaleAction(
+      this.selectedActionForTransform,
+      scaleX,
+      scaleY,
+      centerX,
+      centerY,
+      canvasBounds
+    );
+
+    if (!result.success || !result.action) {
+      logger.warn('SelectTool: 缩放失败', { error: result.error });
       return null;
     }
 
-    const action = this.selectedActionForTransform;
-    let newPoints: Point[];
-
-    // 根据action类型使用不同的缩放逻辑
-    switch (action.type) {
-      case 'circle': {
-        // 圆形：保持等比例缩放（使用较小的缩放比例），圆心固定
-        const uniformScale = Math.min(scaleX, scaleY);
-        newPoints = this.scaleCircleAction(action, uniformScale);
-        break;
-      }
-      
-      case 'text':
-        // 文字：等比例缩放位置，并调整字体大小
-        newPoints = this.scaleTextAction(action, scaleX, scaleY, centerX, centerY);
-        break;
-      
-      case 'rect':
-        // 矩形：保持矩形形状，但允许非等比例缩放
-        newPoints = this.scaleRectAction(action, scaleX, scaleY, centerX, centerY);
-        break;
-      
-      case 'line':
-        // 直线：保持直线形状
-        newPoints = this.scaleLineAction(action, scaleX, scaleY, centerX, centerY);
-        break;
-      
-      case 'polygon':
-        // 多边形：保持多边形形状
-        newPoints = this.scalePolygonAction(action, scaleX, scaleY, centerX, centerY);
-        break;
-      
-      case 'pen':
-      case 'brush':
-      case 'eraser':
-        // 路径：缩放所有点
-        newPoints = this.scalePathAction(action, scaleX, scaleY, centerX, centerY);
-        break;
-      
-      default:
-        // 默认：缩放所有点
-        newPoints = this.scaleGenericAction(action, scaleX, scaleY, centerX, centerY);
-        break;
-    }
-
-    // 限制所有点在画布范围内
-    const canvasBounds = this.getCanvasBounds();
-    if (canvasBounds) {
-      newPoints = newPoints.map(point => ({
-      ...point,
-        x: Math.max(0, Math.min(canvasBounds.width, point.x)),
-        y: Math.max(0, Math.min(canvasBounds.height, point.y))
-    }));
-    }
-
-    // 对于文字，需要同时调整字体大小
-    let updatedAction: DrawAction;
-    if (action.type === 'text') {
-      const textAction = action as DrawAction & { fontSize?: number };
-      const originalFontSize = textAction.fontSize || 16;
-      // 使用等比例缩放字体大小
-      const uniformScale = Math.min(scaleX, scaleY);
-      const newFontSize = Math.max(8, Math.min(72, originalFontSize * uniformScale));
-      
-      updatedAction = {
-        ...action,
-        points: newPoints,
-        fontSize: newFontSize
-      } as DrawAction;
-    } else {
-      updatedAction = {
-        ...action,
-      points: newPoints
-    };
-    }
-
-    this.selectedActionForTransform = updatedAction;
-    this.transformTool.setSelectedAction(updatedAction);
+    this.selectedActionForTransform = result.action;
+    this.transformTool.setSelectedAction(result.action);
 
     logger.debug('SelectTool: 缩放action完成', {
-      actionType: action.type,
+      actionType: result.action.type,
       scaleX,
-      scaleY,
-      pointsCount: newPoints.length,
-      ...(action.type === 'text' ? { 
-        originalFontSize: (action as DrawAction & { fontSize?: number }).fontSize,
-        newFontSize: (updatedAction as DrawAction & { fontSize?: number }).fontSize 
-      } : {})
+      scaleY
     });
 
-    return updatedAction;
-  }
-
-  /**
-   * 公共缩放逻辑：基于缩放中心缩放所有点
-   * 提取公共逻辑，减少代码重复
-   */
-  private scalePointsByCenter(
-    points: Point[], 
-    scaleX: number, 
-    scaleY: number, 
-    centerX: number, 
-    centerY: number
-  ): Point[] {
-    return points.map(point => {
-      const newX = centerX + (point.x - centerX) * scaleX;
-      const newY = centerY + (point.y - centerY) * scaleY;
-      
-      if (!isFinite(newX) || !isFinite(newY)) {
-        return point;
-      }
-      
-      return {
-        ...point,
-        x: newX,
-        y: newY
-      };
-    });
-  }
-
-  /**
-   * 缩放圆形action（保持等比例）
-   * 改进：圆心位置保持不变，只缩放半径
-   * 注意：centerX 和 centerY 参数未使用，圆心始终保持在原始位置
-   */
-  private scaleCircleAction(action: DrawAction, scale: number): Point[] {
-    if (action.points.length < 2) return action.points;
-    
-    const center = action.points[0];
-    const edge = action.points[action.points.length - 1];
-    
-    // 计算原始半径
-    const originalRadius = Math.sqrt(
-      Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-    );
-    
-    if (!isFinite(originalRadius) || originalRadius <= 0) {
-      return action.points;
-    }
-    
-    // 限制缩放比例，减少敏感度
-    const clampedScale = Math.max(0.1, Math.min(10, scale));
-    
-    // 计算新半径
-    const newRadius = originalRadius * clampedScale;
-    
-    // 圆心位置保持不变（使用原始圆心位置）
-    // 计算边缘点相对于圆心的方向
-    const angle = Math.atan2(edge.y - center.y, edge.x - center.x);
-    
-    // 新的边缘点：圆心 + 新半径 * 方向
-    const newEdgeX = center.x + newRadius * Math.cos(angle);
-    const newEdgeY = center.y + newRadius * Math.sin(angle);
-    
-    return [
-      {
-        ...center,
-        // 圆心位置保持不变
-        x: center.x,
-        y: center.y
-      },
-      {
-        ...edge,
-        x: newEdgeX,
-        y: newEdgeY
-      }
-    ];
-  }
-
-  /**
-   * 缩放矩形action
-   */
-  private scaleRectAction(action: DrawAction, scaleX: number, scaleY: number, centerX: number, centerY: number): Point[] {
-    if (action.points.length < 2) return action.points;
-    return this.scalePointsByCenter(action.points, scaleX, scaleY, centerX, centerY);
-  }
-
-  /**
-   * 缩放直线action
-   */
-  private scaleLineAction(action: DrawAction, scaleX: number, scaleY: number, centerX: number, centerY: number): Point[] {
-    if (action.points.length < 2) return action.points;
-    return this.scalePointsByCenter(action.points, scaleX, scaleY, centerX, centerY);
-  }
-
-  /**
-   * 缩放多边形action
-   */
-  private scalePolygonAction(action: DrawAction, scaleX: number, scaleY: number, centerX: number, centerY: number): Point[] {
-    return this.scalePointsByCenter(action.points, scaleX, scaleY, centerX, centerY);
-  }
-
-  /**
-   * 缩放路径action（pen/brush/eraser）
-   */
-  private scalePathAction(action: DrawAction, scaleX: number, scaleY: number, centerX: number, centerY: number): Point[] {
-    return this.scalePointsByCenter(action.points, scaleX, scaleY, centerX, centerY);
-  }
-
-  /**
-   * 缩放文字action的位置点
-   * 
-   * 注意：此方法只缩放位置点，不调整字体大小。
-   * 字体大小的调整在调用此方法后由 scaleSelectedAction 或 scaleSelectedActions 处理。
-   * 
-   * 对于锚点拖拽场景，应使用 TextAnchorHandler.handleAnchorDrag()，它会同时调整字体大小。
-   * 
-   * @param action - 要缩放的文字action
-   * @param scaleX - X轴缩放比例
-   * @param scaleY - Y轴缩放比例
-   * @param centerX - 缩放中心X坐标
-   * @param centerY - 缩放中心Y坐标
-   * @returns 缩放后的位置点数组
-   */
-  private scaleTextAction(action: DrawAction, scaleX: number, scaleY: number, centerX: number, centerY: number): Point[] {
-    // 文字位置缩放（使用等比例缩放，保持文字比例）
-    const uniformScale = Math.min(scaleX, scaleY);
-    return this.scalePointsByCenter(action.points, uniformScale, uniformScale, centerX, centerY);
-  }
-
-  /**
-   * 缩放通用action
-   */
-  private scaleGenericAction(action: DrawAction, scaleX: number, scaleY: number, centerX: number, centerY: number): Point[] {
-    return this.scalePointsByCenter(action.points, scaleX, scaleY, centerX, centerY);
+    return result.action;
   }
 
   /**
    * 缩放所有选中的actions
-   * 改进：针对每个action使用对应的缩放逻辑
+   * 使用 TransformOperations 模块
    */
   public scaleSelectedActions(scaleX: number, scaleY: number, centerX: number, centerY: number): DrawAction[] {
-    // 检查参数有效性
-    if (!isFinite(scaleX) || !isFinite(scaleY) || scaleX <= 0 || scaleY <= 0) {
-      logger.warn('SelectTool: 无效的缩放参数', { scaleX, scaleY, centerX, centerY });
-      return [];
+    const canvasBounds = this.getCanvasBounds() || undefined;
+    
+    const result = TransformOperations.scaleActions(
+      this.selectedActions,
+      scaleX,
+      scaleY,
+      centerX,
+      centerY,
+      canvasBounds
+    );
+
+    if (!result.success) {
+      logger.warn('SelectTool: 缩放失败', { errors: result.errors });
     }
-    
-    const updatedActions: DrawAction[] = [];
-    const canvasBounds = this.getCanvasBounds();
-    
-    for (const action of this.selectedActions) {
-      let newPoints: Point[];
 
-      // 根据action类型使用不同的缩放逻辑
-      switch (action.type) {
-        case 'circle': {
-          // 圆形：保持等比例缩放，圆心固定
-          const uniformScale = Math.min(scaleX, scaleY);
-          newPoints = this.scaleCircleAction(action, uniformScale);
-          break;
-        }
-        
-        case 'text':
-          // 文字：等比例缩放位置，并调整字体大小
-          newPoints = this.scaleTextAction(action, scaleX, scaleY, centerX, centerY);
-          break;
-        
-        case 'rect':
-          newPoints = this.scaleRectAction(action, scaleX, scaleY, centerX, centerY);
-          break;
-        
-        case 'line':
-          newPoints = this.scaleLineAction(action, scaleX, scaleY, centerX, centerY);
-          break;
-        
-        case 'polygon':
-          newPoints = this.scalePolygonAction(action, scaleX, scaleY, centerX, centerY);
-          break;
-        
-        case 'pen':
-        case 'brush':
-        case 'eraser':
-          newPoints = this.scalePathAction(action, scaleX, scaleY, centerX, centerY);
-          break;
-        
-        default:
-          newPoints = this.scaleGenericAction(action, scaleX, scaleY, centerX, centerY);
-          break;
-      }
-
-      // 限制所有点在画布范围内
-      if (canvasBounds) {
-        newPoints = newPoints.map(point => ({
-        ...point,
-          x: Math.max(0, Math.min(canvasBounds.width, point.x)),
-          y: Math.max(0, Math.min(canvasBounds.height, point.y))
-      }));
-      }
-
-      // 对于文字，需要同时调整字体大小
-      let updatedAction: DrawAction;
-      if (action.type === 'text') {
-        const textAction = action as DrawAction & { fontSize?: number };
-        const originalFontSize = textAction.fontSize || 16;
-        // 使用等比例缩放字体大小
-        const uniformScale = Math.min(scaleX, scaleY);
-        const newFontSize = Math.max(8, Math.min(72, originalFontSize * uniformScale));
-        
-        updatedAction = {
-          ...action,
-          points: newPoints,
-          fontSize: newFontSize
-        } as DrawAction;
-      } else {
-        updatedAction = {
-        ...action,
-        points: newPoints
-      };
-      }
-
-      updatedActions.push(updatedAction);
-    }
-    
-    this.selectedActions = updatedActions;
+    this.selectedActions = result.actions;
     
     // 如果只有一个选中的action，更新变换模式
-    if (updatedActions.length === 1) {
-      this.selectedActionForTransform = updatedActions[0];
-      this.transformTool.setSelectedAction(updatedActions[0]);
+    if (result.actions.length === 1) {
+      this.selectedActionForTransform = result.actions[0];
+      this.transformTool.setSelectedAction(result.actions[0]);
     }
     
-    logger.debug(`SelectTool: 缩放${updatedActions.length}个actions完成`, {
+    logger.debug(`SelectTool: 缩放${result.actions.length}个actions完成`, {
       scaleX,
       scaleY
     });
     
-    return updatedActions;
+    return result.actions;
   }
 
   /**
@@ -3106,115 +2076,59 @@ export class SelectTool extends DrawTool {
     if (!this.isTransformMode || !this.selectedActionForTransform) {
       return null;
     }
-    
-    // 检查参数有效性
-    if (!isFinite(angle) || !isFinite(centerX) || !isFinite(centerY)) {
-      logger.warn('SelectTool: 无效的旋转参数', { angle, centerX, centerY });
-      return null;
-    }
 
     const radians = (angle * Math.PI) / 180;
-    const cos = Math.cos(radians);
-    const sin = Math.sin(radians);
+    const canvasBounds = this.getCanvasBounds() || undefined;
     
-    // 检查三角函数值是否有效
-    if (!isFinite(cos) || !isFinite(sin)) {
-      logger.warn('SelectTool: 无效的三角函数值', { radians, cos, sin });
+    const result = TransformOperations.rotateAction(
+      this.selectedActionForTransform,
+      radians,
+      centerX,
+      centerY,
+      canvasBounds
+    );
+
+    if (!result.success || !result.action) {
+      logger.warn('SelectTool: 旋转失败', { error: result.error });
       return null;
     }
 
-    const newPoints = this.selectedActionForTransform.points.map(point => {
-      const dx = point.x - centerX;
-      const dy = point.y - centerY;
-      
-      const newX = centerX + dx * cos - dy * sin;
-      const newY = centerY + dx * sin + dy * cos;
-      
-      // 检查计算结果
-      if (!isFinite(newX) || !isFinite(newY)) {
-        logger.warn('SelectTool: 旋转后的点坐标无效', { newX, newY, point, angle });
-        return point; // 返回原始点
-      }
-      
-      return {
-        ...point,
-        x: newX,
-        y: newY
-      };
-    });
+    this.selectedActionForTransform = result.action;
+    this.transformTool.setSelectedAction(result.action);
 
-    const updatedAction = {
-      ...this.selectedActionForTransform,
-      points: newPoints
-    };
-
-    this.selectedActionForTransform = updatedAction;
-    this.transformTool.setSelectedAction(updatedAction);
-
-    return updatedAction;
+    return result.action;
   }
 
   /**
    * 旋转所有选中的actions
    */
   public rotateSelectedActions(angle: number, centerX: number, centerY: number): DrawAction[] {
-    // 检查参数有效性
-    if (!isFinite(angle) || !isFinite(centerX) || !isFinite(centerY)) {
-      logger.warn('SelectTool: 无效的旋转参数', { angle, centerX, centerY });
-      return [];
-    }
-    
+    // 转换为弧度
     const radians = (angle * Math.PI) / 180;
-    const cos = Math.cos(radians);
-    const sin = Math.sin(radians);
+    const canvasBounds = this.getCanvasBounds() || undefined;
     
-    // 检查三角函数值是否有效
-    if (!isFinite(cos) || !isFinite(sin)) {
-      logger.warn('SelectTool: 无效的三角函数值', { radians, cos, sin });
-      return [];
-    }
-    
-    const updatedActions: DrawAction[] = [];
-    
-    for (const action of this.selectedActions) {
-      const newPoints = action.points.map(point => {
-        const dx = point.x - centerX;
-        const dy = point.y - centerY;
-        
-        const newX = centerX + dx * cos - dy * sin;
-        const newY = centerY + dx * sin + dy * cos;
-        
-        // 检查计算结果
-        if (!isFinite(newX) || !isFinite(newY)) {
-          logger.warn('SelectTool: 旋转后的点坐标无效', { newX, newY, point, angle });
-          return point; // 返回原始点
-        }
-        
-        return {
-          ...point,
-          x: newX,
-          y: newY
-        };
-      });
+    const result = TransformOperations.rotateActions(
+      this.selectedActions,
+      radians,
+      centerX,
+      centerY,
+      canvasBounds
+    );
 
-      const updatedAction = {
-        ...action,
-        points: newPoints
-      };
-
-      updatedActions.push(updatedAction);
+    if (!result.success) {
+      logger.warn('SelectTool: 旋转失败', { errors: result.errors });
     }
-    
-    this.selectedActions = updatedActions;
+
+    this.selectedActions = result.actions;
     
     // 如果只有一个选中的action，更新变换模式
-    if (updatedActions.length === 1) {
-      this.selectedActionForTransform = updatedActions[0];
-      this.transformTool.setSelectedAction(updatedActions[0]);
+    if (result.actions.length === 1) {
+      this.selectedActionForTransform = result.actions[0];
+      this.transformTool.setSelectedAction(result.actions[0]);
     }
     
-    logger.debug(`SelectTool: 旋转${updatedActions.length}个actions，角度: ${angle}°`);
-    return updatedActions;
+    logger.debug(`SelectTool: 旋转${result.actions.length}个actions，角度: ${angle}°`);
+    return result.actions;
   }
 
   /**

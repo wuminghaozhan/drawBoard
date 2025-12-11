@@ -1,4 +1,4 @@
-import { logger } from './Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 /**
  * 调试工具类

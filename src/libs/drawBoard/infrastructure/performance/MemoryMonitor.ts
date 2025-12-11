@@ -1,4 +1,4 @@
-import { logger } from './Logger';
+import { logger } from '../logging/Logger';
 
 /**
  * 内存监控器

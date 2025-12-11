@@ -2,7 +2,7 @@ import { EventCoordinator } from '../../libs/drawBoard/handlers/EventCoordinator
 import type { ToolManager } from '../../libs/drawBoard/tools/ToolManager';
 import type { DrawingHandler } from '../../libs/drawBoard/handlers/DrawingHandler';
 import type { CursorHandler } from '../../libs/drawBoard/handlers/CursorHandler';
-import type { DrawEvent } from '../../libs/drawBoard/events/EventManager';
+import type { DrawEvent } from '../../libs/drawBoard/infrastructure/events/EventManager';
 import type { DrawAction } from '../../libs/drawBoard/tools/DrawTool';
 import type { Point } from '../../libs/drawBoard/core/CanvasEngine';
 
@@ -279,7 +279,10 @@ describe('EventCoordinator', () => {
     });
 
     it('应该处理 handleDrawEnd 中的错误', async () => {
-      mockDrawingHandler.handleDrawEnd = jest.fn().mockRejectedValue(new Error('测试错误'));
+      // handleDrawEnd 现在是同步的，所以使用同步的错误抛出
+      mockDrawingHandler.handleDrawEnd = jest.fn().mockImplementation(() => {
+        throw new Error('测试错误');
+      });
 
       const event: DrawEvent = {
         type: 'mouseup',
@@ -287,6 +290,7 @@ describe('EventCoordinator', () => {
         timestamp: Date.now()
       };
 
+      // SafeExecutor 会捕获错误，所以不应该抛出
       await expect(eventCoordinator.handleDrawEnd(event)).resolves.not.toThrow();
     });
   });

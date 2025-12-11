@@ -1,4 +1,4 @@
-import { logger } from './Logger';
+import { logger } from '../logging/Logger';
 
 /**
  * DrawBoard错误代码枚举

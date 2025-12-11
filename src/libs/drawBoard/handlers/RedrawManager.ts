@@ -3,9 +3,11 @@ import type { HistoryManager } from '../history/HistoryManager';
 import type { ToolManager } from '../tools/ToolManager';
 import type { VirtualLayerManager, VirtualLayer } from '../core/VirtualLayerManager';
 import type { DrawAction } from '../tools/DrawTool';
-import { logger } from '../utils/Logger';
-import { SafeExecutor } from '../utils/SafeExecutor';
+import { logger } from '../infrastructure/logging/Logger';
+import { SafeExecutor } from '../infrastructure/error/SafeExecutor';
 import type { CacheManager } from './CacheManager';
+import { DirtyRectManager, type DirtyRectConfig } from '../infrastructure/performance/DirtyRectManager';
+import type { Bounds } from '../utils/BoundsValidator';
 
 /**
  * 绘制动作函数类型
@@ -18,6 +20,16 @@ export type DrawActionFn = (ctx: CanvasRenderingContext2D, action: DrawAction) =
 export type DrawSelectToolUIFn = () => Promise<void>;
 
 /**
+ * 重绘管理器配置
+ */
+export interface RedrawManagerConfig {
+  /** 是否启用脏矩形优化 */
+  enableDirtyRect: boolean;
+  /** 脏矩形配置 */
+  dirtyRectConfig?: Partial<DirtyRectConfig>;
+}
+
+/**
  * 重绘管理器
  * 负责各种重绘场景的管理，提高代码可维护性
  * 
@@ -27,6 +39,7 @@ export type DrawSelectToolUIFn = () => Promise<void>;
  * - 几何图形重绘
  * - 图层重绘
  * - 选择工具UI重绘
+ * - 脏矩形局部重绘（性能优化）
  */
 export class RedrawManager {
   // 显式声明成员（修复 erasableSyntaxOnly 错误）
@@ -38,6 +51,24 @@ export class RedrawManager {
   private drawAction?: DrawActionFn;
   private drawSelectToolUI?: DrawSelectToolUIFn;
   
+  /** 脏矩形管理器 */
+  private dirtyRectManager: DirtyRectManager;
+  /** 配置 */
+  private config: RedrawManagerConfig;
+  /** 上一帧的动作边界（用于脏矩形计算） */
+  private lastActionBounds: Map<string, Bounds> = new Map();
+  
+  /** 默认配置 */
+  private static readonly DEFAULT_CONFIG: RedrawManagerConfig = {
+    enableDirtyRect: true,
+    dirtyRectConfig: {
+      mergeThreshold: 30,
+      maxDirtyRects: 30,
+      padding: 4,
+      fullRedrawThreshold: 0.4
+    }
+  };
+  
   constructor(
     canvasEngine: CanvasEngine,
     historyManager: HistoryManager,
@@ -45,7 +76,8 @@ export class RedrawManager {
     virtualLayerManager?: VirtualLayerManager,
     cacheManager?: CacheManager,
     drawAction?: DrawActionFn,
-    drawSelectToolUI?: DrawSelectToolUIFn
+    drawSelectToolUI?: DrawSelectToolUIFn,
+    config?: Partial<RedrawManagerConfig>
   ) {
     this.canvasEngine = canvasEngine;
     this.historyManager = historyManager;
@@ -54,6 +86,17 @@ export class RedrawManager {
     this.cacheManager = cacheManager;
     this.drawAction = drawAction;
     this.drawSelectToolUI = drawSelectToolUI;
+    
+    // 合并配置
+    this.config = { ...RedrawManager.DEFAULT_CONFIG, ...config };
+    
+    // 初始化脏矩形管理器
+    const canvas = this.canvasEngine.getCanvas();
+    this.dirtyRectManager = new DirtyRectManager(
+      canvas.width,
+      canvas.height,
+      this.config.dirtyRectConfig
+    );
   }
   
   /**
@@ -454,5 +497,266 @@ export class RedrawManager {
       
       ctx.globalAlpha = originalGlobalAlpha;
     }
+  }
+  
+  // ============================================
+  // 脏矩形优化相关方法
+  // ============================================
+  
+  /**
+   * 标记动作为脏（需要重绘）
+   * @param action 发生变化的动作
+   */
+  markActionDirty(action: DrawAction): void {
+    if (!this.config.enableDirtyRect) return;
+    
+    const bounds = this.calculateActionBounds(action);
+    if (bounds) {
+      // 标记旧位置和新位置都为脏
+      const oldBounds = this.lastActionBounds.get(action.id);
+      if (oldBounds) {
+        this.dirtyRectManager.markDirtyFromMove(oldBounds, bounds);
+      } else {
+        this.dirtyRectManager.markDirty(bounds);
+      }
+      
+      // 更新边界缓存
+      this.lastActionBounds.set(action.id, bounds);
+    }
+  }
+  
+  /**
+   * 标记多个动作为脏
+   * @param actions 发生变化的动作列表
+   */
+  markActionsDirty(actions: DrawAction[]): void {
+    for (const action of actions) {
+      this.markActionDirty(action);
+    }
+  }
+  
+  /**
+   * 标记区域为脏
+   * @param bounds 脏区域
+   */
+  markBoundsDirty(bounds: Bounds): void {
+    if (!this.config.enableDirtyRect) return;
+    this.dirtyRectManager.markDirty(bounds);
+  }
+  
+  /**
+   * 强制全量重绘
+   */
+  markFullRedraw(): void {
+    this.dirtyRectManager.markFullRedraw();
+  }
+  
+  /**
+   * 清除脏标记
+   */
+  clearDirtyRects(): void {
+    this.dirtyRectManager.clear();
+  }
+  
+  /**
+   * 检查是否有脏区域需要重绘
+   */
+  hasDirtyRects(): boolean {
+    return this.dirtyRectManager.hasDirtyRects();
+  }
+  
+  /**
+   * 获取脏矩形统计信息
+   */
+  getDirtyRectStats() {
+    return this.dirtyRectManager.getStats();
+  }
+  
+  /**
+   * 使用脏矩形进行局部重绘
+   * @param currentAction 当前正在绘制的动作
+   */
+  async redrawDirty(currentAction?: DrawAction | null): Promise<void> {
+    if (!this.config.enableDirtyRect || !this.hasDirtyRects()) {
+      return;
+    }
+    
+    // 如果需要全量重绘，直接调用 redrawAll
+    if (this.dirtyRectManager.needsFullRedraw()) {
+      logger.debug('脏区域过大，切换到全量重绘');
+      await this.redrawAll(currentAction);
+      this.clearDirtyRects();
+      return;
+    }
+    
+    return SafeExecutor.executeAsync(async () => {
+      const canvas = this.canvasEngine.getCanvas();
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('无法获取Canvas上下文');
+      }
+      
+      const allActions = this.historyManager.getAllActions();
+      
+      // 使用脏矩形进行局部重绘
+      await this.dirtyRectManager.clipAndRedraw(ctx, async (ctx, clipRect) => {
+        // 在裁剪区域内重绘所有相关动作
+        await this.redrawActionsInRect(ctx, allActions, clipRect);
+        
+        // 如果有当前动作，也需要绘制
+        if (currentAction && currentAction.points.length > 0 && this.drawAction) {
+          const actionBounds = this.calculateActionBounds(currentAction);
+          if (actionBounds && this.rectsIntersect(actionBounds, clipRect)) {
+            await this.drawAction(ctx, currentAction);
+          }
+        }
+      });
+      
+      // 如果是选择工具，绘制选择框和锚点
+      if (this.toolManager.getCurrentTool() === 'select' && this.drawSelectToolUI) {
+        await this.drawSelectToolUI();
+      }
+      
+      const stats = this.getDirtyRectStats();
+      logger.debug('脏矩形局部重绘完成', {
+        dirtyRectCount: stats.mergedRectCount,
+        dirtyRatio: `${(stats.dirtyRatio * 100).toFixed(1)}%`,
+        totalActions: allActions.length
+      });
+      
+      // 清除脏标记
+      this.clearDirtyRects();
+    }, undefined, '脏矩形重绘失败');
+  }
+  
+  /**
+   * 在指定矩形区域内重绘动作
+   */
+  private async redrawActionsInRect(
+    ctx: CanvasRenderingContext2D,
+    allActions: DrawAction[],
+    clipRect: Bounds
+  ): Promise<void> {
+    if (!this.drawAction) return;
+    
+    // 筛选与裁剪区域相交的动作
+    const relevantActions = allActions.filter(action => {
+      const bounds = this.calculateActionBounds(action);
+      return bounds && this.rectsIntersect(bounds, clipRect);
+    });
+    
+    // 按虚拟图层分组绘制
+    if (this.virtualLayerManager) {
+      const layers = this.virtualLayerManager.getAllVirtualLayers();
+      const actionMap = new Map<string, DrawAction>();
+      for (const action of relevantActions) {
+        actionMap.set(action.id, action);
+      }
+      
+      for (const layer of layers) {
+        if (!layer.visible || layer.locked) continue;
+        
+        const originalGlobalAlpha = ctx.globalAlpha;
+        ctx.globalAlpha = layer.opacity;
+        
+        for (const actionId of layer.actionIds) {
+          const action = actionMap.get(actionId);
+          if (action) {
+            await this.drawAction(ctx, action);
+          }
+        }
+        
+        ctx.globalAlpha = originalGlobalAlpha;
+      }
+    } else {
+      // 兼容模式：直接绘制
+      for (const action of relevantActions) {
+        await this.drawAction(ctx, action);
+      }
+    }
+  }
+  
+  /**
+   * 计算动作的边界框
+   */
+  private calculateActionBounds(action: DrawAction): Bounds | null {
+    if (!action.points || action.points.length === 0) {
+      return null;
+    }
+    
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    
+    for (const point of action.points) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+    
+    // 扩展线宽
+    const lineWidth = action.context?.lineWidth ?? 2;
+    const halfWidth = lineWidth / 2;
+    
+    return {
+      x: minX - halfWidth,
+      y: minY - halfWidth,
+      width: maxX - minX + lineWidth,
+      height: maxY - minY + lineWidth
+    };
+  }
+  
+  /**
+   * 检查两个矩形是否相交
+   */
+  private rectsIntersect(a: Bounds, b: Bounds): boolean {
+    return !(
+      a.x + a.width < b.x ||
+      b.x + b.width < a.x ||
+      a.y + a.height < b.y ||
+      b.y + b.height < a.y
+    );
+  }
+  
+  /**
+   * 更新画布尺寸
+   */
+  updateCanvasSize(width: number, height: number): void {
+    this.dirtyRectManager.updateCanvasSize(width, height);
+    // 尺寸变化，清除边界缓存
+    this.lastActionBounds.clear();
+  }
+  
+  /**
+   * 更新配置
+   */
+  updateConfig(config: Partial<RedrawManagerConfig>): void {
+    this.config = { ...this.config, ...config };
+    if (config.dirtyRectConfig) {
+      this.dirtyRectManager.updateConfig(config.dirtyRectConfig);
+    }
+  }
+  
+  /**
+   * 获取配置
+   */
+  getConfig(): RedrawManagerConfig {
+    return { ...this.config };
+  }
+  
+  /**
+   * 清除动作边界缓存
+   */
+  clearBoundsCache(): void {
+    this.lastActionBounds.clear();
+  }
+  
+  /**
+   * 移除动作边界缓存
+   */
+  removeActionBounds(actionId: string): void {
+    this.lastActionBounds.delete(actionId);
   }
 }

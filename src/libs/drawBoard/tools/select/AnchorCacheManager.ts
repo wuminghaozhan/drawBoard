@@ -7,7 +7,7 @@
 
 import type { AnchorPoint } from '../anchor/AnchorTypes';
 import type { DrawAction } from '../DrawTool';
-import { logger } from '../../utils/Logger';
+import { logger } from '../../infrastructure/logging/Logger';
 
 /**
  * 锚点缓存数据结构

@@ -1,5 +1,5 @@
 import type { ShortcutManager } from '../shortcuts/ShortcutManager';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 /**
  * 快捷键配置接口

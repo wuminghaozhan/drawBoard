@@ -44,18 +44,67 @@ docs/
 
 ---
 
+## 🏗️ 架构亮点 (v4.0)
+
+### 六层架构
+```
+UI层 → 应用层 → 业务逻辑层 → 核心服务层 → 基础设施层 → 渲染引擎层
+```
+
+### 新增特性
+- **EventBus 事件总线** - 类型安全的组件间通信
+- **脏矩形算法** - 拖拽性能提升 50-80%
+- **统一缓存工厂** - CacheFactory 场景化创建
+- **SelectTool 模块化** - 11 个专注子模块
+- **DrawingHandler 子模块** - 离屏缓存、动作渲染、脏矩形处理
+
+### 性能优化
+- 多级缓存（离屏 Canvas、虚拟图层、LRU、锚点）
+- 空间索引（四叉树）加速点选/框选
+- 智能事件节流（鼠标 16ms、触摸 8ms）
+- 脏矩形局部重绘
+
+---
+
 ## 📈 项目统计
 
 | 指标 | 数值 |
 |------|------|
-| 库代码行数 | ~30,000 行 |
-| TypeScript 文件 | 81 个 |
-| 模块数 | 16 个目录 |
+| TypeScript 文件 | 104 个 |
+| 代码行数 | ~35,000 行 |
+| 测试用例 | 394 个 |
+| 测试套件 | 23 个 |
+| 模块目录 | 18 个 |
 | 工具类型 | 10+ 种 |
 | 编译错误 | 0 |
 | Linter 错误 | 0 |
 
 ---
 
-**文档版本**: 3.0  
+## 🔧 核心模块
+
+| 模块 | 职责 | 行数 |
+|------|------|------|
+| `DrawBoard.ts` | 主类门面 | ~1,880 |
+| `CanvasEngine.ts` | 多层 Canvas 引擎 | ~1,336 |
+| `VirtualLayerManager.ts` | 虚拟图层管理 | ~1,794 |
+| `SelectTool.ts` | 选择工具 | ~2,480 |
+| `DrawingHandler.ts` | 绘制处理 | ~2,250 |
+
+---
+
+## 📦 基础设施层
+
+```
+infrastructure/
+├── cache/          # 缓存系统 (CacheFactory, LRUCache)
+├── error/          # 错误处理 (ErrorHandler, SafeExecutor)
+├── events/         # 事件系统 (EventBus, EventManager)
+├── logging/        # 日志系统 (Logger)
+└── performance/    # 性能工具 (DirtyRectManager, SpatialIndex)
+```
+
+---
+
+**文档版本**: 4.0  
 **最后更新**: 2024-12

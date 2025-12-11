@@ -1,7 +1,7 @@
 import { CanvasEngine } from './CanvasEngine';
 import { ToolManager } from '../tools/ToolManager';
 import { HistoryManager } from '../history/HistoryManager';
-import { EventManager } from '../events/EventManager';
+import { EventManager } from '../infrastructure/events/EventManager';
 import { ShortcutManager } from '../shortcuts/ShortcutManager';
 import { ExportManager } from '../utils/ExportManager';
 import { SelectionManager } from './SelectionManager';
@@ -13,7 +13,7 @@ import { CursorHandler } from '../handlers/CursorHandler';
 import { StateHandler } from '../handlers/StateHandler';
 import { LightweightResourceManager } from '../utils/LightweightResourceManager';
 import type { DrawBoardConfig } from '../DrawBoard';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 /**
  * 核心组件接口

@@ -1,7 +1,7 @@
 import { ToolFactory } from './ToolFactory';
 import { DrawTool } from './DrawTool';
 import type { ToolType } from './DrawTool';
-import { logger } from '../utils/Logger';
+import { logger } from '../infrastructure/logging/Logger';
 
 /**
  * 工具管理器 - 管理当前工具状态和工具切换
