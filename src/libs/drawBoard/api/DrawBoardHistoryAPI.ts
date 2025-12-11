@@ -1,6 +1,8 @@
 import type { DrawAction } from '../tools/DrawTool';
 import type { HistoryManager } from '../history/HistoryManager';
 import type { DrawingHandler } from '../handlers/DrawingHandler';
+import type { ToolManager } from '../tools/ToolManager';
+import { ToolTypeGuards } from '../tools/ToolInterfaces';
 import { logger } from '../utils/Logger';
 
 /**
@@ -16,13 +18,19 @@ import { logger } from '../utils/Logger';
 export class DrawBoardHistoryAPI {
   private historyManager: HistoryManager;
   private drawingHandler: DrawingHandler;
+  private toolManager: ToolManager;
+  private syncLayerDataToSelectTool: () => void;
 
   constructor(
     historyManager: HistoryManager,
-    drawingHandler: DrawingHandler
+    drawingHandler: DrawingHandler,
+    toolManager: ToolManager,
+    syncLayerDataToSelectTool: () => void
   ) {
     this.historyManager = historyManager;
     this.drawingHandler = drawingHandler;
+    this.toolManager = toolManager;
+    this.syncLayerDataToSelectTool = syncLayerDataToSelectTool;
   }
 
   /**
@@ -40,8 +48,15 @@ export class DrawBoardHistoryAPI {
       const action = this.historyManager.undo();
       
       if (action) {
+        // 【修复】清除选择状态（撤销可能移除了被选中的action）
+        this.clearSelectionIfNeeded();
+        
         // 标记离屏缓存过期（历史记录已变化）
         this.drawingHandler.invalidateOffscreenCache();
+        
+        // 同步图层数据到选择工具
+        this.syncLayerDataToSelectTool();
+        
         await this.drawingHandler.forceRedraw();
         logger.debug('撤销成功', { actionId: action.id, actionType: action.type });
         return true;
@@ -70,8 +85,15 @@ export class DrawBoardHistoryAPI {
       const action = this.historyManager.redo();
       
       if (action) {
+        // 【修复】清除选择状态（重做后图形状态已变化）
+        this.clearSelectionIfNeeded();
+        
         // 标记离屏缓存过期（历史记录已变化）
         this.drawingHandler.invalidateOffscreenCache();
+        
+        // 同步图层数据到选择工具
+        this.syncLayerDataToSelectTool();
+        
         await this.drawingHandler.forceRedraw();
         logger.debug('重做成功', { actionId: action.id, actionType: action.type });
         return true;
@@ -82,6 +104,17 @@ export class DrawBoardHistoryAPI {
     } catch (error) {
       logger.error('重做操作失败', { error });
       return false;
+    }
+  }
+  
+  /**
+   * 清除选择状态（如果当前工具是选择工具）
+   */
+  private clearSelectionIfNeeded(): void {
+    const currentTool = this.toolManager.getCurrentToolInstance();
+    if (currentTool && ToolTypeGuards.isSelectTool(currentTool)) {
+      currentTool.clearSelection();
+      logger.debug('DrawBoardHistoryAPI: 清除选择状态');
     }
   }
 

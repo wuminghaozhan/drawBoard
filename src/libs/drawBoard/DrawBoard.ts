@@ -463,7 +463,9 @@ export class DrawBoard {
     // 初始化历史记录 API
     this.historyAPI = new DrawBoardHistoryAPI(
       this.historyManager,
-      this.drawingHandler
+      this.drawingHandler,
+      this.toolManager,
+      () => this.syncLayerDataToSelectTool()
     );
 
     logger.debug('API 模块初始化完成');

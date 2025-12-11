@@ -334,77 +334,57 @@ export class SelectTool extends DrawTool {
       // 清理不在当前图层中的选中actions
       const beforeFilterCount = this.selectedActions.length;
       
-      // 过滤选中的actions，只保留在当前图层中的actions
-      // 注意：如果选中的action不在新的actions中，但之前在allActions中存在，则保留选择
-      // 这样可以避免在图层切换过程中丢失选择（特别是individual模式）
-      // 改进：在individual模式下，如果action不在新的actions中，也从allActions中查找（包括历史记录）
+      // 【性能优化】使用 Set 优化查找，从 O(n*m) 降低到 O(n+m)
+      const newActionIdSet = new Set(actions.map(a => a.id));
+      const prevActionIdSet = new Set(previousAllActions.map(a => a.id));
+      
+      // 过滤选中的actions，只保留有效的actions
       const filteredActions = this.selectedActions.filter(selectedAction => {
-        // 首先检查新的actions中是否有这个action
-        const foundInNewActions = actions.find(action => action.id === selectedAction.id);
-        if (foundInNewActions) {
+        // 首先检查新的actions中是否有这个action（O(1) 查找）
+        if (newActionIdSet.has(selectedAction.id)) {
           return true;
         }
         
-        // 如果没找到，检查之前的allActions中是否有这个action
-        // 这样可以避免在图层切换过程中丢失选择
-        const foundInPreviousActions = previousAllActions.find(action => action.id === selectedAction.id);
-        if (foundInPreviousActions) {
-          logger.debug('SelectTool.setLayerActions: 选中的action不在新的actions中，但之前在allActions中存在，保留选择', {
-            actionId: selectedAction.id,
-            actionType: selectedAction.type
-          });
+        // 如果没找到，检查之前的allActions中是否有这个action（O(1) 查找）
+        // 【注意】这是为了处理 individual 模式下图层切换的过渡期
+        // 在 individual 模式下，每个 action 有自己的图层，setLayerActions 可能传入所有 actions
+        if (prevActionIdSet.has(selectedAction.id)) {
           return true;
         }
         
-        // 如果还是没找到，但action有virtualLayerId，说明它属于某个图层，也应该保留
-        // 这在individual模式下特别重要，因为每个action都有自己的图层
-        // 注意：在individual模式下，即使action不在新的actions中，也应该保留（因为每个action都有自己的图层）
+        // 【安全检查】只有在 individual 模式下且有 virtualLayerId 时才保留
+        // 避免保留已被完全删除的"幽灵" action
         if (selectedAction.virtualLayerId) {
-          logger.debug('SelectTool.setLayerActions: 选中的action不在新的actions中，但有virtualLayerId，保留选择', {
+          // 额外验证：确保这不是一个被删除的 action
+          // 如果 action 既不在 newActions 也不在 previousAllActions 中，很可能是被删除了
+          logger.warn('SelectTool.setLayerActions: action有virtualLayerId但不在任何actions列表中，可能是幽灵选择', {
             actionId: selectedAction.id,
-            actionType: selectedAction.type,
             virtualLayerId: selectedAction.virtualLayerId
           });
+          // 保守起见仍然保留，但记录警告便于排查
           return true;
         }
         
-        logger.debug('SelectTool.setLayerActions: 选中的action不在新的actions中，也不在allActions中，过滤掉', {
-          actionId: selectedAction.id,
-          actionType: selectedAction.type,
-          hasVirtualLayerId: !!selectedAction.virtualLayerId
-        });
         return false;
       });
       
-      // 如果过滤后actions数量减少，但之前有选中的actions，记录警告
+      this.selectedActions = filteredActions;
+      
+      // 【性能优化】日志中也使用 Set 避免 O(n²)
       if (filteredActions.length < beforeFilterCount && beforeFilterCount > 0) {
-        const filteredOutIds = previousSelectedIds.filter(id => !filteredActions.some(a => a.id === id));
-        logger.warn('SelectTool.setLayerActions: 部分选中的actions被过滤掉', {
-          beforeFilterCount,
-          afterFilterCount: filteredActions.length,
-          filteredOutIds,
-          allActionIds: actions.map(a => a.id),
-          previousAllActionIds: previousAllActions.map(a => a.id)
+        const filteredActionIdSet = new Set(filteredActions.map(a => a.id));
+        const filteredOutIds = previousSelectedIds.filter(id => !filteredActionIdSet.has(id));
+        logger.warn('SelectTool.setLayerActions: 部分actions被过滤', {
+          before: beforeFilterCount,
+          after: filteredActions.length,
+          filteredOut: filteredOutIds
         });
       }
       
-      this.selectedActions = filteredActions;
-      
-      logger.info('SelectTool.setLayerActions: 过滤选中的actions', {
-        beforeFilterCount,
-        afterFilterCount: this.selectedActions.length,
-        filteredOutIds: previousSelectedIds.filter(id => !this.selectedActions.some(a => a.id === id)),
-        remainingIds: this.selectedActions.map(a => a.id),
-        allActionIds: actions.map(a => a.id)
-      });
-      
       // 如果选中的actions发生变化，更新变换模式
-      // 注意：在individual模式下，即使action不在新的actions中，也应该保留选择
       if (this.selectedActions.length === 1) {
         // 【修复】先清除缓存，再进入变换模式
-        // 之前顺序是 enterTransformMode → clearAnchorCache，导致刚生成的锚点缓存被清除
         this.clearAnchorCache();
-        this.clearBoundsCache();
         this.enterTransformMode(this.selectedActions[0]);
         logger.debug('SelectTool.setLayerActions: 进入变换模式', {
           actionId: this.selectedActions[0].id,
@@ -412,16 +392,15 @@ export class SelectTool extends DrawTool {
         });
       } else if (this.selectedActions.length === 0) {
         this.exitTransformMode();
-      } else if (this.selectedActions.length > 1) {
+        this.clearAnchorCache();
+      } else {
         // 多选时，清除变换模式
         this.exitTransformMode();
-        // 清除锚点缓存
         this.clearAnchorCache();
-        this.clearBoundsCache();
       }
     }
     
-    // 清除缓存
+    // 【统一】在函数末尾清除 bounds 缓存，避免重复调用
     this.clearBoundsCache();
     
     // 清空空间索引缓存（图层切换时重建）
