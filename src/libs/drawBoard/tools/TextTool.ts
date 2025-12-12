@@ -1,6 +1,8 @@
 import { DrawTool } from './DrawTool';
 import type { DrawAction } from './DrawTool';
 import { logger } from '../infrastructure/logging/Logger';
+import { TextEditingManager, type TextCommitEvent, type TextChangeEvent } from './text/TextEditingManager';
+import type { Point } from '../core/CanvasEngine';
 
 export interface TextAction extends DrawAction {
   text?: string;
@@ -8,7 +10,17 @@ export interface TextAction extends DrawAction {
   fontFamily?: string;
   textAlign?: CanvasTextAlign;
   textBaseline?: CanvasTextBaseline;
+  /** 文本框宽度（像素），如果设置则启用自动换行 */
+  width?: number;
+  /** 文本框高度（像素），可选 */
+  height?: number;
+  /** 行高倍数，默认 1.2 */
+  lineHeight?: number;
 }
+
+/** 文字工具事件类型 */
+export type TextToolEventType = 'textCreated' | 'textUpdated' | 'editingStarted' | 'editingEnded';
+export type TextToolEventHandler = (event: { type: TextToolEventType; action?: TextAction; actionId?: string | null }) => void;
 
 export class TextTool extends DrawTool {
   // 默认配置
@@ -21,8 +33,200 @@ export class TextTool extends DrawTool {
     maxFontSize: 72
   };
 
+  // 编辑管理器
+  private editingManager: TextEditingManager | null = null;
+  
+  // 当前预览的文字（编辑中实时显示）
+  private previewText: string = '';
+  private previewPosition: Point | null = null;
+  
+  // 事件处理器
+  private eventHandlers: Set<TextToolEventHandler> = new Set();
+  
+  // 取消订阅函数
+  private unsubscribers: Array<() => void> = [];
+
   constructor() {
     super('文字', 'text');
+  }
+
+  /**
+   * 初始化编辑管理器
+   * 如果已经初始化，则跳过（避免重复创建导致输入框闪烁）
+   */
+  public initEditingManager(container: HTMLElement, canvas: HTMLCanvasElement): void {
+    // 如果已经初始化，跳过
+    if (this.editingManager) {
+      logger.debug('TextTool.initEditingManager: 编辑管理器已存在，跳过初始化');
+      return;
+    }
+    
+    logger.info('TextTool.initEditingManager: 开始初始化', {
+      hasContainer: !!container,
+      hasCanvas: !!canvas,
+      containerTag: container?.tagName,
+      canvasSize: canvas ? { width: canvas.width, height: canvas.height } : null
+    });
+    
+    this.editingManager = new TextEditingManager(container, canvas, {
+      defaultFontSize: TextTool.DEFAULT_CONFIG.fontSize,
+      defaultFontFamily: TextTool.DEFAULT_CONFIG.fontFamily
+    });
+    
+    // 订阅编辑事件
+    this.unsubscribers.push(
+      this.editingManager.on('textCommit', this.handleTextCommit.bind(this))
+    );
+    this.unsubscribers.push(
+      this.editingManager.on('textChange', this.handleTextChange.bind(this))
+    );
+    this.unsubscribers.push(
+      this.editingManager.on('editStart', this.handleEditStart.bind(this))
+    );
+    this.unsubscribers.push(
+      this.editingManager.on('editEnd', this.handleEditEnd.bind(this))
+    );
+    
+    logger.info('TextTool 编辑管理器已初始化');
+  }
+
+  /**
+   * 处理文字提交
+   */
+  private handleTextCommit(event: TextCommitEvent): void {
+    // 清除预览
+    this.previewText = '';
+    this.previewPosition = null;
+    
+    // 发出事件
+    const eventType: TextToolEventType = event.isNew ? 'textCreated' : 'textUpdated';
+    this.emit({ type: eventType, action: this.createTextAction(event) });
+  }
+  
+  /**
+   * 处理文字变化（实时预览）
+   */
+  private handleTextChange(event: TextChangeEvent): void {
+    this.previewText = event.text;
+    this.previewPosition = event.position;
+    
+    // 触发重绘（需要外部监听）
+    this.emit({ type: 'editingStarted' });
+  }
+  
+  /**
+   * 处理编辑开始
+   */
+  private handleEditStart(position: Point): void {
+    this.previewPosition = position;
+    this.emit({ type: 'editingStarted' });
+  }
+  
+  /**
+   * 处理编辑结束
+   */
+  private handleEditEnd(data?: { actionId: string | null }): void {
+    this.previewText = '';
+    this.previewPosition = null;
+    // 传递 actionId，用于区分是哪个编辑会话结束
+    this.emit({ type: 'editingEnded', actionId: data?.actionId });
+  }
+  
+  /**
+   * 创建文字 Action
+   */
+  private createTextAction(event: TextCommitEvent): TextAction {
+    return {
+      id: event.actionId || `text-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: 'text',
+      points: [event.position],
+      text: event.text,
+      fontSize: event.fontSize,
+      fontFamily: event.fontFamily,
+      context: {
+        fillStyle: event.color,
+        strokeStyle: event.color,
+        lineWidth: 1
+      },
+      timestamp: Date.now()
+    };
+  }
+
+  /**
+   * 开始编辑（点击画布时调用）
+   */
+  public startEditing(position: Point, options?: {
+    fontSize?: number;
+    fontFamily?: string;
+    color?: string;
+  }): void {
+    logger.info('TextTool.startEditing: 被调用', { 
+      position, 
+      options, 
+      hasEditingManager: !!this.editingManager 
+    });
+    
+    if (!this.editingManager) {
+      logger.warn('TextTool: 编辑管理器未初始化，无法开始编辑');
+      return;
+    }
+    
+    this.editingManager.startEditing(position, options);
+  }
+  
+  /**
+   * 编辑已有文字
+   */
+  public editExisting(action: TextAction, canvasBounds: DOMRect): void {
+    if (!this.editingManager) {
+      logger.warn('TextTool: 编辑管理器未初始化');
+      return;
+    }
+    
+    this.editingManager.editExisting(action, canvasBounds);
+  }
+  
+  /**
+   * 完成编辑
+   */
+  public finishEditing(): void {
+    this.editingManager?.finishEditing();
+  }
+  
+  /**
+   * 取消编辑
+   */
+  public cancelEditing(): void {
+    this.editingManager?.cancelEditing();
+  }
+  
+  /**
+   * 选中当前光标位置的单词
+   */
+  public selectWordAtCursor(): void {
+    this.editingManager?.selectWordAtCursor();
+  }
+  
+  /**
+   * 选中所有文本
+   */
+  public selectAll(): void {
+    this.editingManager?.selectAll();
+  }
+  
+  /**
+   * 是否正在编辑
+   */
+  public isEditing(): boolean {
+    return this.editingManager?.isEditing() ?? false;
+  }
+  
+  /**
+   * 获取正在编辑的 action ID
+   * 用于在绘制时跳过该 action（避免双层显示）
+   */
+  public getEditingActionId(): string | null {
+    return this.editingManager?.getState().actionId ?? null;
   }
 
   /**
@@ -58,9 +262,9 @@ export class TextTool extends DrawTool {
    */
   private validateText(text?: string): string {
     if (!text || text.trim().length === 0) {
-      return '文字';
+      return '';
     }
-    return text.trim();
+    return text;
   }
 
   public draw(ctx: CanvasRenderingContext2D, action: TextAction): void {
@@ -69,12 +273,15 @@ export class TextTool extends DrawTool {
         return;
       }
 
+      const text = this.validateText(action.text);
+      if (!text) {
+        return;
+      }
+
       const originalContext = this.saveContext(ctx);
       this.setContext(ctx, action.context);
 
       const point = action.points[0];
-      const text = this.validateText(action.text);
-      
       const { fontSize, fontFamily, textAlign, textBaseline } = this.getTextConfig(action);
       
       // 设置字体属性
@@ -82,13 +289,17 @@ export class TextTool extends DrawTool {
       ctx.textAlign = textAlign;
       ctx.textBaseline = textBaseline;
       
-      // 绘制文字
-      ctx.fillText(text, point.x, point.y);
+      // 如果设置了宽度，使用多行绘制（文本框模式）
+      if (action.width && action.width > 0) {
+        this.drawWrappedText(ctx, text, point.x, point.y, action.width, action);
+      } else {
+        // 单行绘制
+        ctx.fillText(text, point.x, point.y);
+      }
 
       this.restoreContext(ctx, originalContext);
     } catch (error) {
       logger.error('TextTool绘制失败:', error);
-      // 尝试恢复上下文状态，使用默认值
       this.restoreContext(ctx, {
         font: TextTool.DEFAULT_CONFIG.fontFamily,
         textAlign: TextTool.DEFAULT_CONFIG.textAlign,
@@ -100,17 +311,156 @@ export class TextTool extends DrawTool {
       });
     }
   }
+  
+  /**
+   * 绘制自动换行的文本（文本框模式）
+   */
+  private drawWrappedText(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    x: number,
+    y: number,
+    maxWidth: number,
+    action: TextAction
+  ): void {
+    const fontSize = this.calculateFontSize(action);
+    const lineHeightMultiplier = action.lineHeight ?? 1.2;
+    const lineHeight = fontSize * lineHeightMultiplier;
+    
+    // 按换行符分割
+    const paragraphs = text.split('\n');
+    let currentY = y;
+    
+    for (const paragraph of paragraphs) {
+      if (paragraph.length === 0) {
+        // 空行
+        currentY += lineHeight;
+        continue;
+      }
+      
+      // 对每个段落进行自动换行
+      const lines = this.wrapTextToLines(ctx, paragraph, maxWidth);
+      
+      for (const line of lines) {
+        ctx.fillText(line, x, currentY);
+        currentY += lineHeight;
+      }
+    }
+  }
+  
+  /**
+   * 将文本按宽度分割成多行
+   */
+  private wrapTextToLines(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    maxWidth: number
+  ): string[] {
+    const words = this.splitTextIntoWords(text);
+    const lines: string[] = [];
+    let currentLine = '';
+    
+    for (const word of words) {
+      const testLine = currentLine ? `${currentLine}${word}` : word;
+      const metrics = ctx.measureText(testLine);
+      
+      if (metrics.width > maxWidth && currentLine) {
+        // 当前行已满，保存并开始新行
+        lines.push(currentLine.trim());
+        currentLine = word;
+      } else {
+        currentLine = testLine;
+      }
+    }
+    
+    // 添加最后一行
+    if (currentLine) {
+      lines.push(currentLine.trim());
+    }
+    
+    return lines.length > 0 ? lines : [''];
+  }
+  
+  /**
+   * 将文本分割成单词（支持中英文混合）
+   */
+  private splitTextIntoWords(text: string): string[] {
+    const words: string[] = [];
+    let currentWord = '';
+    
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const charCode = char.charCodeAt(0);
+      
+      // 判断是否为 CJK 字符（中日韩）
+      const isCJK = (charCode >= 0x4E00 && charCode <= 0x9FFF) ||  // 中文
+                    (charCode >= 0x3040 && charCode <= 0x30FF) ||  // 日文
+                    (charCode >= 0xAC00 && charCode <= 0xD7AF);    // 韩文
+      
+      if (isCJK) {
+        // CJK 字符单独成词
+        if (currentWord) {
+          words.push(currentWord);
+          currentWord = '';
+        }
+        words.push(char);
+      } else if (char === ' ') {
+        // 空格：结束当前单词
+        if (currentWord) {
+          words.push(currentWord + ' ');
+          currentWord = '';
+        } else {
+          words.push(' ');
+        }
+      } else {
+        // 英文字符：累积成单词
+        currentWord += char;
+      }
+    }
+    
+    // 添加最后一个单词
+    if (currentWord) {
+      words.push(currentWord);
+    }
+    
+    return words;
+  }
+  
+  /**
+   * 绘制预览文字（编辑时实时显示）
+   */
+  public drawPreview(ctx: CanvasRenderingContext2D): void {
+    if (!this.previewText || !this.previewPosition) {
+      return;
+    }
+    
+    const state = this.editingManager?.getState();
+    if (!state) return;
+    
+    ctx.save();
+    
+    ctx.font = `${state.fontSize}px ${state.fontFamily}`;
+    ctx.fillStyle = state.color;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.globalAlpha = 0.5; // 半透明预览
+    
+    ctx.fillText(this.previewText, this.previewPosition.x, this.previewPosition.y);
+    
+    ctx.restore();
+  }
 
   public getActionType(): string {
     return 'text';
   }
 
-  // 测量文字尺寸
+  /**
+   * 测量文字尺寸
+   */
   public measureText(ctx: CanvasRenderingContext2D, text: string, fontSize: number = 16, fontFamily: string = 'Arial'): TextMetrics {
     try {
-      // 参数验证
       if (!text || text.trim().length === 0) {
-        text = '文字';
+        text = ' ';
       }
       
       fontSize = Math.max(TextTool.DEFAULT_CONFIG.minFontSize, 
@@ -123,27 +473,33 @@ export class TextTool extends DrawTool {
       return metrics;
     } catch (error) {
       logger.error('TextTool测量文字失败:', error);
-      // 返回默认的TextMetrics对象
-      return {
-        width: 0,
-        actualBoundingBoxAscent: 0,
-        actualBoundingBoxDescent: 0,
-        actualBoundingBoxLeft: 0,
-        actualBoundingBoxRight: 0,
-        fontBoundingBoxAscent: 0,
-        fontBoundingBoxDescent: 0,
-        fontBoundingBoxLeft: 0,
-        fontBoundingBoxRight: 0,
-        alphabeticBaseline: 0,
-        emHeightAscent: 0,
-        emHeightDescent: 0,
-        hangingBaseline: 0,
-        ideographicBaseline: 0
-      } as TextMetrics;
+      return this.getEmptyTextMetrics();
     }
   }
+  
+  /**
+   * 获取空的 TextMetrics
+   */
+  private getEmptyTextMetrics(): TextMetrics {
+    return {
+      width: 0,
+      actualBoundingBoxAscent: 0,
+      actualBoundingBoxDescent: 0,
+      actualBoundingBoxLeft: 0,
+      actualBoundingBoxRight: 0,
+      fontBoundingBoxAscent: 0,
+      fontBoundingBoxDescent: 0,
+      emHeightAscent: 0,
+      emHeightDescent: 0,
+      alphabeticBaseline: 0,
+      hangingBaseline: 0,
+      ideographicBaseline: 0
+    } as TextMetrics;
+  }
 
-  // 获取文字边界框
+  /**
+   * 获取文字边界框
+   */
   public getTextBounds(ctx: CanvasRenderingContext2D, action: TextAction): { x: number, y: number, width: number, height: number } {
     try {
       if (action.points.length === 0) {
@@ -152,6 +508,11 @@ export class TextTool extends DrawTool {
 
       const point = action.points[0];
       const text = this.validateText(action.text);
+      
+      if (!text) {
+        return { x: point.x, y: point.y, width: 0, height: 0 };
+      }
+      
       const { fontSize, fontFamily, textAlign, textBaseline } = this.getTextConfig(action);
 
       const metrics = this.measureText(ctx, text, fontSize, fontFamily);
@@ -165,17 +526,19 @@ export class TextTool extends DrawTool {
       }
 
       let y = point.y;
+      const height = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent || fontSize * 1.2;
+      
       if (textBaseline === 'middle') {
-        y = point.y - metrics.actualBoundingBoxAscent / 2;
+        y = point.y - height / 2;
       } else if (textBaseline === 'bottom') {
-        y = point.y - metrics.actualBoundingBoxAscent;
+        y = point.y - height;
       }
 
       return {
         x,
         y,
         width: metrics.width,
-        height: metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent
+        height
       };
     } catch (error) {
       logger.error('TextTool计算边界框失败:', error);
@@ -183,8 +546,9 @@ export class TextTool extends DrawTool {
     }
   }
 
-  // 移除重复的上下文管理方法，使用基类的方法
-  // 注意：TextTool需要特殊处理字体相关属性，所以重写saveContext和restoreContext
+  /**
+   * 上下文保存（包含字体属性）
+   */
   protected saveContext(ctx: CanvasRenderingContext2D) {
     return {
       ...super.saveContext(ctx),
@@ -210,7 +574,6 @@ export class TextTool extends DrawTool {
     const metrics = this.measureText(ctx, text, fontSize, fontFamily);
     if (metrics.width <= maxWidth) return text;
     
-    // 二分查找合适的截断位置
     let start = 0;
     let end = text.length;
     let result = '';
@@ -236,16 +599,13 @@ export class TextTool extends DrawTool {
    */
   public async isFontAvailable(fontFamily: string): Promise<boolean> {
     try {
-      // 使用 FontFace API 检查字体可用性
-      if ('FontFace' in window) {
-        const font = new FontFace(fontFamily, `normal 16px ${fontFamily}`);
-        await font.load();
-        return true;
+      if ('fonts' in document) {
+        return document.fonts.check(`16px ${fontFamily}`);
       }
-      return true; // 如果不支持 FontFace API，假设字体可用
+      return true;
     } catch (error) {
-        logger.warn(`字体 ${fontFamily} 不可用:`, error);
-      return false;
+      logger.warn(`字体 ${fontFamily} 检查失败:`, error);
+      return true;
     }
   }
 
@@ -253,7 +613,7 @@ export class TextTool extends DrawTool {
    * 获取文字的行高
    */
   public getLineHeight(fontSize: number): number {
-    return fontSize * 1.2; // 标准行高比例
+    return fontSize * 1.2;
   }
 
   /**
@@ -294,4 +654,68 @@ export class TextTool extends DrawTool {
     
     return lines;
   }
-} 
+  
+  /**
+   * 订阅事件
+   */
+  public on(handler: TextToolEventHandler): () => void {
+    this.eventHandlers.add(handler);
+    return () => this.eventHandlers.delete(handler);
+  }
+  
+  /**
+   * 发出事件
+   */
+  private emit(event: { type: TextToolEventType; action?: TextAction }): void {
+    this.eventHandlers.forEach(handler => {
+      try {
+        handler(event);
+      } catch (error) {
+        logger.error('TextTool 事件处理器错误', error);
+      }
+    });
+  }
+  
+  /**
+   * 设置字体大小（编辑中）
+   */
+  public setFontSize(size: number): void {
+    this.editingManager?.setFontSize(size);
+  }
+  
+  /**
+   * 设置字体（编辑中）
+   */
+  public setFontFamily(family: string): void {
+    this.editingManager?.setFontFamily(family);
+  }
+  
+  /**
+   * 设置颜色（编辑中）
+   */
+  public setTextColor(color: string): void {
+    this.editingManager?.setColor(color);
+  }
+  
+  /**
+   * 销毁
+   */
+  public destroy(): void {
+    // 取消所有订阅
+    this.unsubscribers.forEach(unsub => unsub());
+    this.unsubscribers = [];
+    
+    // 销毁编辑管理器
+    this.editingManager?.destroy();
+    this.editingManager = null;
+    
+    // 清理事件处理器
+    this.eventHandlers.clear();
+    
+    // 清理状态
+    this.previewText = '';
+    this.previewPosition = null;
+    
+    logger.debug('TextTool 已销毁');
+  }
+}

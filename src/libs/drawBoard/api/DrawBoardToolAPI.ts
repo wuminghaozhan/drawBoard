@@ -367,5 +367,157 @@ export class DrawBoardToolAPI {
       return null;
     }
   }
+
+  // ============================================
+  // 文字工具相关方法
+  // ============================================
+
+  /**
+   * 初始化文字工具的编辑管理器
+   * @param container 容器元素
+   */
+  public async initializeTextToolEditing(container: HTMLElement): Promise<void> {
+    try {
+      logger.info('DrawBoardToolAPI.initializeTextToolEditing: 开始初始化', {
+        hasContainer: !!container,
+        containerTag: container?.tagName
+      });
+      
+      const textTool = await this.toolManager.getTool('text');
+      logger.debug('获取到 textTool', { 
+        hasTextTool: !!textTool, 
+        isTextTool: textTool ? ToolTypeGuards.isTextTool(textTool) : false 
+      });
+      
+      if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+        // 使用 getLayer 方法获取 interaction 层的 canvas
+        const interactionLayer = this.canvasEngine.getLayer('interaction');
+        const canvas = interactionLayer?.canvas || this.canvasEngine.getCanvas();
+        logger.debug('获取到 canvas', { 
+          hasCanvas: !!canvas,
+          layerName: interactionLayer ? 'interaction' : 'draw (fallback)',
+          canvasSize: canvas ? { width: canvas.width, height: canvas.height } : null
+        });
+        
+        textTool.initEditingManager(container, canvas);
+        logger.info('文字工具编辑管理器已初始化');
+      } else {
+        logger.warn('无法获取文字工具实例或不符合 TextTool 接口');
+      }
+    } catch (error) {
+      logger.error('初始化文字工具编辑管理器失败', { error });
+    }
+  }
+
+  /**
+   * 开始文字编辑（新建文字）
+   * @param position 文字位置
+   * @param options 文字选项
+   */
+  public async startTextEditing(position: { x: number; y: number }, options?: {
+    fontSize?: number;
+    fontFamily?: string;
+    color?: string;
+  }): Promise<void> {
+    try {
+      logger.info('DrawBoardToolAPI.startTextEditing: 开始文字编辑', { position, options });
+      
+      const textTool = await this.toolManager.getTool('text');
+      if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+        textTool.startEditing(position, options);
+        logger.debug('文字编辑已开始');
+      } else {
+        logger.warn('无法获取文字工具实例或不符合 TextTool 接口');
+      }
+    } catch (error) {
+      logger.error('开始文字编辑失败', { error });
+    }
+  }
+
+  /**
+   * 完成文字编辑
+   */
+  public async finishTextEditing(): Promise<void> {
+    try {
+      const textTool = await this.toolManager.getTool('text');
+      if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+        textTool.finishEditing();
+      }
+    } catch (error) {
+      logger.error('完成文字编辑失败', { error });
+    }
+  }
+
+  /**
+   * 取消文字编辑
+   */
+  public async cancelTextEditing(): Promise<void> {
+    try {
+      const textTool = await this.toolManager.getTool('text');
+      if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+        textTool.cancelEditing();
+      }
+    } catch (error) {
+      logger.error('取消文字编辑失败', { error });
+    }
+  }
+
+  /**
+   * 检查文字工具是否正在编辑
+   */
+  public async isTextEditing(): Promise<boolean> {
+    try {
+      const textTool = await this.toolManager.getTool('text');
+      if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+        return textTool.isEditing();
+      }
+      return false;
+    } catch (error) {
+      logger.error('检查文字编辑状态失败', { error });
+      return false;
+    }
+  }
+
+  /**
+   * 设置文字工具的字体大小
+   */
+  public async setTextFontSize(size: number): Promise<void> {
+    try {
+      const textTool = await this.toolManager.getTool('text');
+      if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+        textTool.setFontSize(size);
+      }
+    } catch (error) {
+      logger.error('设置文字字体大小失败', { error });
+    }
+  }
+
+  /**
+   * 设置文字工具的字体
+   */
+  public async setTextFontFamily(family: string): Promise<void> {
+    try {
+      const textTool = await this.toolManager.getTool('text');
+      if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+        textTool.setFontFamily(family);
+      }
+    } catch (error) {
+      logger.error('设置文字字体失败', { error });
+    }
+  }
+
+  /**
+   * 设置文字颜色
+   */
+  public async setTextColor(color: string): Promise<void> {
+    try {
+      const textTool = await this.toolManager.getTool('text');
+      if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+        textTool.setTextColor(color);
+      }
+    } catch (error) {
+      logger.error('设置文字颜色失败', { error });
+    }
+  }
 }
 

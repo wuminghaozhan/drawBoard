@@ -63,6 +63,9 @@ export class DrawingHandler {
   private cachedActions: Set<string> = new Set();
   private lastCachedActionCount: number = 0;
   
+  // 正在编辑的文本 action ID（绘制时跳过，避免双层显示）
+  private editingActionId: string | null = null;
+  
   // 性能优化：离屏Canvas缓存（用于几何图形重绘）
   private offscreenCanvas?: HTMLCanvasElement;
   private offscreenCtx?: CanvasRenderingContext2D;
@@ -1745,17 +1748,19 @@ export class DrawingHandler {
       ctx.globalAlpha = originalGlobalAlpha;
     }
     
-    // 优化：未分配的动作应该已经自动分配到默认图层，这里不再单独处理
-    // 如果仍有未分配的动作，说明是旧数据，需要根据模式处理
+    // 处理未分配的动作（新创建的文本等）
+    // 这些动作需要先分配到图层，然后立即绘制
     const unassignedActions = actions.filter(action => !action.virtualLayerId);
     if (unassignedActions.length > 0) {
-      logger.warn(`发现 ${unassignedActions.length} 个未分配的动作，将根据模式自动分配`);
+      logger.warn(`发现 ${unassignedActions.length} 个未分配的动作，将根据模式自动分配并绘制`);
       // 根据模式处理未分配的动作
       const mode = this.virtualLayerManager.getMode();
       if (mode === 'individual') {
         // individual模式：为每个动作创建新图层
         for (const action of unassignedActions) {
           this.virtualLayerManager.handleNewAction(action);
+          // 立即绘制该动作
+          await this.drawAction(ctx, action);
         }
       } else {
         // grouped模式：分配到默认图层
@@ -1764,6 +1769,10 @@ export class DrawingHandler {
           for (const action of unassignedActions) {
             this.virtualLayerManager.assignActionToLayer(action.id, defaultLayer.id);
             action.virtualLayerId = defaultLayer.id;
+            // 标记图层缓存为脏，确保下次重绘
+            this.virtualLayerManager.markLayerCacheDirty(defaultLayer.id);
+            // 立即绘制该动作
+            await this.drawAction(ctx, action);
           }
         }
       }
@@ -1775,6 +1784,12 @@ export class DrawingHandler {
    */
   private async drawAction(ctx: CanvasRenderingContext2D, action: DrawAction): Promise<void> {
     try {
+      // 跳过正在编辑的文本（避免双层显示：canvas 上的文本和编辑输入框同时显示）
+      if (this.editingActionId && action.id === this.editingActionId) {
+        logger.debug('跳过正在编辑的 action', { actionId: action.id });
+        return;
+      }
+      
       // 统一使用异步方法获取工具，确保工具已正确加载
       const tool = await this.toolManager.getTool(action.type);
       if (!tool) {
@@ -1911,6 +1926,22 @@ export class DrawingHandler {
     } catch (error) {
       logger.error('clearSelectionUI: 合并draw层失败', error);
     }
+  }
+
+  /**
+   * 设置正在编辑的 action ID
+   * 绘制时会跳过该 action，避免双层显示（canvas 上的文本和编辑输入框同时显示）
+   */
+  public setEditingActionId(actionId: string | null): void {
+    this.editingActionId = actionId;
+    logger.debug('DrawingHandler: 设置编辑中的 action', { actionId });
+  }
+  
+  /**
+   * 获取正在编辑的 action ID
+   */
+  public getEditingActionId(): string | null {
+    return this.editingActionId;
   }
 
   /**

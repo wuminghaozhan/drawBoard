@@ -87,6 +87,61 @@ export interface PenToolInterface {
 }
 
 /**
+ * 文字工具接口
+ * 定义 TextTool 对外暴露的所有方法
+ */
+export interface TextToolInterface {
+  /** 初始化编辑管理器 */
+  initEditingManager(container: HTMLElement, canvas: HTMLCanvasElement): void;
+  
+  /** 开始编辑（新建文字） */
+  startEditing(position: Point, options?: {
+    fontSize?: number;
+    fontFamily?: string;
+    color?: string;
+  }): void;
+  
+  /** 编辑已有文字 */
+  editExisting(action: DrawAction, canvasBounds: DOMRect): void;
+  
+  /** 完成编辑 */
+  finishEditing(): void;
+  
+  /** 取消编辑 */
+  cancelEditing(): void;
+  
+  /** 选中当前光标位置的单词 */
+  selectWordAtCursor(): void;
+  
+  /** 选中所有文本 */
+  selectAll(): void;
+  
+  /** 是否正在编辑 */
+  isEditing(): boolean;
+  
+  /** 获取正在编辑的 action ID（用于在绘制时跳过该 action） */
+  getEditingActionId(): string | null;
+  
+  /** 设置字体大小 */
+  setFontSize(size: number): void;
+  
+  /** 设置字体 */
+  setFontFamily(family: string): void;
+  
+  /** 设置文字颜色 */
+  setTextColor(color: string): void;
+  
+  /** 绘制预览 */
+  drawPreview(ctx: CanvasRenderingContext2D): void;
+  
+  /** 订阅事件 */
+  on(handler: (event: { type: string; action?: DrawAction }) => void): () => void;
+  
+  /** 销毁 */
+  destroy(): void;
+}
+
+/**
  * 工具类型守卫
  */
 export class ToolTypeGuards {
@@ -113,6 +168,19 @@ export class ToolTypeGuards {
            tool.getActionType() === 'pen' &&
            typeof tool.setStrokeConfig === 'function' &&
            typeof tool.getStrokeConfig === 'function';
+  }
+  
+  /**
+   * 检查是否为文字工具
+   */
+  static isTextTool(tool: any): tool is TextToolInterface {
+    return tool && 
+           typeof tool.getActionType === 'function' && 
+           tool.getActionType() === 'text' &&
+           typeof tool.initEditingManager === 'function' &&
+           typeof tool.startEditing === 'function' &&
+           typeof tool.finishEditing === 'function' &&
+           typeof tool.isEditing === 'function';
   }
 }
 

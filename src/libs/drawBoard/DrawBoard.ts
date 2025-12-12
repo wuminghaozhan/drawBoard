@@ -545,6 +545,7 @@ export class DrawBoard {
     handleDrawStart: (event: DrawEvent) => this.handleDrawStart(event),
     handleDrawMove: (event: DrawEvent) => this.handleDrawMove(event),
     handleDrawEnd: (event: DrawEvent) => this.handleDrawEnd(event),
+    handleDoubleClick: (event: DrawEvent) => this.handleDoubleClick(event),
   };
 
   private bindEvents(): void {
@@ -563,6 +564,7 @@ export class DrawBoard {
     this.eventManager.on('touchstart', this.boundEventHandlers.handleDrawStart);
     this.eventManager.on('touchmove', this.boundEventHandlers.handleDrawMove);
     this.eventManager.on('touchend', this.boundEventHandlers.handleDrawEnd);
+    this.eventManager.on('dblclick', this.boundEventHandlers.handleDoubleClick);
     
     // 验证事件绑定
     const eventManagerInternal = this.eventManager as unknown as { handlers?: Map<string, Array<unknown>> };
@@ -585,6 +587,7 @@ export class DrawBoard {
       this.eventManager.off('touchstart', this.boundEventHandlers.handleDrawStart);
       this.eventManager.off('touchmove', this.boundEventHandlers.handleDrawMove);
       this.eventManager.off('touchend', this.boundEventHandlers.handleDrawEnd);
+      this.eventManager.off('dblclick', this.boundEventHandlers.handleDoubleClick);
     }
   }
 
@@ -714,9 +717,195 @@ export class DrawBoard {
         return;
     }
     
+    // 如果是文字工具，处理单击创建文字
+    if (this.toolManager.getCurrentTool() === 'text') {
+      await this.handleTextToolClick(event);
+      return;
+    }
+    
     // 其他工具走正常的绘制流程
     this.drawingHandler.handleDrawStart(event);
     this.updateCursor();
+  }
+  
+  /**
+   * 处理文字工具的单击事件
+   * - 如果点击了已有文本，进入编辑模式
+   * - 如果点击了空白处，创建新文本
+   */
+  private async handleTextToolClick(event: DrawEvent): Promise<void> {
+    try {
+      const textTool = await this.toolManager.getTool('text');
+      
+      // 如果已经在编辑中，忽略新的点击
+      if (textTool && ToolTypeGuards.isTextTool(textTool) && textTool.isEditing()) {
+        logger.debug('文字工具正在编辑中，忽略点击事件');
+        return;
+      }
+      
+      // 检测是否点击了已有的文本对象
+      const hitTextAction = this.findTextActionAtPoint(event.point);
+      
+      if (hitTextAction) {
+        // 点击了已有文本，进入编辑模式
+        await this.editExistingText(hitTextAction);
+        logger.info('单击已有文字，进入编辑模式', { actionId: hitTextAction.id });
+      } else {
+        // 点击了空白处，创建新文本
+        await this.createNewText(event.point);
+        logger.info('单击创建新文字', { point: event.point });
+      }
+    } catch (error) {
+      logger.error('文字工具单击处理失败', error);
+      this.handleDoubleClickError(error);
+    }
+  }
+  
+  /**
+   * 查找点击位置的文本对象
+   */
+  private findTextActionAtPoint(point: { x: number; y: number }): DrawAction | null {
+    const allActions = this.historyManager.getHistory();
+    const tolerance = 5; // 点击容差（像素）
+    
+    // 从后往前遍历（后绘制的在上层）
+    for (let i = allActions.length - 1; i >= 0; i--) {
+      const action = allActions[i];
+      if (action.type === 'text' && this.isPointInTextBounds(point, action, tolerance)) {
+        return action;
+      }
+    }
+    
+    return null;
+  }
+  
+  /**
+   * 检测点是否在文本边界内
+   */
+  private isPointInTextBounds(point: { x: number; y: number }, action: DrawAction, tolerance: number): boolean {
+    if (!action.points || action.points.length === 0) return false;
+    
+    const textAction = action as { text?: string; fontSize?: number; fontFamily?: string; points: Array<{ x: number; y: number }> };
+    const startPoint = textAction.points[0];
+    const text = textAction.text || '';
+    const fontSize = textAction.fontSize || 16;
+    
+    if (!text) return false;
+    
+    // 估算文本边界框
+    const estimatedWidth = text.length * fontSize * 0.6; // 粗略估算
+    const estimatedHeight = fontSize * 1.2;
+    
+    const bounds = {
+      x: startPoint.x - tolerance,
+      y: startPoint.y - tolerance,
+      width: estimatedWidth + tolerance * 2,
+      height: estimatedHeight + tolerance * 2
+    };
+    
+    return (
+      point.x >= bounds.x &&
+      point.x <= bounds.x + bounds.width &&
+      point.y >= bounds.y &&
+      point.y <= bounds.y + bounds.height
+    );
+  }
+  
+  /**
+   * 编辑已有文本
+   */
+  private async editExistingText(textAction: DrawAction): Promise<void> {
+    // 初始化文字工具编辑管理器
+    const canvasContainer = this.canvasEngine.getContainer();
+    await this.toolAPI.initializeTextToolEditing(canvasContainer);
+    
+    // ⭐ 先设置 editingActionId，确保在任何重绘中都跳过该文本
+    // 这必须在 editExisting 之前设置，避免重影
+    this.drawingHandler.setEditingActionId(textAction.id);
+    this.drawingHandler.forceRedraw();
+    
+    // 记录当前编辑的 actionId，用于在 editingEnded 时判断是否是这个会话
+    const currentEditingActionId = textAction.id;
+    
+    // 获取文字工具并开始编辑
+    const textTool = await this.toolManager.getTool('text');
+    if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+      const canvasBounds = this.canvasEngine.getCanvas().getBoundingClientRect();
+      textTool.editExisting(textAction, canvasBounds);
+      
+      // 监听编辑完成事件
+      const unsubscribe = textTool.on((textEvent) => {
+        try {
+          if (textEvent.type === 'textUpdated' && textEvent.action) {
+            // 只处理当前编辑会话的事件
+            if (textEvent.action.id === currentEditingActionId) {
+              this.historyManager.updateAction(textEvent.action);
+              logger.debug('文字已更新', { actionId: textEvent.action.id });
+            }
+          }
+          
+          if (textEvent.type === 'editingEnded') {
+            // ⭐ 只处理当前编辑会话的事件
+            const eventActionId = textEvent.actionId;
+            if (eventActionId !== currentEditingActionId) {
+              // 不是这个会话的事件，忽略（不要 unsubscribe）
+              return;
+            }
+            
+            // 只有当 editingActionId 仍然是这个 actionId 时才清除
+            const currentId = this.drawingHandler.getEditingActionId();
+            if (currentId === currentEditingActionId) {
+              this.drawingHandler.setEditingActionId(null);
+              this.drawingHandler.forceRedraw();
+            }
+            unsubscribe();
+          }
+        } catch (eventError) {
+          logger.error('处理文字更新事件失败', eventError);
+        }
+      });
+    }
+  }
+  
+  /**
+   * 创建新文本
+   */
+  private async createNewText(point: { x: number; y: number }): Promise<void> {
+    // 初始化文字工具编辑管理器
+    const canvasContainer = this.canvasEngine.getContainer();
+    await this.toolAPI.initializeTextToolEditing(canvasContainer);
+    
+    // 获取当前画布上下文的颜色设置
+    const ctx = this.canvasEngine.getContext();
+    const color = ctx.fillStyle as string || '#000000';
+    
+    // 开始新建文字
+    await this.toolAPI.startTextEditing(point, {
+      color,
+      fontSize: 16,
+      fontFamily: 'Arial'
+    });
+    
+    // 获取文字工具并监听事件
+    const textTool = await this.toolManager.getTool('text');
+    if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+      const unsubscribe = textTool.on((textEvent) => {
+        try {
+          if (textEvent.type === 'textCreated' && textEvent.action) {
+            // 添加到历史记录
+            this.historyManager.addAction(textEvent.action);
+            this.drawingHandler.forceRedraw();
+            logger.debug('新文字已创建', { actionId: textEvent.action.id });
+          }
+          
+          if (textEvent.type === 'editingEnded') {
+            unsubscribe();
+          }
+        } catch (eventError) {
+          logger.error('处理文字创建事件失败', eventError);
+        }
+      });
+    }
   }
 
   private handleDrawMove(event: DrawEvent): void {
@@ -912,6 +1101,196 @@ export class DrawBoard {
       this.updateCursor();
     } catch (error) {
       logger.error('绘制结束事件处理失败', error);
+    }
+  }
+
+  /**
+   * 处理双击事件
+   * 用于：
+   * - 双击文字进入编辑模式
+   * - 双击空白处创建新文字（当文字工具激活时）
+   */
+  private async handleDoubleClick(event: DrawEvent): Promise<void> {
+    try {
+      logger.debug('handleDoubleClick 被调用', {
+        tool: this.toolManager.getCurrentTool(),
+        point: event.point
+      });
+      
+      const currentTool = this.toolManager.getCurrentTool();
+      
+      // 如果是选择工具，检查是否双击了文字对象
+      if (currentTool === 'select') {
+        await this.handleSelectToolDoubleClick(event);
+        return;
+      }
+      
+      // 如果是文字工具，开始新建文字
+      if (currentTool === 'text') {
+        await this.handleTextToolDoubleClick(event);
+        return;
+      }
+      
+      logger.debug('双击事件未处理（当前工具不支持）', { currentTool });
+    } catch (error) {
+      logger.error('双击事件处理失败', error);
+      this.handleDoubleClickError(error);
+    }
+  }
+  
+  /**
+   * 处理双击错误，提供用户友好的错误提示
+   */
+  private handleDoubleClickError(error: unknown): void {
+    const errorMessage = error instanceof Error ? error.message : '未知错误';
+    
+    // 发出错误事件，让上层UI可以显示提示
+    this.eventBus?.emit('error:occurred', {
+      type: 'text-editing',
+      message: `文字编辑失败: ${errorMessage}`,
+      recoverable: true,
+      timestamp: Date.now()
+    });
+    
+    // 尝试恢复到安全状态
+    try {
+      this.setTool('select');
+    } catch (recoveryError) {
+      logger.error('恢复状态失败', recoveryError);
+    }
+  }
+
+  /**
+   * 选择工具的双击处理
+   * 如果双击了文字对象，进入编辑模式
+   */
+  private async handleSelectToolDoubleClick(_event: DrawEvent): Promise<void> {
+    try {
+      const selectTool = this.toolManager.getCurrentToolInstance();
+      if (!selectTool || !ToolTypeGuards.isSelectTool(selectTool)) {
+        return;
+      }
+      
+      // 获取选中的 actions
+      const selectedActions = selectTool.getSelectedActions();
+      
+      // 检查是否有选中的文字对象
+      const textAction = selectedActions.find(action => action.type === 'text');
+      
+      if (textAction) {
+        logger.info('双击选中的文字，进入编辑模式', { actionId: textAction.id });
+        
+        // 切换到文字工具并开始编辑
+        await this.setTool('text');
+        
+        // 初始化文字工具编辑管理器（如果还没有初始化）
+        // 使用 CanvasEngine 的容器，因为 canvas 元素是在那里创建的
+        const canvasContainer = this.canvasEngine.getContainer();
+        await this.toolAPI.initializeTextToolEditing(canvasContainer);
+        
+        // 获取文字工具并开始编辑已有文字
+        const textTool = await this.toolManager.getTool('text');
+        if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+          // ⭐ 先设置 editingActionId，确保在任何重绘中都跳过该文本，避免重影
+          this.drawingHandler.setEditingActionId(textAction.id);
+          this.drawingHandler.forceRedraw();
+          
+          // 记录当前编辑的 actionId，用于在 editingEnded 时判断
+          const currentEditingActionId = textAction.id;
+          
+          const canvasBounds = this.canvasEngine.getCanvas().getBoundingClientRect();
+          textTool.editExisting(textAction, canvasBounds);
+          
+          // 监听文字编辑完成事件
+          const unsubscribe = textTool.on((textEvent) => {
+            try {
+              if (textEvent.type === 'textCreated' || textEvent.type === 'textUpdated') {
+                // 只处理当前编辑会话的事件
+                if (textEvent.action && textEvent.action.id === currentEditingActionId) {
+                  if (textEvent.type === 'textUpdated') {
+                    this.historyManager.updateAction(textEvent.action);
+                    logger.debug('文字已更新', { actionId: textEvent.action.id });
+                  } else {
+                    this.historyManager.addAction(textEvent.action);
+                    logger.debug('文字已添加', { actionId: textEvent.action.id });
+                  }
+                }
+              }
+              
+              if (textEvent.type === 'editingEnded') {
+                // ⭐ 只处理当前编辑会话的事件
+                const eventActionId = textEvent.actionId;
+                if (eventActionId !== currentEditingActionId) {
+                  // 不是这个会话的事件，忽略（不要 unsubscribe）
+                  return;
+                }
+                
+                // 只有当 editingActionId 仍然是这个 actionId 时才清除
+                const currentId = this.drawingHandler.getEditingActionId();
+                if (currentId === currentEditingActionId) {
+                  this.drawingHandler.setEditingActionId(null);
+                  this.drawingHandler.forceRedraw();
+                  // 编辑结束后切回选择工具
+                  this.setTool('select');
+                }
+                unsubscribe();
+              }
+            } catch (eventError) {
+              logger.error('处理文字编辑事件失败', eventError);
+            }
+          });
+        } else {
+          throw new Error('无法获取文字工具实例');
+        }
+      } else {
+        logger.debug('双击未命中文字对象');
+      }
+    } catch (error) {
+      logger.error('选择工具双击处理失败', error);
+      this.handleDoubleClickError(error);
+    }
+  }
+
+  /**
+   * 文字工具的双击处理
+   * - 如果正在编辑中：选中当前单词
+   * - 如果双击已有文本：进入编辑并选中单词
+   * - 如果双击空白处：创建新文字
+   */
+  private async handleTextToolDoubleClick(event: DrawEvent): Promise<void> {
+    try {
+      const textTool = await this.toolManager.getTool('text');
+      
+      // 如果已经在编辑中，选中当前光标位置的单词
+      if (textTool && ToolTypeGuards.isTextTool(textTool) && textTool.isEditing()) {
+        textTool.selectWordAtCursor();
+        logger.info('双击选中单词');
+        return;
+      }
+      
+      // 检测是否双击了已有的文本对象
+      const hitTextAction = this.findTextActionAtPoint(event.point);
+      
+      if (hitTextAction) {
+        // 双击了已有文本，进入编辑模式并选中单词
+        await this.editExistingText(hitTextAction);
+        
+        // 稍微延迟后选中单词（等待编辑器初始化完成）
+        setTimeout(() => {
+          if (textTool && ToolTypeGuards.isTextTool(textTool)) {
+            textTool.selectWordAtCursor();
+          }
+        }, 50);
+        
+        logger.info('双击已有文字，进入编辑并选中单词', { actionId: hitTextAction.id });
+      } else {
+        // 双击了空白处，创建新文字
+        await this.createNewText(event.point);
+        logger.info('双击创建新文字', { point: event.point });
+      }
+    } catch (error) {
+      logger.error('文字工具双击处理失败', error);
+      this.handleDoubleClickError(error);
     }
   }
 

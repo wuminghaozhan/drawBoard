@@ -64,6 +64,16 @@ export class ShortcutManager {
   private handleKeyDown(e: KeyboardEvent): void {
     if (!this.isEnabled) return;
 
+    // 忽略来自输入元素的键盘事件，让输入框正常工作
+    const target = e.target as HTMLElement;
+    if (target && (
+      target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.isContentEditable
+    )) {
+      return;
+    }
+
     // 快速检查：是否只是修饰键
     if (ShortcutManager.MODIFIER_KEYS.has(e.code)) {
       return;

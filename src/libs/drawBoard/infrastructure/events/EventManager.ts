@@ -3,12 +3,12 @@ import { Throttle } from '../performance/Throttle';
 import { logger } from '../../infrastructure/logging/Logger';
 
 export interface DrawEvent {
-  type: 'mousedown' | 'mousemove' | 'mouseup' | 'touchstart' | 'touchmove' | 'touchend';
+  type: 'mousedown' | 'mousemove' | 'mouseup' | 'touchstart' | 'touchmove' | 'touchend' | 'dblclick';
   point: Point;
   timestamp: number;
 }
 
-export type EventType = 'mousedown' | 'mousemove' | 'mouseup' | 'touchstart' | 'touchmove' | 'touchend';
+export type EventType = 'mousedown' | 'mousemove' | 'mouseup' | 'touchstart' | 'touchmove' | 'touchend' | 'dblclick';
 export type EventHandler = (event: DrawEvent) => void;
 
 /**
@@ -41,6 +41,18 @@ export class EventManager {
   
   // 重复事件检测配置
   private duplicateDistanceThreshold: number = 2; // 2像素的欧几里得距离阈值
+  
+  // 双击/双击检测（鼠标和触摸通用）
+  private lastClickTime: number = 0;
+  private lastClickPoint: Point | null = null;
+  private doubleClickThreshold: number = 300; // 双击时间阈值（ms）
+  private doubleClickDistanceThreshold: number = 10; // 双击距离阈值（像素）
+  
+  // 触摸双击专用（触摸设备通常需要更大的容差）
+  private lastTapTime: number = 0;
+  private lastTapPoint: Point | null = null;
+  private doubleTapThreshold: number = 350; // 双击时间阈值（ms），触摸略宽松
+  private doubleTapDistanceThreshold: number = 20; // 双击距离阈值（像素），触摸更宽松
   
   // 保存事件处理函数的引用，用于解绑
   private boundHandlers: {
@@ -175,6 +187,31 @@ export class EventManager {
     this.isPointerDown = true;
     
     const point = this.getMousePoint(e);
+    
+    // 双击检测
+    const isDoubleClick = this.detectDoubleClick(point, now);
+    
+    if (isDoubleClick) {
+      // 发出双击事件
+      const dblClickEvent: DrawEvent = {
+        type: 'dblclick',
+        point: point,
+        timestamp: now
+      };
+      
+      logger.debug('EventManager: 检测到双击', { point });
+      this.safeEmitEvent(dblClickEvent);
+      
+      // 重置双击检测状态
+      this.lastClickTime = 0;
+      this.lastClickPoint = null;
+      return; // 双击事件不再触发普通的 mousedown
+    }
+    
+    // 记录本次点击用于双击检测
+    this.lastClickTime = now;
+    this.lastClickPoint = { ...point };
+    
     const event: DrawEvent = {
       type: 'mousedown',
       point: point,
@@ -190,6 +227,27 @@ export class EventManager {
     });
 
     this.safeEmitEvent(event);
+  }
+  
+  /**
+   * 检测是否为双击
+   */
+  private detectDoubleClick(point: Point, now: number): boolean {
+    if (!this.lastClickPoint || this.lastClickTime === 0) {
+      return false;
+    }
+    
+    const timeDiff = now - this.lastClickTime;
+    if (timeDiff > this.doubleClickThreshold) {
+      return false;
+    }
+    
+    const distance = Math.sqrt(
+      Math.pow(point.x - this.lastClickPoint.x, 2) +
+      Math.pow(point.y - this.lastClickPoint.y, 2)
+    );
+    
+    return distance <= this.doubleClickDistanceThreshold;
   }
 
   private handleMouseMove(e: MouseEvent): void {
@@ -248,15 +306,62 @@ export class EventManager {
       return;
     }
     
+    const point = this.getTouchPoint(touch);
+    
+    // 双击检测（触摸设备）
+    const isDoubleTap = this.detectDoubleTap(point, now);
+    
+    if (isDoubleTap) {
+      // 发出双击事件
+      const dblTapEvent: DrawEvent = {
+        type: 'dblclick',
+        point: point,
+        timestamp: now
+      };
+      
+      logger.debug('EventManager: 检测到触摸双击', { point });
+      this.safeEmitEvent(dblTapEvent);
+      
+      // 重置双击检测状态
+      this.lastTapTime = 0;
+      this.lastTapPoint = null;
+      return; // 双击事件不再触发普通的 touchstart
+    }
+    
+    // 记录本次触摸用于双击检测
+    this.lastTapTime = now;
+    this.lastTapPoint = { ...point };
+    
     this.isPointerDown = true;
     
     const event: DrawEvent = {
       type: 'touchstart',
-      point: this.getTouchPoint(touch),
+      point: point,
       timestamp: now
     };
     
     this.safeEmitEvent(event);
+  }
+  
+  /**
+   * 检测是否为触摸双击
+   */
+  private detectDoubleTap(point: Point, now: number): boolean {
+    if (!this.lastTapPoint || this.lastTapTime === 0) {
+      return false;
+    }
+    
+    const timeDiff = now - this.lastTapTime;
+    if (timeDiff > this.doubleTapThreshold) {
+      return false;
+    }
+    
+    const distance = Math.sqrt(
+      Math.pow(point.x - this.lastTapPoint.x, 2) +
+      Math.pow(point.y - this.lastTapPoint.y, 2)
+    );
+    
+    return distance <= this.doubleTapDistanceThreshold;
   }
 
   private handleTouchMove(e: TouchEvent): void {

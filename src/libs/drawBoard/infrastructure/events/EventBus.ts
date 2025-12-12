@@ -87,6 +87,15 @@ export interface DrawBoardEvents {
   'lifecycle:initialized': { timestamp: number };
   'lifecycle:destroying': { timestamp: number };
   'lifecycle:destroyed': { timestamp: number };
+  
+  // 错误事件
+  'error:occurred': { 
+    type: string; 
+    message: string; 
+    recoverable: boolean; 
+    timestamp: number;
+    details?: Record<string, unknown>;
+  };
 }
 
 /**
