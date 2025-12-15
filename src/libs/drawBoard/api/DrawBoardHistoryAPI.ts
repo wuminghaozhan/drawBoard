@@ -36,36 +36,40 @@ export class DrawBoardHistoryAPI {
   /**
    * 撤销操作
    * 
-   * 优先级（按时间戳，最近的优先）：
-   * 1. 批量操作（橡皮擦切割等）
-   * 2. 变形操作（移动/缩放/旋转）
-   * 3. 普通操作（添加/删除 action）
+   * 按时间戳撤销最近的操作，类型包括：
+   * - 批量操作（橡皮擦切割等）
+   * - 变形操作（移动/缩放/旋转）
+   * - 普通操作（添加/删除 action）
    */
   public async undo(): Promise<boolean> {
     try {
       // ✅ 执行 undo 前：清理当前状态
       this.prepareForHistoryOperation();
       
-      // 获取各类操作的时间戳，撤销最近的
+      // 获取各类操作的时间戳
       const lastBatch = this.historyManager.getLastBatchOperation();
-      const transformCount = this.historyManager.getTransformHistoryCount();
+      const batchTime = lastBatch?.timestamp ?? 0;
+      const transformTime = this.historyManager.getLastTransformTimestamp();
+      // 普通 action 没有时间戳，假设最早（0）
       const canUndoNormal = this.historyManager.canUndo();
       
       // 确定撤销类型（按时间戳选择最近的）
-      const batchTime = lastBatch?.timestamp ?? 0;
-      // 变形操作没有暴露时间戳，假设如果存在就是最近的
-      const hasTransform = transformCount > 0;
+      const maxTime = Math.max(batchTime, transformTime);
       
-      // ✅ 优先撤销批量操作（橡皮擦切割）
-      if (lastBatch && batchTime > 0) {
-        const result = this.historyManager.undoBatchOperation(lastBatch.id);
+      if (maxTime === 0 && !canUndoNormal) {
+        logger.debug('无法撤销：没有可撤销的操作');
+        return false;
+      }
+      
+      // ✅ 撤销时间戳最大的操作
+      if (batchTime > 0 && batchTime >= transformTime) {
+        // 撤销批量操作
+        const result = this.historyManager.undoBatchOperation(lastBatch!.id);
         if (result.success) {
           // 同步到 VirtualLayerManager
-          // 1. 移除新添加的 actions
           for (const actionId of result.removedActionIds) {
             this.drawingHandler.removeActionFromVirtualLayer(actionId);
           }
-          // 2. 恢复原始 actions
           for (const action of result.restoredActions) {
             this.drawingHandler.addActionToVirtualLayer(action);
           }
@@ -74,8 +78,8 @@ export class DrawBoardHistoryAPI {
           this.syncLayerDataToSelectTool();
           await this.drawingHandler.forceRedraw();
           logger.debug('批量操作撤销成功', { 
-            batchId: lastBatch.id, 
-            type: lastBatch.type,
+            batchId: lastBatch!.id, 
+            type: lastBatch!.type,
             removedCount: result.removedActionIds.length,
             restoredCount: result.restoredActions.length
           });
@@ -83,8 +87,8 @@ export class DrawBoardHistoryAPI {
         }
       }
       
-      // ✅ 撤销变形操作
-      if (hasTransform) {
+      if (transformTime > 0 && transformTime > batchTime) {
+        // 撤销变形操作
         const success = this.historyManager.undoTransform();
         if (success) {
           this.drawingHandler.invalidateOffscreenCache(true);
@@ -97,14 +101,13 @@ export class DrawBoardHistoryAPI {
       
       // 撤销普通操作（添加/删除 action）
       if (!canUndoNormal) {
-        logger.debug('无法撤销：没有可撤销的操作');
+        logger.debug('无法撤销：没有可撤销的普通操作');
         return false;
       }
       
       const action = this.historyManager.undo();
       
       if (action) {
-        // 标记离屏缓存和所有虚拟图层缓存过期
         this.drawingHandler.invalidateOffscreenCache(true);
         this.syncLayerDataToSelectTool();
         await this.drawingHandler.forceRedraw();
@@ -137,14 +140,34 @@ export class DrawBoardHistoryAPI {
       // ✅ 执行 redo 前：清理当前状态
       this.prepareForHistoryOperation();
       
-      // 注意：批量操作 undo 后会从 batchOperations 中移除
-      // 需要通过其他方式跟踪已撤销的批量操作才能重做
-      // 当前实现：只支持普通操作的重做
+      // 优先重做批量操作（按时间戳，最近撤销的先重做）
+      const lastUndoneBatch = this.historyManager.getLastUndoneBatchOperation();
+      if (lastUndoneBatch) {
+        const result = this.historyManager.redoBatchOperation(lastUndoneBatch.id);
+        if (result.success) {
+          // 同步到 VirtualLayerManager
+          for (const actionId of result.removedActionIds) {
+            this.drawingHandler.removeActionFromVirtualLayer(actionId);
+          }
+          for (const action of result.addedActions) {
+            this.drawingHandler.addActionToVirtualLayer(action);
+          }
+          
+          this.drawingHandler.invalidateOffscreenCache(true);
+          this.syncLayerDataToSelectTool();
+          await this.drawingHandler.forceRedraw();
+          logger.debug('批量操作重做成功', { 
+            batchId: lastUndoneBatch.id, 
+            type: lastUndoneBatch.type 
+          });
+          return true;
+        }
+      }
       
+      // 重做普通操作
       const action = this.historyManager.redo();
       
       if (action) {
-        // 标记离屏缓存和所有虚拟图层缓存过期
         this.drawingHandler.invalidateOffscreenCache(true);
         this.syncLayerDataToSelectTool();
         await this.drawingHandler.forceRedraw();
@@ -181,18 +204,6 @@ export class DrawBoardHistoryAPI {
   }
   
   /**
-   * 清除选择状态（如果当前工具是选择工具）
-   * @deprecated 使用 prepareForHistoryOperation 代替
-   */
-  private clearSelectionIfNeeded(): void {
-    const currentTool = this.toolManager.getCurrentToolInstance();
-    if (currentTool && ToolTypeGuards.isSelectTool(currentTool)) {
-      currentTool.clearSelection();
-      logger.debug('DrawBoardHistoryAPI: 清除选择状态');
-    }
-  }
-
-  /**
    * 清空历史记录
    */
   public async clear(): Promise<void> {
@@ -211,10 +222,12 @@ export class DrawBoardHistoryAPI {
   }
 
   /**
-   * 是否可以重做
+   * 是否可以重做（包括批量操作和普通操作）
    */
   public canRedo(): boolean {
-    return this.historyManager.canRedo();
+    const hasBatchRedo = this.historyManager.getLastUndoneBatchOperation() !== null;
+    const hasNormalRedo = this.historyManager.canRedo();
+    return hasBatchRedo || hasNormalRedo;
   }
 
   /**

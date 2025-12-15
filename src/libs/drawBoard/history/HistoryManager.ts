@@ -92,6 +92,7 @@ export class HistoryManager {
   
   // 批量操作相关
   private batchOperations: BatchOperation[] = [];
+  private undoneBatchOperations: BatchOperation[] = []; // 已撤销的批量操作（用于 redo）
   private maxBatchOperations: number = 50;
   private incrementalStorage: Map<string, IncrementalBatchStorage> = new Map();
   private useIncrementalStorage: boolean = true; // 默认启用增量存储
@@ -487,6 +488,9 @@ export class HistoryManager {
     
     this.batchOperations.push(batchOp);
     
+    // 清空已撤销的批量操作（新操作会清空 redo 栈）
+    this.clearUndoneBatchOperations();
+    
     // 限制批量操作记录数量
     if (this.batchOperations.length > this.maxBatchOperations) {
       const removed = this.batchOperations.shift();
@@ -597,13 +601,11 @@ export class HistoryManager {
       this.currentMemoryBytes += this.calculateActionMemorySize(action);
     }
     
-    // ✅ 从批量操作列表中移除已撤销的操作（防止重复撤销）
+    // ✅ 从批量操作列表中移除，放入已撤销列表（支持 redo）
     this.batchOperations.splice(batchIndex, 1);
+    this.undoneBatchOperations.push(batch);
     
-    // 清理增量存储
-    if (batch.useIncrementalStorage) {
-      this.incrementalStorage.delete(batchId);
-    }
+    // 注意：增量存储数据保留，redo 时需要使用
     
     logger.info('批量操作已撤销', {
       batchId,
@@ -627,14 +629,17 @@ export class HistoryManager {
    * @param batchId 批量操作 ID
    * @returns 是否成功
    */
-  public redoBatchOperation(batchId: string): boolean {
-    const batch = this.batchOperations.find(b => b.id === batchId);
-    if (!batch) {
-      logger.warn('未找到批量操作', { batchId });
-      return false;
+  public redoBatchOperation(batchId: string): { success: boolean; removedActionIds: string[]; addedActions: DrawAction[] } {
+    // 从已撤销的批量操作列表中查找
+    const undoneIndex = this.undoneBatchOperations.findIndex(b => b.id === batchId);
+    if (undoneIndex === -1) {
+      logger.warn('未找到已撤销的批量操作', { batchId });
+      return { success: false, removedActionIds: [], addedActions: [] };
     }
     
-    // 1. 移除原始 Actions
+    const batch = this.undoneBatchOperations[undoneIndex];
+    
+    // 1. 移除原始 Actions（从 HistoryManager 内部）
     for (const actionId of batch.removedActionIds) {
       this.removeActionById(actionId);
     }
@@ -647,17 +652,21 @@ export class HistoryManager {
       const incrementalData = this.incrementalStorage.get(batchId);
       if (!incrementalData) {
         logger.error('增量存储数据丢失', { batchId });
-        return false;
+        return { success: false, removedActionIds: [], addedActions: [] };
       }
       addedActions = incrementalData.addedSnapshots.map(s => this.restoreActionFromSnapshot(s));
     } else {
       // 从完整存储恢复
-      addedActions = batch.addedActions || [];
+      addedActions = (batch.addedActions || []).map(a => ({ ...a }));
     }
     
     for (const action of addedActions) {
       this.addAction({ ...action });
     }
+    
+    // 从已撤销列表移除，放回批量操作列表
+    this.undoneBatchOperations.splice(undoneIndex, 1);
+    this.batchOperations.push(batch);
     
     logger.info('批量操作已重做', {
       batchId,
@@ -666,7 +675,31 @@ export class HistoryManager {
     });
     
     this.emitHistoryChanged();
-    return true;
+    return { 
+      success: true, 
+      removedActionIds: [...batch.removedActionIds], 
+      addedActions 
+    };
+  }
+  
+  /**
+   * 获取最后一个已撤销的批量操作（用于 redo）
+   */
+  public getLastUndoneBatchOperation(): BatchOperation | null {
+    return this.undoneBatchOperations[this.undoneBatchOperations.length - 1] || null;
+  }
+  
+  /**
+   * 清空已撤销的批量操作（执行新操作时调用）
+   */
+  private clearUndoneBatchOperations(): void {
+    // 清理增量存储
+    for (const batch of this.undoneBatchOperations) {
+      if (batch.useIncrementalStorage) {
+        this.incrementalStorage.delete(batch.id);
+      }
+    }
+    this.undoneBatchOperations = [];
   }
   
   /**
@@ -786,6 +819,14 @@ export class HistoryManager {
    */
   public getTransformHistoryCount(): number {
     return this.transformHistory.length;
+  }
+  
+  /**
+   * 获取最后一个变形操作的时间戳
+   */
+  public getLastTransformTimestamp(): number {
+    const last = this.transformHistory[this.transformHistory.length - 1];
+    return last?.timestamp ?? 0;
   }
   
   /**
