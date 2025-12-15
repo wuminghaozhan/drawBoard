@@ -154,13 +154,31 @@ export class SelectToolCoordinator {
       return { needsCursorUpdate: false };
     }
 
-    // 更新悬停锚点
+    // 更新悬停锚点（悬停检测始终需要，不依赖按下状态）
     let hoverChanged = false;
     if (currentTool.updateHoverAnchor) {
       const result = currentTool.updateHoverAnchor(event.point);
       hoverChanged = result === true;
     }
 
+    // 只有在鼠标/触摸按下状态时才处理拖拽
+    // 这确保了拖拽动作在鼠标松开后立即停止
+    if (!event.isPointerDown) {
+      // 仅悬停状态：只更新光标，不执行拖拽
+      if (hoverChanged) {
+        const now = Date.now();
+        if (now - this.lastRedrawTime >= this.redrawThrottleMs) {
+          this.drawingHandler.forceRedraw().catch(error => {
+            logger.error('悬停重绘失败', error);
+          });
+          this.lastRedrawTime = now;
+        }
+      }
+      return { needsCursorUpdate: hoverChanged };
+    }
+
+    // 以下是按下状态时的拖拽逻辑
+    
     // 获取选中的动作用于脏矩形优化
     const selectedActions = currentTool.getSelectedActions?.() || [];
 

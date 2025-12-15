@@ -6,6 +6,8 @@ export interface DrawEvent {
   type: 'mousedown' | 'mousemove' | 'mouseup' | 'touchstart' | 'touchmove' | 'touchend' | 'dblclick';
   point: Point;
   timestamp: number;
+  /** 指针是否处于按下状态（鼠标按下/触摸中） */
+  isPointerDown?: boolean;
 }
 
 export type EventType = 'mousedown' | 'mousemove' | 'mouseup' | 'touchstart' | 'touchmove' | 'touchend' | 'dblclick';
@@ -139,13 +141,20 @@ export class EventManager {
 
   /**
    * 安全触发事件（防重复）
+   * 注意：mousedown/mouseup/touchstart/touchend 等关键事件不应用重复检测，
+   * 只对 mousemove/touchmove 应用，确保按下和释放事件始终被正确处理
    */
   private safeEmitEvent(event: DrawEvent): void {
-    if (!this.isDuplicateEvent(event)) {
+    // 关键事件（按下/释放/双击）始终处理，不进行重复检测
+    const criticalEvents = ['mousedown', 'mouseup', 'touchstart', 'touchend', 'dblclick'];
+    const isCriticalEvent = criticalEvents.includes(event.type);
+    
+    if (isCriticalEvent || !this.isDuplicateEvent(event)) {
       this.lastProcessedEvent = event;
       logger.debug('EventManager.safeEmitEvent: 分发事件', { 
         type: event.type, 
         point: event.point,
+        isCriticalEvent,
         registeredHandlers: this.handlers.get(event.type)?.length || 0
       });
       this.emit(event.type, event);
@@ -158,32 +167,12 @@ export class EventManager {
   }
 
   private handleMouseDown(e: MouseEvent): void {
-    logger.info('EventManager: handleMouseDown 被调用', { 
-      button: e.button, 
-      clientX: e.clientX, 
-      clientY: e.clientY,
-      target: e.target,
-      currentTarget: e.currentTarget,
-      canvas: this.canvas,
-      canvasWidth: this.canvas.width,
-      canvasHeight: this.canvas.height,
-      canvasOffsetWidth: this.canvas.offsetWidth,
-      canvasOffsetHeight: this.canvas.offsetHeight
-    });
-    
     const now = Date.now();
     
-    // 防止快速重复点击
-    if (now - this.lastMouseDownTime < this.minEventInterval) {
-      logger.debug('EventManager: 事件被过滤（时间间隔太短）', {
-        timeSinceLastEvent: now - this.lastMouseDownTime,
-        minInterval: this.minEventInterval
-      });
-      return;
-    }
+    // 注意：不再在这里做时间间隔检查，因为 safeEmitEvent 对关键事件跳过重复检测
+    // 这确保了快速点击不会被误过滤
     
     this.lastMouseDownTime = now;
-    
     this.isPointerDown = true;
     
     const point = this.getMousePoint(e);
@@ -192,7 +181,6 @@ export class EventManager {
     const isDoubleClick = this.detectDoubleClick(point, now);
     
     if (isDoubleClick) {
-      // 发出双击事件
       const dblClickEvent: DrawEvent = {
         type: 'dblclick',
         point: point,
@@ -218,14 +206,7 @@ export class EventManager {
       timestamp: now
     };
     
-    logger.debug('EventManager: Mouse down point:', point);
-    const handlerCount = this.handlers.get('mousedown')?.length || 0;
-    logger.debug('EventManager: 准备分发事件', {
-      handlerCount,
-      registeredEventTypes: Array.from(this.handlers.keys()),
-      allHandlersCount: Array.from(this.handlers.values()).reduce((sum, h) => sum + h.length, 0)
-    });
-
+    logger.debug('EventManager: mousedown', { point });
     this.safeEmitEvent(event);
   }
   
@@ -257,7 +238,8 @@ export class EventManager {
         const event: DrawEvent = {
           type: 'mousemove',
           point: this.getMousePoint(e),
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          isPointerDown: this.isPointerDown  // 携带按下状态
         };
         
         this.safeEmitEvent(event);
@@ -380,7 +362,8 @@ export class EventManager {
         const event: DrawEvent = {
           type: 'touchmove',
           point: this.getTouchPoint(touch),
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          isPointerDown: true  // 触摸移动一定是按下状态
         };
         
         this.safeEmitEvent(event);

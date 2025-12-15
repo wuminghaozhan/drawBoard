@@ -257,9 +257,13 @@ export class DrawingHandler {
         return;
       }
 
+      // 如果之前的绘制状态未正确清理，强制重置
+      // 这可以防止快速点击时状态残留导致新绘制无法开始
       if (this.isDrawing) {
-        logger.warn('绘制已在进行中，忽略新的绘制开始事件');
-        return;
+        logger.warn('绘制已在进行中，强制结束之前的绘制并开始新绘制');
+        // 强制清理之前的状态
+        this.isDrawing = false;
+        this.currentAction = null;
       }
       
       // 检查事件有效性
@@ -1634,24 +1638,13 @@ export class DrawingHandler {
     this.lastDrawSelectToolUITime = now;
 
     try {
-      logger.info('drawSelectToolUI: 开始绘制选择工具UI');
+      logger.debug('drawSelectToolUI: 开始绘制选择工具UI');
       const currentTool = this.toolManager.getCurrentToolInstance();
       const currentToolType = this.toolManager.getCurrentTool();
       
       if (!currentTool || currentToolType !== 'select') {
-        logger.info('drawSelectToolUI: 当前工具不是select工具，清除选择UI', {
-          currentToolType,
-          hasCurrentTool: !!currentTool
-        });
-        
-        // 清除所有动态图层中的选择UI（选区和锚点）
+        logger.debug('drawSelectToolUI: 当前工具不是select工具，清除选择UI');
         this.clearSelectionUI();
-        
-        // 注意：此时工具已经切换，currentTool已经不是select工具了
-        // 选择状态应该在setTool时已经清除，这里只需要清除UI即可
-        // 如果确实需要清除select工具的状态，应该通过ToolManager获取select工具实例
-        // 但通常不需要，因为setTool时已经清除了
-        
         return;
       }
 
@@ -1666,10 +1659,7 @@ export class DrawingHandler {
       
       // 在开始时就获取选中的actions，避免在后续处理中被清空
       const selectedActionsAtStart = selectTool.getSelectedActions();
-      logger.info('drawSelectToolUI: 开始时获取选中的actions', {
-        selectedActionsCount: selectedActionsAtStart.length,
-        selectedActionIds: selectedActionsAtStart.map(a => a.id)
-      });
+      logger.debug('drawSelectToolUI: 选中actions数量', { count: selectedActionsAtStart.length });
 
       // 获取模式（在作用域外定义，以便后续使用）
       const mode = this.virtualLayerManager?.getMode();
@@ -1688,13 +1678,13 @@ export class DrawingHandler {
           // individual模式：必须保证先动态划分图层完毕，再绘制选区和锚点
           // 使用Promise确保图层初始化完成
           if (this.canvasEngine && this.canvasEngine.isDrawLayerSplit() && !this.canvasEngine.isDrawLayersInitialized()) {
-            logger.info('drawSelectToolUI: individual模式，图层已拆分但未初始化，等待初始化完成', {
+            logger.debug('drawSelectToolUI: individual模式，图层已拆分但未初始化，等待初始化完成', {
               selectedActionsCount: selectedActions.length
             });
             try {
               // 等待图层初始化完成
               await this.ensureLayersInitialized();
-              logger.info('drawSelectToolUI: 图层初始化完成，继续绘制');
+              logger.debug('drawSelectToolUI: 图层初始化完成，继续绘制');
             } catch (error) {
               logger.error('drawSelectToolUI: 等待图层初始化失败', error);
               // 初始化失败，不绘制选择UI
@@ -1776,6 +1766,19 @@ export class DrawingHandler {
         interactionCtx = this.canvasEngine.getInteractionLayer();
       }
       
+      // 🔧 清空所有选区图层，防止多个选区残留
+      // 在 individual 模式下，可能存在多个 selection-N 动态图层，需要全部清除
+      try {
+        const allDynamicLayers = this.canvasEngine.getAllDynamicLayers();
+        for (const [layerId, layer] of allDynamicLayers) {
+          if (layerId.startsWith('selection-')) {
+            layer.ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
+          }
+        }
+      } catch (error) {
+        logger.warn('drawSelectToolUI: 清除动态选区图层失败', error);
+      }
+      
       // 清空交互层
       interactionCtx.clearRect(0, 0, interactionCtx.canvas.width, interactionCtx.canvas.height);
       logger.debug('drawSelectToolUI: 已清空交互层', {
@@ -1783,50 +1786,15 @@ export class DrawingHandler {
         canvasHeight: interactionCtx.canvas.height
       });
 
-      // 使用开始时获取的selectedActions，避免在后续处理中被清空
-      // 如果有选中的actions，绘制锚点（通过draw方法）
-      let selectedActions = selectedActionsAtStart.length > 0 ? selectedActionsAtStart : selectTool.getSelectedActions();
+      // 🔧 优化：直接使用开始时保存的 selectedActionsAtStart，避免轮询等待
+      // 原因：图层切换可能导致 selectTool.getSelectedActions() 临时返回空数组
+      // 但 selectedActionsAtStart 已在函数开始时保存，不受异步操作影响
+      const selectedActions = selectedActionsAtStart.length > 0 
+        ? selectedActionsAtStart 
+        : selectTool.getSelectedActions();
       
-      // individual模式：如果选择被清空，可能是图层切换导致的异步清空，等待选择恢复
-      // 【修复】只有当之前确实有选择（selectedActionsAtStart.length > 0）但当前被清空时才需要等待
-      // 如果一开始就没有选择，不需要等待恢复，直接跳过等待逻辑
-      const hadSelectionBefore = selectedActionsAtStart.length > 0;
-      if (selectedActions.length === 0 && hadSelectionBefore && mode === 'individual' && this.virtualLayerManager) {
-        const maxWaitTime = 50; // 最大等待时间：50ms
-        const checkInterval = 5; // 检查间隔：5ms
-        const maxIterations = Math.ceil(maxWaitTime / checkInterval); // 最多检查次数
-        
-        let waitIterations = 0;
-        for (let i = 0; i < maxIterations; i++) {
-          // 等待一个事件循环，让Promise.resolve().then()中的恢复选择逻辑执行
-          await new Promise(resolve => setTimeout(resolve, checkInterval));
-          selectedActions = selectTool.getSelectedActions();
-          waitIterations = i + 1;
-          
-          if (selectedActions.length > 0) {
-            logger.info('drawSelectToolUI: individual模式，等待后选择已恢复', {
-              selectedActionsCount: selectedActions.length,
-              selectedActionIds: selectedActions.map(a => a.id),
-              waitIterations,
-              waitTime: waitIterations * checkInterval
-            });
-            break;
-          }
-        }
-        
-        if (selectedActions.length === 0) {
-          logger.warn('drawSelectToolUI: individual模式，等待后选择仍未恢复', {
-            selectedActionsAtStartCount: selectedActionsAtStart.length,
-            selectedActionsAtStartIds: selectedActionsAtStart.map(a => a.id),
-            waitIterations,
-            maxWaitTime
-          });
-        }
-      }
-      
-      logger.info('drawSelectToolUI: 准备绘制锚点', {
-        selectedActionsCount: selectedActions.length,
-        selectedActionIds: selectedActions.map(a => a.id)
+      logger.debug('drawSelectToolUI: 准备绘制', { 
+        selectedCount: selectedActions.length 
       });
       
       if (selectedActions.length > 0) {
@@ -1856,9 +1824,9 @@ export class DrawingHandler {
         
         // 使用开始时获取的selectedActions绘制，确保在重绘过程中即使选择被临时清空，也能正确绘制
         selectTool.draw(interactionCtx, tempAction as any);
-        logger.info('drawSelectToolUI: selectTool.draw完成');
+        logger.debug('drawSelectToolUI: selectTool.draw完成');
       } else {
-        logger.info('drawSelectToolUI: 没有选中的actions，跳过绘制');
+        logger.debug('drawSelectToolUI: 没有选中的actions，跳过绘制');
       }
 
       // 如果正在框选，绘制选择框

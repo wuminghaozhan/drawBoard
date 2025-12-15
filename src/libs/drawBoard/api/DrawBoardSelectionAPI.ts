@@ -8,6 +8,11 @@ import type { CanvasEngine } from '../core/CanvasEngine';
 import { BoundsValidator, type Bounds as BoundsType } from '../utils/BoundsValidator';
 import { logger } from '../infrastructure/logging/Logger';
 import { ToolTypeGuards } from '../tools/ToolInterfaces';
+import { 
+  DataExporter, 
+  type ExportOptions, 
+  type DrawBoardExportData 
+} from '../utils/DataExporter';
 
 /**
  * DrawBoard 选择操作 API
@@ -97,10 +102,15 @@ export class DrawBoardSelectionAPI {
         // 从HistoryManager中删除这些actions
         deletedActionIds.forEach(actionId => {
           this.historyManager.removeActionById(actionId);
+          // ✅ 同步从VirtualLayerManager中移除
+          this.drawingHandler.removeActionFromVirtualLayer(actionId);
         });
         
         // 清除SelectionManager的选择状态
         this.selectionManager.clearSelection();
+        
+        // ✅ 强制使所有图层缓存失效
+        this.drawingHandler.invalidateOffscreenCache(true);
         
         await this.drawingHandler.forceRedraw();
         return;
@@ -122,6 +132,8 @@ export class DrawBoardSelectionAPI {
       
       selectedActions.forEach(action => {
         this.historyManager.removeActionById(action.id);
+        // ✅ 同步从VirtualLayerManager中移除
+        this.drawingHandler.removeActionFromVirtualLayer(action.id);
       });
       
       // 清除选择状态
@@ -129,6 +141,9 @@ export class DrawBoardSelectionAPI {
       if (currentTool && ToolTypeGuards.isSelectTool(currentTool)) {
         currentTool.clearSelection();
       }
+      
+      // ✅ 强制使所有图层缓存失效
+      this.drawingHandler.invalidateOffscreenCache(true);
       
       await this.drawingHandler.forceRedraw();
     }
@@ -335,6 +350,123 @@ export class DrawBoardSelectionAPI {
     
     // 从SelectionManager获取
     return this.selectionManager.getSelectedActions().map(item => item.action);
+  }
+
+  // ============================================
+  // 选区导出功能
+  // ============================================
+
+  /**
+   * 导出选中的元素为 JSON 对象
+   */
+  public exportSelectionData(options: ExportOptions = {}): DrawBoardExportData | null {
+    const selectedActions = this.getSelectedActions();
+    
+    if (selectedActions.length === 0) {
+      logger.warn('没有选中的元素，无法导出');
+      return null;
+    }
+
+    const canvas = this.canvasEngine.getCanvas();
+    const size = { width: canvas.width, height: canvas.height };
+    const config = {
+      width: size.width,
+      height: size.height,
+      virtualLayerMode: this.virtualLayerManager?.getMode() || 'individual' as const
+    };
+
+    // 导出时不包含图层信息（选中的元素可能来自不同图层）
+    return DataExporter.exportData(selectedActions, [], config, {
+      ...options,
+      includeLayers: false
+    });
+  }
+
+  /**
+   * 导出选中的元素为 JSON 字符串
+   */
+  public exportSelectionToJSON(options: ExportOptions = {}): string | null {
+    const selectedActions = this.getSelectedActions();
+    
+    if (selectedActions.length === 0) {
+      logger.warn('没有选中的元素，无法导出');
+      return null;
+    }
+
+    const canvas = this.canvasEngine.getCanvas();
+    const size = { width: canvas.width, height: canvas.height };
+    const config = {
+      width: size.width,
+      height: size.height,
+      virtualLayerMode: this.virtualLayerManager?.getMode() || 'individual' as const
+    };
+
+    return DataExporter.exportToJSON(selectedActions, [], config, {
+      ...options,
+      includeLayers: false
+    });
+  }
+
+  /**
+   * 下载选中的元素为 JSON 文件
+   */
+  public downloadSelectionAsJSON(options: ExportOptions = {}): boolean {
+    const selectedActions = this.getSelectedActions();
+    
+    if (selectedActions.length === 0) {
+      logger.warn('没有选中的元素，无法导出');
+      return false;
+    }
+
+    const canvas = this.canvasEngine.getCanvas();
+    const size = { width: canvas.width, height: canvas.height };
+    const config = {
+      width: size.width,
+      height: size.height,
+      virtualLayerMode: this.virtualLayerManager?.getMode() || 'individual' as const
+    };
+
+    const filename = options.filename || `selection-${Date.now()}.json`;
+
+    DataExporter.downloadAsJSON(selectedActions, [], config, {
+      ...options,
+      includeLayers: false,
+      filename
+    });
+
+    logger.info('选区已导出', { count: selectedActions.length, filename });
+    return true;
+  }
+
+  /**
+   * 复制选中元素的 JSON 到剪贴板
+   */
+  public async copySelectionAsJSON(options: ExportOptions = {}): Promise<boolean> {
+    const selectedActions = this.getSelectedActions();
+    
+    if (selectedActions.length === 0) {
+      logger.warn('没有选中的元素，无法复制');
+      return false;
+    }
+
+    const canvas = this.canvasEngine.getCanvas();
+    const size = { width: canvas.width, height: canvas.height };
+    const config = {
+      width: size.width,
+      height: size.height,
+      virtualLayerMode: this.virtualLayerManager?.getMode() || 'individual' as const
+    };
+
+    const success = await DataExporter.copyToClipboard(selectedActions, [], config, {
+      ...options,
+      includeLayers: false
+    });
+
+    if (success) {
+      logger.info('选区 JSON 已复制到剪贴板', { count: selectedActions.length });
+    }
+
+    return success;
   }
 }
 

@@ -123,6 +123,101 @@ const SelectionDemo: React.FC = () => {
     drawBoardRef.current?.saveAsImage('选择功能演示');
   };
 
+  // 导出全部数据为 JSON（v1 格式）
+  const handleExportJSON = () => {
+    if (!drawBoardRef.current) return;
+    
+    drawBoardRef.current.downloadAsJSON({
+      filename: `drawboard-${new Date().toISOString().slice(0, 10)}.json`,
+      metadata: {
+        name: '选择功能演示导出',
+        description: 'DrawBoard 画板数据',
+        author: 'DrawBoard User'
+      }
+    });
+    
+    console.info('✅ 数据已导出为 JSON 文件 (v1 格式)');
+  };
+
+  // 导出标准格式 v2（语义化 Shape）
+  const handleExportStandardFormat = () => {
+    if (!drawBoardRef.current) return;
+    
+    // 获取导出数据并在控制台显示格式示例
+    const json = drawBoardRef.current.exportToJSON();
+    const data = JSON.parse(json);
+    
+    console.info('📋 标准格式导出示例:');
+    console.info('每种形状都有独立的语义化结构:');
+    console.info('- Pen: { type: "pen", path: [...points] }');
+    console.info('- Circle: { type: "circle", center: {x,y}, radius }');
+    console.info('- Rect: { type: "rect", x, y, width, height }');
+    console.info('- Line: { type: "line", start: {x,y}, end: {x,y} }');
+    console.info('- Text: { type: "text", position, content, fontSize, fontFamily }');
+    console.info('- Polygon: { type: "polygon", center, radius, sides }');
+    console.table(data.actions?.slice(0, 3) || []);
+    
+    drawBoardRef.current.downloadAsJSON({
+      filename: `drawboard-standard-${new Date().toISOString().slice(0, 10)}.json`,
+      metadata: {
+        name: '标准格式导出',
+        description: '语义化形状数据'
+      }
+    });
+    
+    console.info('✅ 数据已导出为标准格式 JSON 文件');
+  };
+
+  // 导出选中元素为 JSON
+  const handleExportSelectionJSON = () => {
+    if (!drawBoardRef.current) return;
+    
+    if (!hasSelection) {
+      console.warn('⚠️ 请先选择要导出的元素');
+      return;
+    }
+    
+    const success = drawBoardRef.current.downloadSelectionAsJSON({
+      filename: `selection-${new Date().toISOString().slice(0, 10)}.json`,
+      metadata: {
+        name: '选区导出',
+        description: '选中元素的 JSON 数据'
+      }
+    });
+    
+    if (success) {
+      console.info('✅ 选中元素已导出为 JSON 文件');
+    }
+  };
+
+  // 导入 JSON 数据
+  const handleImportJSON = async () => {
+    if (!drawBoardRef.current) return;
+    
+    const result = await drawBoardRef.current.openImportDialog();
+    
+    if (result.success) {
+      console.info(`✅ 导入成功: ${result.actions.length} 个动作`);
+      updateState();
+    } else {
+      console.error('❌ 导入失败:', result.errors);
+    }
+  };
+
+  // 显示数据统计
+  const handleShowStats = () => {
+    if (!drawBoardRef.current) return;
+    
+    const stats = drawBoardRef.current.getDataStats();
+    const message = `📊 数据统计:\n\n` +
+      `动作数量: ${stats.actionsCount}\n` +
+      `图层数量: ${stats.layersCount}\n` +
+      `预估大小: ${(stats.estimatedSize / 1024).toFixed(2)} KB`;
+    
+    console.info(message);
+    alert(message);
+  };
+
   // 显示使用提示
   const showUsageTip = () => {
     const message = '欢迎使用选择功能演示！\n\n请按以下步骤操作：\n\n1. 🖊️ 先绘制内容：使用画笔、矩形、圆形等工具绘制一些图形\n2. 🎯 切换选择工具：点击选择工具按钮或按 S 键\n3. 📦 框选图形：拖拽鼠标框选要操作的图形\n4. ⚡ 执行操作：使用工具栏按钮复制、删除或取消选择\n\n现在就开始绘制你的第一个图形吧！';
@@ -318,6 +413,29 @@ const SelectionDemo: React.FC = () => {
             </button>
             <button onClick={forceSyncSelectTool} className="demo-button">
               🔄 同步数据（查看控制台）
+            </button>
+          </div>
+
+          <div className="data-controls">
+            <h4>📁 数据导入导出</h4>
+            <button onClick={handleExportJSON} className="demo-button export">
+              📤 导出 JSON (v1)
+            </button>
+            <button onClick={handleExportStandardFormat} className="demo-button export standard">
+              📐 导出标准格式 (v2)
+            </button>
+            <button 
+              onClick={handleExportSelectionJSON} 
+              className="demo-button export"
+              disabled={!hasSelection}
+            >
+              📤 导出选区 JSON
+            </button>
+            <button onClick={handleImportJSON} className="demo-button import">
+              📥 导入 JSON
+            </button>
+            <button onClick={handleShowStats} className="demo-button">
+              📊 数据统计
             </button>
           </div>
         </div>

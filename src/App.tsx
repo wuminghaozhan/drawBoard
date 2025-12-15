@@ -7,6 +7,7 @@ import GeometryDemo from './pages/GeometryDemo';
 import ProtocolDemo from './pages/ProtocolDemo';
 import StrokeDemo from './pages/StrokeDemo';
 import PresetDemo from './pages/PresetDemo';
+import SimpleBrushDemo from './pages/SimpleBrushDemo';
 import CursorDemo from './pages/CursorDemo';
 import PerformanceDemo from './pages/PerformanceDemo';
 import EDBDemo from './pages/EDBDemo';
@@ -27,6 +28,7 @@ function App() {
             <Route path="/protocol" element={<ProtocolDemo />} />
             <Route path="/stroke" element={<StrokeDemo />} />
             <Route path="/preset" element={<PresetDemo />} />
+            <Route path="/brush" element={<SimpleBrushDemo />} />
             <Route path="/cursor" element={<CursorDemo />} />
             <Route path="/performance" element={<PerformanceDemo />} />
             <Route path="/edb" element={<EDBDemo />} />

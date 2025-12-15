@@ -29,6 +29,7 @@ import { DrawBoardVirtualLayerAPI } from './api/DrawBoardVirtualLayerAPI';
 import { DrawBoardSelectionAPI } from './api/DrawBoardSelectionAPI';
 import { DrawBoardToolAPI } from './api/DrawBoardToolAPI';
 import { DrawBoardHistoryAPI } from './api/DrawBoardHistoryAPI';
+import { DrawBoardDataAPI } from './api/DrawBoardDataAPI';
 
 // 函数式编程模块（直接从子模块导入以避免循环依赖）
 import { 
@@ -276,6 +277,9 @@ export class DrawBoard {
   
   /** 历史记录 API */
   private historyAPI!: DrawBoardHistoryAPI;
+  
+  /** 数据导入导出 API */
+  private dataAPI!: DrawBoardDataAPI;
 
   /**
    * 构造函数 - 初始化DrawBoard实例
@@ -528,6 +532,31 @@ export class DrawBoard {
       this.toolManager,
       () => this.selectToolCoordinator.syncLayerDataToSelectTool(false)
     );
+
+    // 初始化数据导入导出 API
+    this.dataAPI = new DrawBoardDataAPI(
+      this.historyManager,
+      this.virtualLayerManager,
+      this.canvasEngine
+    );
+    
+    // 设置数据加载回调
+    this.dataAPI.setDataLoadCallback({
+      applyActions: (actions) => {
+        for (const action of actions) {
+          this.historyManager.addAction(action);
+          this.virtualLayerManager.handleNewAction(action);
+        }
+      },
+      rebuildLayers: (layers) => {
+        // 图层信息已通过 action.virtualLayerId 关联，此处可扩展
+        logger.debug('图层数据已加载', { count: layers.length });
+      },
+      redraw: async () => {
+        this.drawingHandler.invalidateOffscreenCache(true);
+        await this.drawingHandler.forceRedraw();
+      }
+    });
 
     logger.debug('API 模块初始化完成');
   }
@@ -910,6 +939,7 @@ export class DrawBoard {
 
   private handleDrawMove(event: DrawEvent): void {
     // 如果是选择工具，委托给 SelectToolCoordinator 处理
+    // SelectToolCoordinator 内部会区分悬停和拖拽
     if (this.toolManager.getCurrentTool() === 'select') {
       const { needsCursorUpdate } = this.selectToolCoordinator.handleDrawMove(event);
       if (needsCursorUpdate) {
@@ -918,7 +948,13 @@ export class DrawBoard {
         return;
     }
     
-    // 其他工具走正常的绘制流程
+    // 其他绘制工具：只有在鼠标/手指按下状态时才处理绑画
+    // 确保释放后绑画立即结束
+    if (!event.isPointerDown) {
+      return;
+    }
+    
+    // 其他工具走正常的绑画流程
     this.drawingHandler.handleDrawMove(event);
     this.updateCursor();
   }
@@ -1470,6 +1506,66 @@ export class DrawBoard {
   }
 
   // ============================================
+  // 公共API - 数据导入导出
+  // ============================================
+
+  /**
+   * 导出为 JSON 对象
+   */
+  public exportData(options?: import('./api/DrawBoardDataAPI').DataLoadCallback extends never ? import('./utils/DataExporter').ExportOptions : import('./utils/DataExporter').ExportOptions): import('./utils/DataExporter').DrawBoardExportData {
+    return this.dataAPI.exportData(options);
+  }
+
+  /**
+   * 导出为 JSON 字符串
+   */
+  public exportToJSON(options?: import('./utils/DataExporter').ExportOptions): string {
+    return this.dataAPI.exportToJSON(options);
+  }
+
+  /**
+   * 下载为 JSON 文件
+   */
+  public downloadAsJSON(options?: import('./utils/DataExporter').ExportOptions): void {
+    this.dataAPI.downloadAsJSON(options);
+  }
+
+  /**
+   * 从 JSON 字符串导入数据
+   */
+  public async importFromJSON(jsonString: string, options?: import('./utils/DataImporter').ImportOptions): Promise<import('./utils/DataImporter').ImportResult> {
+    return this.dataAPI.importFromJSON(jsonString, options);
+  }
+
+  /**
+   * 从文件导入数据
+   */
+  public async importFromFile(file: File, options?: import('./utils/DataImporter').ImportOptions): Promise<import('./utils/DataImporter').ImportResult> {
+    return this.dataAPI.importFromFile(file, options);
+  }
+
+  /**
+   * 打开文件选择器并导入
+   */
+  public async openImportDialog(options?: import('./utils/DataImporter').ImportOptions): Promise<import('./utils/DataImporter').ImportResult> {
+    return this.dataAPI.openFileDialog(options);
+  }
+
+  /**
+   * 获取数据统计
+   */
+  public getDataStats(): { actionsCount: number; layersCount: number; estimatedSize: number } {
+    return this.dataAPI.getDataStats();
+  }
+
+  /**
+   * 验证 JSON 数据
+   */
+  public validateJSON(jsonString: string): { valid: boolean; errors: string[]; warnings: string[] } {
+    return this.dataAPI.validateJSON(jsonString);
+  }
+
+  // ============================================
   // 公共API - 选择操作
   // ============================================
 
@@ -1539,6 +1635,34 @@ export class DrawBoard {
    */
   public getSelectedActions(): DrawAction[] {
     return this.selectionAPI.getSelectedActions();
+  }
+
+  /**
+   * 导出选中元素为 JSON 对象
+   */
+  public exportSelectionData(options?: import('./utils/DataExporter').ExportOptions): import('./utils/DataExporter').DrawBoardExportData | null {
+    return this.selectionAPI.exportSelectionData(options);
+  }
+
+  /**
+   * 导出选中元素为 JSON 字符串
+   */
+  public exportSelectionToJSON(options?: import('./utils/DataExporter').ExportOptions): string | null {
+    return this.selectionAPI.exportSelectionToJSON(options);
+  }
+
+  /**
+   * 下载选中元素为 JSON 文件
+   */
+  public downloadSelectionAsJSON(options?: import('./utils/DataExporter').ExportOptions): boolean {
+    return this.selectionAPI.downloadSelectionAsJSON(options);
+  }
+
+  /**
+   * 复制选中元素的 JSON 到剪贴板
+   */
+  public async copySelectionAsJSON(options?: import('./utils/DataExporter').ExportOptions): Promise<boolean> {
+    return this.selectionAPI.copySelectionAsJSON(options);
   }
 
   // ============================================

@@ -192,6 +192,7 @@ export class ToolFactory {
     const basicTools: Record<ToolType, () => DrawTool> = {
       pen: () => new BasicPenTool(),
       brush: () => new BasicBrushTool(),
+      advancedPen: () => new BasicPenTool(), // 降级为基础画笔
       rect: () => new BasicRectTool(),
       circle: () => new BasicCircleTool(),
       line: () => new BasicLineTool(),
@@ -282,15 +283,17 @@ export class ToolFactory {
     try {
       logger.debug('开始注册内置工具...');
       
-      // 当前所有工具都是轻量级的
+      // 画笔工具 - 使用 SimplePenTool（更平滑的笔触）
       this.register('pen', async () => {
         logger.debug('注册 pen 工具工厂');
         try {
-          const { PenToolRefactored } = await import('./PenToolRefactored');
-          logger.debug('PenToolRefactored 导入成功');
-          return new PenToolRefactored();
+          const { SimplePenTool } = await import('./SimplePenTool');
+          logger.debug('SimplePenTool 导入成功');
+          const tool = new SimplePenTool();
+          tool.setPreset('marker'); // 默认马克笔预设
+          return tool;
         } catch (importError) {
-          logger.error('导入 PenToolRefactored 失败:', importError);
+          logger.error('导入 SimplePenTool 失败:', importError);
           throw importError;
         }
       }, { isHeavy: false, estimatedLoadTime: 50 });
@@ -298,12 +301,24 @@ export class ToolFactory {
       this.register('brush', async () => {
         logger.debug('注册 brush 工具工厂');
         try {
-          const { PenToolRefactored } = await import('./PenToolRefactored');
-          const brushTool = new PenToolRefactored();
-          brushTool.setPreset('brush'); // 设置为毛笔预设
+          const { SimplePenTool } = await import('./SimplePenTool');
+          const brushTool = new SimplePenTool();
+          brushTool.setPreset('brush'); // 毛笔预设
           return brushTool;
         } catch (importError) {
-          logger.error('导入 PenToolRefactored (brush) 失败:', importError);
+          logger.error('导入 SimplePenTool (brush) 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 60 });
+
+      // 高级运笔效果画笔 - 使用 PenToolRefactored（用于 StrokeDemo 展示）
+      this.register('advancedPen', async () => {
+        logger.debug('注册 advancedPen 工具工厂');
+        try {
+          const { PenToolRefactored } = await import('./PenToolRefactored');
+          return new PenToolRefactored();
+        } catch (importError) {
+          logger.error('导入 PenToolRefactored 失败:', importError);
           throw importError;
         }
       }, { isHeavy: false, estimatedLoadTime: 60 });

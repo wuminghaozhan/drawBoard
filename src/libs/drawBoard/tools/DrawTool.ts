@@ -17,6 +17,7 @@ export interface DrawContext {
 export type ToolType = 
   | 'pen'
   | 'brush'
+  | 'advancedPen'  // 高级运笔效果画笔
   | 'rect'
   | 'circle'
   | 'line'

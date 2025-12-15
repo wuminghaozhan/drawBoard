@@ -33,6 +33,25 @@ export { NoResourceManager } from './NoResourceManager';
 // 导出功能
 export { ExportManager } from './ExportManager';
 
+// JSON 导入导出
+export { 
+  DataExporter,
+  type DrawBoardExportData,
+  type ExportedAction,
+  type ExportedLayer,
+  type ExportedConfig,
+  type ExportOptions,
+  EXPORT_VERSION
+} from './DataExporter';
+export {
+  DataImporter,
+  type ImportResult,
+  type ImportOptions
+} from './DataImporter';
+
+// 标准化形状转换器
+export { ShapeConverter } from './ShapeConverter';
+
 // 调试工具
 export { DebugUtils } from './DebugUtils';
 

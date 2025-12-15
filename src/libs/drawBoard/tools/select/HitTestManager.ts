@@ -174,28 +174,41 @@ export class HitTestManager {
 
   /**
    * 检查点是否在多边形 action 内（使用射线法）
+   * 
+   * 多边形有两种数据格式：
+   * 1. 中心+边缘点格式（绘制时产生）：points[0] = 中心，points[last] = 边缘
+   * 2. 顶点列表格式（变换后产生）：points 是所有顶点
    */
   public isPointInPolygonAction(point: Point, action: DrawAction, tolerance: number): boolean {
-    if (action.points.length < 3) {
+    if (action.points.length < 2) {
       return this.isPointInBoundingBox(point, action, tolerance);
     }
     
-    let inside = false;
-    const points = action.points;
+    // 获取多边形实际顶点
+    const vertices = this.getPolygonVertices(action);
     
-    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-      const xi = points[i].x;
-      const yi = points[i].y;
-      const xj = points[j].x;
-      const yj = points[j].y;
+    if (vertices.length < 3) {
+      return this.isPointInBoundingBox(point, action, tolerance);
+    }
+    
+    const lineWidth = action.context?.lineWidth || 2;
+    const effectiveTolerance = tolerance + Math.max(lineWidth / 2, 3);
+    
+    let inside = false;
+    
+    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+      const xi = vertices[i].x;
+      const yi = vertices[i].y;
+      const xj = vertices[j].x;
+      const yj = vertices[j].y;
       
-      // 检查点是否在多边形边界上
-      const distToEdge = this.distanceToLineSegment(point, points[j], points[i]);
-      if (distToEdge <= tolerance) {
+      // 检查点是否在多边形边界上（边缘检测，增加容差）
+      const distToEdge = this.distanceToLineSegment(point, vertices[j], vertices[i]);
+      if (distToEdge <= effectiveTolerance) {
         return true;
       }
       
-      // 射线法
+      // 射线法检测点是否在多边形内部
       const intersect = ((yi > point.y) !== (yj > point.y)) &&
                        (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi);
       if (intersect) {
@@ -204,6 +217,78 @@ export class HitTestManager {
     }
     
     return inside;
+  }
+  
+  /**
+   * 获取多边形的实际顶点
+   * 
+   * 处理两种数据格式：
+   * 1. 中心+边缘点格式 → 计算实际顶点
+   * 2. 顶点列表格式 → 直接返回
+   */
+  private getPolygonVertices(action: DrawAction): Point[] {
+    if (action.points.length < 2) {
+      return [];
+    }
+    
+    // 检查是否是顶点列表格式
+    const polygonAction = action as DrawAction & {
+      isVertexList?: boolean;
+      polygonType?: 'triangle' | 'pentagon' | 'hexagon' | 'star' | 'custom';
+      sides?: number;
+    };
+    
+    if (polygonAction.isVertexList === true) {
+      // 已标记为顶点列表，直接使用
+      return action.points;
+    }
+    
+    // 中心+边缘点格式，计算实际顶点
+    const center = action.points[0];
+    const edge = action.points[action.points.length - 1];
+    const radius = Math.sqrt(
+      Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
+    );
+    
+    if (!isFinite(radius) || radius <= 0) {
+      return [];
+    }
+    
+    // 确定边数
+    let sides: number;
+    switch (polygonAction.polygonType) {
+      case 'triangle':
+        sides = 3;
+        break;
+      case 'pentagon':
+        sides = 5;
+        break;
+      case 'hexagon':
+        sides = 6;
+        break;
+      case 'star':
+        sides = 5; // 星形有5个外顶点
+        break;
+      case 'custom':
+        sides = polygonAction.sides || 6;
+        break;
+      default:
+        sides = 6;
+    }
+    
+    // 计算顶点
+    const vertices: Point[] = [];
+    const angleStep = (2 * Math.PI) / sides;
+    
+    for (let i = 0; i < sides; i++) {
+      const angle = i * angleStep - Math.PI / 2; // 从顶部开始
+      vertices.push({
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle)
+      });
+    }
+    
+    return vertices;
   }
 
   /**
@@ -245,24 +330,39 @@ export class HitTestManager {
 
   /**
    * 检查点是否在线条 action 内
+   * 
+   * 优化：增加线段的有效检测区域
+   * - 基础容差增加到 12px（细线也容易选中）
+   * - 线条两端增加额外热区（端点半径）
    */
   public isPointInLineAction(point: Point, action: DrawAction, tolerance: number): boolean {
     if (action.points.length < 2) return false;
     
     const lineWidth = action.context?.lineWidth || 2;
-    const effectiveTolerance = tolerance + Math.max(lineWidth / 2, 2);
+    // 增加基础容差：至少 12 像素，或 lineWidth 的一半 + tolerance
+    const baseTolerance = Math.max(12, tolerance);
+    const effectiveTolerance = baseTolerance + Math.max(lineWidth / 2, 2);
     
-    for (let i = 0; i < action.points.length - 1; i++) {
-      const p1 = action.points[i];
-      const p2 = action.points[i + 1];
-      
-      if (!isFinite(p1.x) || !isFinite(p1.y) || !isFinite(p2.x) || !isFinite(p2.y)) {
-        continue;
-      }
-      
-      if (this.distanceToLineSegment(point, p1, p2) <= effectiveTolerance) {
-        return true;
-      }
+    const start = action.points[0];
+    const end = action.points[action.points.length - 1];
+    
+    // 检查是否在线段附近
+    if (!isFinite(start.x) || !isFinite(start.y) || !isFinite(end.x) || !isFinite(end.y)) {
+      return false;
+    }
+    
+    // 主线段检测
+    if (this.distanceToLineSegment(point, start, end) <= effectiveTolerance) {
+      return true;
+    }
+    
+    // 端点热区检测（更容易点击线条的两端）
+    const endpointRadius = effectiveTolerance * 1.5;
+    const distToStart = Math.sqrt(Math.pow(point.x - start.x, 2) + Math.pow(point.y - start.y, 2));
+    const distToEnd = Math.sqrt(Math.pow(point.x - end.x, 2) + Math.pow(point.y - end.y, 2));
+    
+    if (distToStart <= endpointRadius || distToEnd <= endpointRadius) {
+      return true;
     }
     
     return false;

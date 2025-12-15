@@ -1358,52 +1358,57 @@ export class SelectTool extends DrawTool {
    * 改进：清晰区分移动和变形操作
    */
   public handleMouseDown(point: Point): 'select' | 'transform' | 'move' | 'box-select' | 'resize' | null {
+    // 🔧 强制重置所有状态，防止之前操作的状态残留
+    // 这确保每次新的点击都从干净状态开始
+    
+    // 重置拖拽状态
+    this.isDragging = false;
+    this.isDraggingResizeAnchor = false;
+    this.isDraggingMove = false;
+    this.isDraggingCenter = false;
+    this.dragStartPoint = null;
+    
+    // 🔧 重置框选状态（防止偶现多选问题）
+    this.isSelecting = false;
+    this.selectionStartPoint = null;
+    this.currentSelectionBounds = null;
+    
     // 如果有选中的actions，检查交互区域
     if (this.selectedActions.length > 0) {
       // 1. 优先检查是否点击了边锚点（变形锚点优先级最高）
       const anchorInfo = this.getAnchorPointAt(point);
       if (anchorInfo && !anchorInfo.isCenter) {
         // 边锚点：缩放/变形
-          this.isDraggingResizeAnchor = true;
-        this.isDraggingMove = false;
-        this.isDraggingCenter = false;
-          this.draggedAnchorIndex = anchorInfo.index;
-          this.dragStartPoint = point;
-          this.dragStartBounds = null;
-          this.dragStartAction = this.selectedActions.length === 1 ? 
-            { ...this.selectedActions[0] } : null;
-          this.saveDragStartState();
-          return 'resize';
-        }
+        this.isDraggingResizeAnchor = true;
+        this.draggedAnchorIndex = anchorInfo.index;
+        this.dragStartPoint = point;
+        this.dragStartBounds = null;
+        this.dragStartAction = this.selectedActions.length === 1 ? 
+          { ...this.selectedActions[0] } : null;
+        this.saveDragStartState();
+        return 'resize';
+      }
       
       // 2. 检查是否点击了中心点（移动操作）
       if (anchorInfo && anchorInfo.isCenter) {
-        // 中心点：移动整个图形（明确区分：这是移动操作，不是变形操作）
+        // 中心点：移动整个图形
         logger.debug('点击了中心点，开始移动', { anchorType: anchorInfo.anchor.type });
         this.isDraggingCenter = true;
-        this.isDraggingMove = true; // 中心点拖拽是移动操作
-        this.isDraggingResizeAnchor = false; // 明确不是变形操作
+        this.isDraggingMove = true;
         this.dragStartPoint = point;
-        // 保存拖拽开始时的action（用于圆形等需要保持原始状态的图形）
         this.dragStartAction = this.selectedActions.length === 1 ? 
           { ...this.selectedActions[0] } : null;
-        // 保存拖拽前的状态（用于取消）
         this.saveDragStartState();
         return 'move';
       }
       
       // 3. 检查是否点击了移动区域（用于移动整个选区）
-      // 改进：移动区域检测应该在锚点检测之后，但优先级高于其他操作
       if (this.isPointInMoveArea(point)) {
         logger.debug('点击了移动区域，开始移动选区');
         this.isDraggingMove = true;
-        this.isDraggingCenter = false;
-        this.isDraggingResizeAnchor = false;
         this.dragStartPoint = point;
-        // 保存拖拽开始时的action
         this.dragStartAction = this.selectedActions.length === 1 ? 
           { ...this.selectedActions[0] } : null;
-        // 保存拖拽前的状态（用于取消）
         this.saveDragStartState();
         return 'move';
       }

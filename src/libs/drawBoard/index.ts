@@ -131,6 +131,15 @@ export { DrawTool } from './tools/DrawTool';
 
 // 具体工具类（用于扩展和自定义）
 export { PenToolRefactored } from './tools/PenToolRefactored';
+export { 
+  SimplePenTool, 
+  createSimplePen, 
+  createPressurePen,
+  createBrushFromPreset,
+  getAllBrushPresets,
+  BRUSH_PRESETS
+} from './tools/SimplePenTool';
+export type { BrushType, BrushPreset, SimpleBrushConfig, PresetConfig } from './tools/SimplePenTool';
 export { RectTool } from './tools/RectTool';
 export { CircleTool } from './tools/CircleTool';
 export { LineTool } from './tools/LineTool';

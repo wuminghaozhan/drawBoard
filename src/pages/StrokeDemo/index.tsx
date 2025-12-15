@@ -11,7 +11,7 @@ const StrokeDemo: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const drawBoardRef = useRef<DrawBoard | null>(null);
   
-  const [currentTool, setCurrentTool] = useState<ToolType>('pen');
+  const [currentTool, setCurrentTool] = useState<ToolType>('advancedPen');
   const [currentColor, setCurrentColor] = useState('#000000');
   const [currentLineWidth, setCurrentLineWidth] = useState(2);
   const [showStrokePanel, setShowStrokePanel] = useState(true);
@@ -38,11 +38,15 @@ const StrokeDemo: React.FC = () => {
         strokeConfig: initialStrokeConfig
       });
 
-      // 确保当前工具是画笔工具
-      drawBoardRef.current.setTool('pen');
+      // 确保当前工具是高级运笔效果画笔
+      drawBoardRef.current.setTool('advancedPen');
 
-      // 获取初始配置
-      setStrokeConfig(drawBoardRef.current.getStrokeConfig());
+      // 获取初始配置（异步）
+      drawBoardRef.current.getStrokeConfig().then(config => {
+        if (config) {
+          setStrokeConfig(config);
+        }
+      });
     }
 
     return () => {
@@ -76,11 +80,11 @@ const StrokeDemo: React.FC = () => {
     setCurrentPreset(presetType);
     setStrokeConfig(config);
     
-    // 确保当前工具是画笔工具
+    // 确保当前工具是高级运笔画笔工具
     if (drawBoardRef.current) {
-      drawBoardRef.current.setTool('pen');
+      drawBoardRef.current.setTool('advancedPen');
     }
-    setCurrentTool('pen');
+    setCurrentTool('advancedPen');
     
   };
 
@@ -114,9 +118,9 @@ const StrokeDemo: React.FC = () => {
             <h3>工具选择</h3>
             <div className="tool-buttons">
               <button
-                className={`tool-btn ${currentTool === 'pen' ? 'active' : ''}`}
-                onClick={() => handleToolChange('pen')}
-                title="画笔工具"
+                className={`tool-btn ${currentTool === 'advancedPen' ? 'active' : ''}`}
+                onClick={() => handleToolChange('advancedPen')}
+                title="高级运笔画笔"
               >
                 ✏️ 画笔
               </button>
@@ -270,19 +274,19 @@ const StrokeDemo: React.FC = () => {
                 </div>
                 <div className="config-item">
                   <span>压力敏感度:</span>
-                  <span>{strokeConfig.pressureSensitivity.toFixed(2)}</span>
+                  <span>{strokeConfig.pressureSensitivity?.toFixed(2) ?? 'N/A'}</span>
                 </div>
                 <div className="config-item">
                   <span>速度敏感度:</span>
-                  <span>{strokeConfig.velocitySensitivity.toFixed(2)}</span>
+                  <span>{strokeConfig.velocitySensitivity?.toFixed(2) ?? 'N/A'}</span>
                 </div>
                 <div className="config-item">
                   <span>平滑度:</span>
-                  <span>{strokeConfig.smoothing.toFixed(2)}</span>
+                  <span>{strokeConfig.smoothing?.toFixed(2) ?? 'N/A'}</span>
                 </div>
                 <div className="config-item">
                   <span>线宽范围:</span>
-                  <span>{strokeConfig.minLineWidth}-{strokeConfig.maxLineWidth}px</span>
+                  <span>{strokeConfig.minLineWidth ?? 1}-{strokeConfig.maxLineWidth ?? 20}px</span>
                 </div>
               </div>
             )}

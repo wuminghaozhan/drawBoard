@@ -26,6 +26,7 @@ const Navigation: React.FC = () => {
       items: [
         { path: '/stroke', label: '✏️ 运笔效果', description: '压感、速度、角度控制' },
         { path: '/preset', label: '🎨 笔触预设', description: '钢笔、毛笔、铅笔等预设' },
+        { path: '/brush', label: '🖌️ 简化笔触', description: '6种基础笔触预设' },
         { path: '/cursor', label: '👆 鼠标样式', description: '动态鼠标样式反馈' },
       ]
     },
