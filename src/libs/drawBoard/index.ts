@@ -96,7 +96,9 @@ export { ToolFactory } from './tools/ToolFactory';
 export { HistoryManager } from './history/HistoryManager';
 
 /** 选择管理器 - 管理选择区域和选中内容 */
-export { SelectionManager } from './core/SelectionManager';
+export { CoreSelectionManager } from './core/CoreSelectionManager';
+// 兼容旧代码的别名
+export { CoreSelectionManager as SelectionManager } from './core/CoreSelectionManager';
 
 /** 性能管理器 - 管理预渲染缓存和性能优化 */
 export { PerformanceManager } from './core/PerformanceManager';
@@ -135,6 +137,9 @@ export { LineTool } from './tools/LineTool';
 export { PolygonTool } from './tools/PolygonTool';
 export { TextTool } from './tools/TextTool';
 export { EraserTool } from './tools/EraserTool';
+export type { EraserAction, EraserMode, EraserScope, EraserToolConfig, EraserSplitEvent } from './tools/EraserTool';
+export { PathSplitter } from './tools/eraser/PathSplitter';
+export type { SplitResult } from './tools/eraser/PathSplitter';
 export { SelectTool } from './tools/SelectTool';
 
 // ============================================

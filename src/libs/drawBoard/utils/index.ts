@@ -13,6 +13,12 @@
 export { AnchorUtils } from './AnchorUtils';
 export { BoundsValidator, type Bounds } from './BoundsValidator';
 export { ShapeUtils } from './ShapeUtils';
+export { 
+  GeometryUtils,
+  type BoundingBox as GeoBoundingBox,
+  type LineSegment,
+  type BezierControlPoints
+} from './GeometryUtils';
 
 // 资源管理
 export { 

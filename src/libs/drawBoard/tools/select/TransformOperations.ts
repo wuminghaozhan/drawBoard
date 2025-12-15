@@ -140,6 +140,64 @@ export class TransformOperations {
   }
 
   /**
+   * 调整文本框宽度（用于边中点拖拽）
+   * 只调整宽度，不改变字号
+   */
+  static resizeTextWidth(
+    action: DrawAction,
+    newWidth: number,
+    anchorType: 'left' | 'right'
+  ): TransformResult {
+    if (action.type !== 'text') {
+      return { success: false, error: '只有文本类型支持宽度调整' };
+    }
+
+    const textAction = action as DrawAction & { width?: number; fontSize?: number };
+    const minWidth = 20; // 最小宽度
+    const clampedWidth = Math.max(minWidth, newWidth);
+
+    // 如果拖拽左边锚点，需要调整位置
+    let newPoints = [...(action.points || [])];
+    if (anchorType === 'left' && newPoints.length > 0) {
+      const currentWidth = textAction.width || 100;
+      const deltaWidth = clampedWidth - currentWidth;
+      newPoints[0] = {
+        x: newPoints[0].x - deltaWidth,
+        y: newPoints[0].y
+      };
+    }
+
+    const updatedAction: DrawAction = {
+      ...action,
+      points: newPoints,
+      width: clampedWidth
+    } as DrawAction;
+
+    logger.debug('TransformOperations: 调整文本宽度', {
+      actionId: action.id,
+      oldWidth: textAction.width,
+      newWidth: clampedWidth,
+      anchorType
+    });
+
+    return { success: true, action: updatedAction };
+  }
+
+  /**
+   * 判断锚点类型是否为边中点（用于文本宽度调整）
+   */
+  static isEdgeAnchor(anchorType: string): boolean {
+    return ['left', 'right', 'top', 'bottom', 'resize-w', 'resize-e', 'resize-n', 'resize-s'].includes(anchorType);
+  }
+
+  /**
+   * 判断锚点类型是否为水平边中点（左/右）
+   */
+  static isHorizontalEdgeAnchor(anchorType: string): boolean {
+    return ['left', 'right', 'resize-w', 'resize-e'].includes(anchorType);
+  }
+
+  /**
    * 旋转单个 Action
    */
   static rotateAction(
@@ -169,15 +227,48 @@ export class TransformOperations {
 
     const updatedAction = {
       ...action,
-      points: newPoints
+      points: newPoints,
+      // 保存累计旋转角度
+      rotation: ((action as DrawAction & { rotation?: number }).rotation || 0) + angle
     };
 
     logger.debug('TransformOperations: 旋转完成', {
       actionType: action.type,
-      angle: angle * (180 / Math.PI)
+      angle: angle * (180 / Math.PI),
+      totalRotation: (updatedAction as DrawAction & { rotation?: number }).rotation
     });
 
     return { success: true, action: updatedAction };
+  }
+
+  /**
+   * 计算旋转角度（基于拖拽点相对于中心点）
+   * @param centerX 旋转中心 X
+   * @param centerY 旋转中心 Y
+   * @param startX 起始点 X
+   * @param startY 起始点 Y
+   * @param currentX 当前点 X
+   * @param currentY 当前点 Y
+   * @returns 旋转角度（弧度）
+   */
+  static calculateRotationAngle(
+    centerX: number,
+    centerY: number,
+    startX: number,
+    startY: number,
+    currentX: number,
+    currentY: number
+  ): number {
+    const startAngle = Math.atan2(startY - centerY, startX - centerX);
+    const currentAngle = Math.atan2(currentY - centerY, currentX - centerX);
+    return currentAngle - startAngle;
+  }
+
+  /**
+   * 判断是否为旋转锚点类型
+   */
+  static isRotateAnchor(anchorType: string): boolean {
+    return anchorType === 'rotate';
   }
 
   /**

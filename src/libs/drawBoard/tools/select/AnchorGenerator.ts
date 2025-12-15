@@ -26,13 +26,31 @@ export interface AnchorGeneratorResult {
 }
 
 /**
+ * 旋转锚点配置
+ */
+export interface RotateAnchorConfig {
+  /** 旋转锚点距离边界的偏移量 */
+  offset: number;
+  /** 旋转锚点与边界的连接线长度 */
+  lineLength: number;
+}
+
+/**
  * 默认配置
  */
 const DEFAULT_CONFIG: AnchorGeneratorConfig = {
   anchorSize: 8,
   anchorTolerance: 6,
-  enableRotateAnchor: false,
+  enableRotateAnchor: true, // 默认启用旋转锚点
   enableCenterAnchor: true
+};
+
+/**
+ * 默认旋转锚点配置
+ */
+const DEFAULT_ROTATE_CONFIG: RotateAnchorConfig = {
+  offset: 25,    // 距离顶部边界 25px
+  lineLength: 20 // 连接线长度 20px
 };
 
 /**
@@ -142,6 +160,11 @@ export class AnchorGenerator {
       { x: x + width, y: y + height / 2, type: 'resize-e', cursor: 'ew-resize' }
     );
 
+    // 旋转锚点（在顶部中心上方）
+    if (this.config.enableRotateAnchor) {
+      anchors.push(this.createRotateAnchor(bounds));
+    }
+
     // 中心锚点
     const centerAnchor = this.config.enableCenterAnchor 
       ? this.createCenterAnchor(bounds) 
@@ -179,12 +202,7 @@ export class AnchorGenerator {
 
     // 可选的旋转锚点（在顶部中心上方）
     if (this.config.enableRotateAnchor) {
-      anchors.push({
-        x: x + width / 2,
-        y: y - 20,
-        type: 'rotate',
-        cursor: 'grab'
-      });
+      anchors.push(this.createRotateAnchor(bounds));
     }
 
     // 中心锚点
@@ -209,6 +227,43 @@ export class AnchorGenerator {
       type: 'center',
       cursor: 'move'
     };
+  }
+
+  /**
+   * 创建旋转锚点
+   * 旋转锚点位于边界框顶部中心上方
+   */
+  private createRotateAnchor(bounds: Bounds): AnchorPoint {
+    const { offset } = DEFAULT_ROTATE_CONFIG;
+    return {
+      x: bounds.x + bounds.width / 2,
+      y: bounds.y - offset,
+      type: 'rotate',
+      cursor: 'grab'
+    };
+  }
+
+  /**
+   * 获取旋转锚点的连接线端点
+   * 用于 SelectionRenderer 绘制旋转手柄连接线
+   */
+  getRotateAnchorLine(bounds: Bounds): { start: Point; end: Point } | null {
+    if (!this.config.enableRotateAnchor) return null;
+    
+    const { offset, lineLength } = DEFAULT_ROTATE_CONFIG;
+    const centerX = bounds.x + bounds.width / 2;
+    
+    return {
+      start: { x: centerX, y: bounds.y },
+      end: { x: centerX, y: bounds.y - lineLength }
+    };
+  }
+
+  /**
+   * 判断是否为旋转锚点
+   */
+  static isRotateAnchor(anchorType: AnchorType): boolean {
+    return anchorType === 'rotate';
   }
 
   /**

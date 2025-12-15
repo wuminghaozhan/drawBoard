@@ -91,7 +91,7 @@ export class SelectionRenderer {
   }
 
   /**
-   * 绘制锚点（包括边锚点和中心点）
+   * 绘制锚点（包括边锚点、旋转锚点和中心点）
    */
   public drawResizeAnchorPoints(
     ctx: CanvasRenderingContext2D,
@@ -100,7 +100,8 @@ export class SelectionRenderer {
     selectedActionsCount: number,
     hoverAnchorInfo: HoverAnchorInfo | null,
     draggedAnchorIndex: number,
-    isDraggingCenter: boolean
+    isDraggingCenter: boolean,
+    bounds?: Bounds | null
   ): void {
     logger.debug('SelectionRenderer.drawResizeAnchorPoints: 开始绘制锚点', {
       anchorPointsCount: anchorPoints.length,
@@ -118,6 +119,12 @@ export class SelectionRenderer {
                           !hoverAnchorInfo.isCenter && 
                           hoverAnchorInfo.index === i;
         const isDragging = i === draggedAnchorIndex;
+        
+        // 旋转锚点使用特殊样式
+        if (anchor.type === 'rotate') {
+          this.drawRotateAnchor(ctx, anchor, isHovered ?? false, isDragging, bounds);
+          continue;
+        }
         
         const isCircle = anchor.shapeType === 'circle';
         
@@ -189,6 +196,86 @@ export class SelectionRenderer {
     
     ctx.restore();
     logger.debug('SelectionRenderer.drawResizeAnchorPoints: 完成绘制锚点');
+  }
+
+  /**
+   * 绘制旋转锚点
+   * 包括连接线和圆形旋转手柄
+   */
+  private drawRotateAnchor(
+    ctx: CanvasRenderingContext2D,
+    anchor: AnchorPoint,
+    isHovered: boolean,
+    isDragging: boolean,
+    bounds?: Bounds | null
+  ): void {
+    const halfSize = this.anchorSize / 2;
+    const anchorCenterX = anchor.x;
+    const anchorCenterY = anchor.y;
+    
+    // 绘制连接线（从边界框顶部中心到旋转锚点）
+    if (bounds) {
+      const topCenterX = bounds.x + bounds.width / 2;
+      const topCenterY = bounds.y;
+      
+      ctx.save();
+      ctx.strokeStyle = '#007AFF';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(topCenterX, topCenterY);
+      ctx.lineTo(anchorCenterX, anchorCenterY);
+      ctx.stroke();
+      ctx.restore();
+    }
+    
+    // 绘制旋转锚点（圆形，带旋转图标）
+    let anchorSize = this.anchorSize;
+    if (isHovered) {
+      anchorSize = 10;
+    } else if (isDragging) {
+      anchorSize = 12;
+    }
+    
+    const radius = anchorSize / 2;
+    
+    // 外圈
+    ctx.fillStyle = '#FFFFFF';
+    if (isDragging) {
+      ctx.strokeStyle = '#FF9500';
+    } else if (isHovered) {
+      ctx.strokeStyle = '#34C759';
+    } else {
+      ctx.strokeStyle = '#007AFF';
+    }
+    ctx.lineWidth = isHovered || isDragging ? 3 : 2;
+    
+    ctx.beginPath();
+    ctx.arc(anchorCenterX, anchorCenterY, radius, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.stroke();
+    
+    // 绘制旋转图标（一个弧形箭头）
+    const iconRadius = radius * 0.6;
+    ctx.save();
+    ctx.strokeStyle = ctx.strokeStyle;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(anchorCenterX, anchorCenterY, iconRadius, -Math.PI * 0.7, Math.PI * 0.3);
+    ctx.stroke();
+    
+    // 箭头头部
+    const arrowAngle = Math.PI * 0.3;
+    const arrowX = anchorCenterX + iconRadius * Math.cos(arrowAngle);
+    const arrowY = anchorCenterY + iconRadius * Math.sin(arrowAngle);
+    const arrowSize = 3;
+    
+    ctx.beginPath();
+    ctx.moveTo(arrowX - arrowSize, arrowY - arrowSize);
+    ctx.lineTo(arrowX, arrowY);
+    ctx.lineTo(arrowX + arrowSize, arrowY - arrowSize);
+    ctx.stroke();
+    ctx.restore();
   }
 
   /**

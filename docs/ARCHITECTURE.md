@@ -94,7 +94,11 @@ src/libs/drawBoard/              # ~35,000 行代码
 │   ├── SelectTool.ts            # 选择工具 (~2,480 行, 已优化)
 │   ├── PenToolRefactored.ts     # 画笔工具
 │   ├── RectTool.ts / CircleTool.ts / LineTool.ts
-│   ├── PolygonTool.ts / TextTool.ts / EraserTool.ts
+│   ├── PolygonTool.ts / EraserTool.ts
+│   ├── TextTool.ts                   # 文字工具
+│   │   └── text/                     # 文字工具子模块 ⭐ NEW
+│   │       ├── TextEditingManager.ts # 文字编辑管理器
+│   │       └── TextCursorRenderer.ts # 光标和选区渲染
 │   ├── TransformToolRefactored.ts
 │   ├── ToolFactory.ts / ToolManager.ts
 │   │
@@ -215,11 +219,12 @@ interface VirtualLayer {
 
 | 模块 | 职责 |
 |------|------|
-| `TransformOperations` | 缩放、旋转、平移变换 ⭐ |
-| `AnchorGenerator` | 锚点生成、缓存 ⭐ |
-| `AnchorDragHandler` | 锚点拖拽处理 ⭐ |
-| `BoundsCalculator` | 边界框计算 ⭐ |
+| `TransformOperations` | 缩放、旋转、平移变换、文本宽度调整 ⭐ |
+| `AnchorGenerator` | 锚点生成（含旋转锚点）、缓存 ⭐ |
+| `AnchorDragHandler` | 锚点拖拽处理（含旋转拖拽、文本宽度拖拽） ⭐ |
+| `BoundsCalculator` | 边界框计算（含多行文本） ⭐ |
 | `MouseEventHandler` | 鼠标事件处理 ⭐ |
+| `SelectionRenderer` | 选择框渲染（含旋转手柄绘制） ⭐ |
 | `HitTestManager` | 点击测试、碰撞检测 |
 | `BoxSelectionManager` | 框选逻辑 |
 | `SelectionRenderer` | 选区/锚点渲染 |

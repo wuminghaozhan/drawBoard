@@ -783,6 +783,40 @@ export class VirtualLayerManager {
   }
 
   /**
+   * 从图层中移除动作
+   */
+  public removeActionFromLayer(actionId: string, layerId: string): boolean {
+    const layer = this.getVirtualLayer(layerId);
+    if (!layer) {
+      logger.warn('无法移除动作：虚拟图层不存在', { actionId, layerId });
+      return false;
+    }
+    
+    if (!layer.actionIdsSet.has(actionId)) {
+      logger.debug('动作不在该图层中', { actionId, layerId });
+      return false;
+    }
+    
+    // 从图层移除
+    const index = layer.actionIds.indexOf(actionId);
+    if (index !== -1) {
+      layer.actionIds.splice(index, 1);
+    }
+    layer.actionIdsSet.delete(actionId);
+    layer.modified = Date.now();
+    
+    // 从映射中移除
+    this.actionLayerMap.delete(actionId);
+    
+    // 标记缓存过期
+    this.markLayerCacheDirty(layerId);
+    this.invalidateCache();
+    
+    logger.debug('从图层移除动作', { actionId, layerId, layerName: layer.name });
+    return true;
+  }
+
+  /**
    * 处理新动作（根据模式自动分配图层）
    */
   public handleNewAction(action: DrawAction): void {
@@ -1394,6 +1428,17 @@ export class VirtualLayerManager {
       layer.cacheDirty = true;
     this.invalidateCache();
     }
+  }
+
+  /**
+   * 标记所有图层缓存为过期（用于 undo/redo 等全局操作）
+   */
+  public markAllLayersCacheDirty(): void {
+    for (const layer of this.virtualLayers.values()) {
+      layer.cacheDirty = true;
+    }
+    this.invalidateCache();
+    logger.debug('所有图层缓存已标记为过期');
   }
 
   /**

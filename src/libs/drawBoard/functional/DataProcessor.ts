@@ -6,7 +6,7 @@
  */
 
 import type { DrawAction } from '../tools/DrawTool';
-import type { DrawBoardConfig } from '../DrawBoard';
+import type { DrawBoardConfig } from '../types/ConfigTypes';
 
 // ============================================
 // 类型定义

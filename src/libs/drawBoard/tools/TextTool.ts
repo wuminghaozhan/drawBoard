@@ -4,23 +4,9 @@ import { logger } from '../infrastructure/logging/Logger';
 import { TextEditingManager, type TextCommitEvent, type TextChangeEvent } from './text/TextEditingManager';
 import type { Point } from '../core/CanvasEngine';
 
-export interface TextAction extends DrawAction {
-  text?: string;
-  fontSize?: number;
-  fontFamily?: string;
-  textAlign?: CanvasTextAlign;
-  textBaseline?: CanvasTextBaseline;
-  /** 文本框宽度（像素），如果设置则启用自动换行 */
-  width?: number;
-  /** 文本框高度（像素），可选 */
-  height?: number;
-  /** 行高倍数，默认 1.2 */
-  lineHeight?: number;
-}
-
-/** 文字工具事件类型 */
-export type TextToolEventType = 'textCreated' | 'textUpdated' | 'editingStarted' | 'editingEnded';
-export type TextToolEventHandler = (event: { type: TextToolEventType; action?: TextAction; actionId?: string | null }) => void;
+// 类型从独立文件导入，避免循环依赖
+export type { TextAction, TextToolEventType, TextToolEventHandler } from '../types/TextTypes';
+import type { TextAction, TextToolEventHandler } from '../types/TextTypes';
 
 export class TextTool extends DrawTool {
   // 默认配置
@@ -499,6 +485,7 @@ export class TextTool extends DrawTool {
 
   /**
    * 获取文字边界框
+   * 支持单行文本和多行文本框模式
    */
   public getTextBounds(ctx: CanvasRenderingContext2D, action: TextAction): { x: number, y: number, width: number, height: number } {
     try {
@@ -510,11 +497,22 @@ export class TextTool extends DrawTool {
       const text = this.validateText(action.text);
       
       if (!text) {
+        // 如果有宽度设置，返回文本框的尺寸
+        if (action.width) {
+          return { x: point.x, y: point.y, width: action.width, height: action.height || 24 };
+        }
         return { x: point.x, y: point.y, width: 0, height: 0 };
       }
       
       const { fontSize, fontFamily, textAlign, textBaseline } = this.getTextConfig(action);
+      ctx.font = `${fontSize}px ${fontFamily}`;
 
+      // 如果设置了宽度，使用多行模式计算边界
+      if (action.width && action.width > 0) {
+        return this.getMultilineTextBounds(ctx, text, point, action);
+      }
+
+      // 单行模式
       const metrics = this.measureText(ctx, text, fontSize, fontFamily);
       
       // 根据对齐方式计算实际位置
@@ -544,6 +542,43 @@ export class TextTool extends DrawTool {
       logger.error('TextTool计算边界框失败:', error);
       return { x: 0, y: 0, width: 0, height: 0 };
     }
+  }
+  
+  /**
+   * 计算多行文本的边界框
+   */
+  private getMultilineTextBounds(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    point: { x: number; y: number },
+    action: TextAction
+  ): { x: number; y: number; width: number; height: number } {
+    const fontSize = this.calculateFontSize(action);
+    const lineHeightMultiplier = action.lineHeight ?? 1.2;
+    const lineHeight = fontSize * lineHeightMultiplier;
+    const maxWidth = action.width || 100;
+    
+    // 计算总行数
+    const paragraphs = text.split('\n');
+    let totalLines = 0;
+    
+    for (const paragraph of paragraphs) {
+      if (paragraph.length === 0) {
+        totalLines += 1;
+      } else {
+        const lines = this.wrapTextToLines(ctx, paragraph, maxWidth);
+        totalLines += lines.length;
+      }
+    }
+    
+    const totalHeight = totalLines * lineHeight;
+    
+    return {
+      x: point.x,
+      y: point.y,
+      width: maxWidth,
+      height: Math.max(totalHeight, lineHeight) // 至少一行高度
+    };
   }
 
   /**

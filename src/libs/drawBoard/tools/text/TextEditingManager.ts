@@ -9,7 +9,7 @@
  */
 
 import { logger } from '../../infrastructure/logging/Logger';
-import type { TextAction } from '../TextTool';
+import type { TextAction } from '../../types/TextTypes';
 import type { Point } from '../../core/CanvasEngine';
 
 /** 文字编辑配置 */

@@ -4,7 +4,7 @@ import { HistoryManager } from '../history/HistoryManager';
 import { EventManager } from '../infrastructure/events/EventManager';
 import { ShortcutManager } from '../shortcuts/ShortcutManager';
 import { ExportManager } from '../utils/ExportManager';
-import { SelectionManager } from './SelectionManager';
+import { CoreSelectionManager } from './CoreSelectionManager';
 import { PerformanceManager } from './PerformanceManager';
 import { ComplexityManager } from './ComplexityManager';
 import { VirtualLayerManager } from './VirtualLayerManager';
@@ -22,7 +22,7 @@ export interface CoreComponents {
   canvasEngine: CanvasEngine;
   toolManager: ToolManager;
   historyManager: HistoryManager;
-  selectionManager: SelectionManager;
+  selectionManager: CoreSelectionManager;
   performanceManager: PerformanceManager;
   complexityManager: ComplexityManager;
   virtualLayerManager: VirtualLayerManager;
@@ -63,7 +63,7 @@ export class InitializationManager {
     const historyManager = new HistoryManager();
     
     // 选择管理器
-    const selectionManager = new SelectionManager();
+    const selectionManager = new CoreSelectionManager();
     
     // 性能管理器
     const performanceManager = new PerformanceManager(config.performanceConfig);

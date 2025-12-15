@@ -11,6 +11,8 @@ import { MemoryMonitor } from '../infrastructure/performance/MemoryMonitor';
 import { DirtyRectManager } from '../infrastructure/performance/DirtyRectManager';
 import type { Bounds } from '../utils/BoundsValidator';
 import type { EventBus } from '../infrastructure/events/EventBus';
+import { EraserTool } from '../tools/EraserTool';
+import type { EraserAction } from '../tools/EraserTool';
 
 /**
  * 绘制处理器配置接口
@@ -198,10 +200,50 @@ export class DrawingHandler {
 
   /**
    * 标记离屏缓存过期（当历史动作发生变化时调用）
+   * @param invalidateVirtualLayers 是否同时标记所有虚拟图层缓存为过期（用于 undo/redo）
    */
-  public invalidateOffscreenCache(): void {
+  public invalidateOffscreenCache(invalidateVirtualLayers: boolean = false): void {
     this.offscreenCacheDirty = true;
-    logger.debug('离屏缓存已标记为过期');
+    
+    // undo/redo 等操作需要同时刷新虚拟图层缓存
+    if (invalidateVirtualLayers && this.virtualLayerManager) {
+      this.virtualLayerManager.markAllLayersCacheDirty();
+    }
+    
+    logger.debug('离屏缓存已标记为过期', { invalidateVirtualLayers });
+  }
+
+  /**
+   * 从虚拟图层移除 action（批量操作撤销时使用）
+   */
+  public removeActionFromVirtualLayer(actionId: string): void {
+    if (!this.virtualLayerManager) {
+      logger.warn('VirtualLayerManager 未初始化，无法移除 action');
+      return;
+    }
+    
+    // 查找 action 所在的图层并移除
+    const layers = this.virtualLayerManager.getAllVirtualLayers();
+    for (const layer of layers) {
+      if (this.virtualLayerManager.removeActionFromLayer(actionId, layer.id)) {
+        logger.debug('从虚拟图层移除 action', { actionId, layerId: layer.id });
+        return;
+      }
+    }
+    logger.debug('action 未在任何虚拟图层中找到', { actionId });
+  }
+
+  /**
+   * 添加 action 到虚拟图层（批量操作撤销恢复时使用）
+   */
+  public addActionToVirtualLayer(action: DrawAction): void {
+    if (!this.virtualLayerManager) {
+      logger.warn('VirtualLayerManager 未初始化，无法添加 action');
+      return;
+    }
+    
+    this.virtualLayerManager.handleNewAction(action);
+    logger.debug('添加 action 到虚拟图层', { actionId: action.id, layerId: action.virtualLayerId });
   }
 
   /**
@@ -314,6 +356,16 @@ export class DrawingHandler {
       // 添加最后一个点
       this.currentAction.points.push(point);
       
+      // 橡皮擦分割模式特殊处理
+      if (this.currentAction.type === 'eraser') {
+        logger.info('handleDrawEnd: 检测到橡皮擦工具，调用 handleEraserEnd', {
+          actionId: this.currentAction.id,
+          pointsCount: this.currentAction.points.length
+        });
+        this.handleEraserEnd();
+        return;
+      }
+      
       // 处理虚拟图层分配
       if (this.virtualLayerManager) {
         this.virtualLayerManager.handleNewAction(this.currentAction);
@@ -345,6 +397,169 @@ export class DrawingHandler {
   }
 
   /**
+   * 处理橡皮擦结束（分割模式）
+   * 
+   * 橡皮擦特性：
+   * - 只对画笔（pen）类型起作用
+   * - 不区分图层，作用于所有画笔
+   * - 橡皮擦本身不记录到历史（效果通过分割体现）
+   */
+  private async handleEraserEnd(): Promise<void> {
+    if (!this.currentAction || this.currentAction.type !== 'eraser') {
+      logger.warn('handleEraserEnd: 无效的橡皮擦 action');
+      return;
+    }
+    
+    const eraserAction = this.currentAction as EraserAction;
+    const eraserPoints = eraserAction.points;
+    
+    logger.info('橡皮擦结束，开始分割处理', {
+      eraserPointsCount: eraserPoints.length,
+      eraserLineWidth: eraserAction.context.lineWidth
+    });
+    
+    try {
+      // 获取橡皮擦工具实例
+      const eraserTool = await this.toolManager.getTool('eraser') as EraserTool | null;
+      if (!eraserTool) {
+        logger.warn('无法获取橡皮擦工具实例');
+        return;
+      }
+      
+      // 获取所有画笔 actions（橡皮擦只对画笔起作用，不区分图层）
+      const allActions = this.historyManager.getAllActions();
+      const penActions = allActions.filter(a => a.type === 'pen');
+      
+      logger.info('橡皮擦目标画笔', {
+        totalActionsCount: allActions.length,
+        penActionsCount: penActions.length
+      });
+      
+      if (penActions.length === 0) {
+        logger.info('没有画笔 action，跳过分割');
+        this.finishEraserAction();
+        return;
+      }
+      
+      // 计算橡皮擦半径（基于线宽，至少 5 像素）
+      const eraserRadius = Math.max(eraserAction.context.lineWidth / 2, 5);
+      
+      // 处理分割
+      const splitResult = eraserTool.processErase(eraserPoints, penActions, eraserRadius);
+      
+      logger.info('橡皮擦分割结果', {
+        removedCount: splitResult?.removedActionIds.length ?? 0,
+        newActionsCount: splitResult?.newActions.length ?? 0
+      });
+      
+      if (splitResult && (splitResult.removedActionIds.length > 0 || splitResult.newActions.length > 0)) {
+        // 更新历史记录（橡皮擦本身不入历史）
+        this.applyEraserSplitResult(splitResult);
+      }
+      
+    } catch (error) {
+      logger.error('橡皮擦分割处理失败', error);
+    } finally {
+      this.finishEraserAction();
+    }
+  }
+  
+  /**
+   * 应用橡皮擦分割结果到历史记录
+   * 
+   * 处理流程：
+   * 1. 移除被分割的原始 actions（从历史和图层中）
+   * 2. 添加分割后的新 actions（自动分配新图层）
+   * 3. 标记受影响图层的缓存过期
+   * 4. 触发重绘
+   */
+  private applyEraserSplitResult(
+    splitResult: { removedActionIds: string[]; newActions: DrawAction[] }
+  ): void {
+    const { removedActionIds, newActions } = splitResult;
+    const affectedLayerIds = new Set<string>();
+    
+    // 收集被移除 actions 的图层信息（在批量操作之前）
+    for (const actionId of removedActionIds) {
+      const action = this.historyManager.getAllActions().find(a => a.id === actionId);
+      const layerId = action?.virtualLayerId;
+      if (layerId) {
+        affectedLayerIds.add(layerId);
+      }
+    }
+    
+    // ✅ 使用批量操作记录，支持 undo/redo
+    const batchId = this.historyManager.executeBatchOperation(
+      'eraser-split',
+      removedActionIds,
+      newActions,
+      `橡皮擦分割: 移除 ${removedActionIds.length} 个, 新增 ${newActions.length} 个`
+    );
+    
+    logger.info('橡皮擦分割批量操作已创建', { batchId });
+    
+    // 更新虚拟图层（从旧图层移除，添加到新图层）
+    if (this.virtualLayerManager) {
+      // 从虚拟图层中移除被分割的 actions
+      for (const actionId of removedActionIds) {
+        const layerId = [...affectedLayerIds][0]; // 使用第一个受影响的图层
+        if (layerId) {
+          this.virtualLayerManager.removeActionFromLayer(actionId, layerId);
+        }
+      }
+      
+      // 处理新 actions 的图层分配
+      for (const action of newActions) {
+        // 清除原有的 virtualLayerId，让 VirtualLayerManager 重新分配
+        action.virtualLayerId = undefined;
+        this.virtualLayerManager.handleNewAction(action);
+        if (action.virtualLayerId) {
+          affectedLayerIds.add(action.virtualLayerId);
+        }
+      }
+    }
+    
+    // 更新缓存状态
+    for (const actionId of removedActionIds) {
+      this.cachedActions.delete(actionId);
+    }
+    for (const action of newActions) {
+      this.cachedActions.add(action.id);
+    }
+    
+    // 标记所有受影响的图层缓存过期
+    this.offscreenCacheDirty = true;
+    if (this.virtualLayerManager) {
+      for (const layerId of affectedLayerIds) {
+        this.virtualLayerManager.markLayerCacheDirty(layerId);
+      }
+    }
+    
+    logger.info('橡皮擦分割结果已应用', {
+      batchId,
+      removedCount: removedActionIds.length,
+      newActionsCount: newActions.length
+    });
+    
+    // 触发重绘
+    this.forceRedraw();
+  }
+  
+  /**
+   * 完成橡皮擦操作（清理状态）
+   */
+  private finishEraserAction(): void {
+    // 不将橡皮擦 action 添加到历史记录（分割模式下）
+    // 橡皮擦的效果已经通过分割体现
+    
+    this.isDrawing = false;
+    this.currentAction = null;
+    this.onStateChange();
+    
+    logger.debug('橡皮擦操作完成');
+  }
+
+  /**
    * 创建绘制动作
    */
   private createDrawAction(startPoint: Point): DrawAction {
@@ -353,10 +568,11 @@ export class DrawingHandler {
     
     const canvas = this.canvasEngine.getCanvas();
     const ctx = canvas.getContext('2d');
+    const currentToolType = this.toolManager.getCurrentTool();
     
-    return {
+    const baseAction: DrawAction = {
       id: `${timestamp}-${randomSuffix}`, // 更安全的ID生成
-      type: this.toolManager.getCurrentTool(),
+      type: currentToolType,
       points: [startPoint],
       context: {
         strokeStyle: (ctx?.strokeStyle as string) || '#000000',
@@ -365,6 +581,19 @@ export class DrawingHandler {
       },
       timestamp: timestamp
     };
+    
+    // 橡皮擦工具特殊处理：分割模式，不需要图层信息
+    if (currentToolType === 'eraser') {
+      const eraserAction: EraserAction = {
+        ...baseAction,
+        type: 'eraser',
+        eraserMode: 'split'  // 分割模式：只对画笔起作用
+      };
+      logger.debug('创建橡皮擦动作', { actionId: eraserAction.id });
+      return eraserAction;
+    }
+    
+    return baseAction;
   }
 
   /**
@@ -737,12 +966,13 @@ export class DrawingHandler {
           const layerCache = this.virtualLayerManager?.getLayerCache(layer.id);
           if (layerCache && layer.cacheCtx) {
             layer.cacheCtx.clearRect(0, 0, layerCache.width, layerCache.height);
-            for (const actionId of layer.actionIds) {
-              const action = actionMap.get(actionId);
-              if (action) {
-                await this.drawAction(layer.cacheCtx, action);
-              }
-            }
+            // 支持橡皮擦复合渲染
+            await this.drawLayerActionsWithEraserSupport(
+              layer.cacheCtx,
+              layer.actionIds,
+              actionMap,
+              layer.id
+            );
             this.virtualLayerManager?.markLayerCacheValid(layer.id);
             bottomCtx.drawImage(layerCache, 0, 0);
           }
@@ -787,12 +1017,13 @@ export class DrawingHandler {
           const layerCache = this.virtualLayerManager?.getLayerCache(layer.id);
           if (layerCache && layer.cacheCtx) {
             layer.cacheCtx.clearRect(0, 0, layerCache.width, layerCache.height);
-            for (const actionId of layer.actionIds) {
-              const action = actionMap.get(actionId);
-              if (action) {
-                await this.drawAction(layer.cacheCtx, action);
-              }
-            }
+            // 支持橡皮擦复合渲染
+            await this.drawLayerActionsWithEraserSupport(
+              layer.cacheCtx,
+              layer.actionIds,
+              actionMap,
+              layer.id
+            );
             this.virtualLayerManager?.markLayerCacheValid(layer.id);
             topCtx.drawImage(layerCache, 0, 0);
           }
@@ -972,12 +1203,13 @@ export class DrawingHandler {
         const layerCache = this.virtualLayerManager?.getLayerCache(layer.id);
         if (layerCache && layer.cacheCtx) {
           layer.cacheCtx.clearRect(0, 0, layerCache.width, layerCache.height);
-          for (const actionId of layer.actionIds) {
-            const action = actionMap.get(actionId);
-            if (action) {
-              await this.drawAction(layer.cacheCtx, action);
-            }
-          }
+          // 支持橡皮擦复合渲染
+          await this.drawLayerActionsWithEraserSupport(
+            layer.cacheCtx,
+            layer.actionIds,
+            actionMap,
+            layer.id
+          );
           this.virtualLayerManager?.markLayerCacheValid(layer.id);
           ctx.drawImage(layerCache, 0, 0);
         }
@@ -1123,13 +1355,13 @@ export class DrawingHandler {
             // 清空缓存Canvas
             cacheCtx.clearRect(0, 0, layerCache.width, layerCache.height);
             
-            // 在缓存Canvas上绘制该图层的所有动作
-            for (const actionId of selectedLayer.actionIds) {
-              const action = actionMap.get(actionId);
-              if (action) {
-                await this.drawAction(cacheCtx, action);
-              }
-            }
+            // 在缓存Canvas上绘制该图层的所有动作（支持橡皮擦复合渲染）
+            await this.drawLayerActionsWithEraserSupport(
+              cacheCtx,
+              selectedLayer.actionIds,
+              actionMap,
+              selectedLayer.id
+            );
             
             // 标记缓存为有效
             this.virtualLayerManager.markLayerCacheValid(selectedLayer.id);
@@ -1138,13 +1370,13 @@ export class DrawingHandler {
             selectedCtx.drawImage(layerCache, 0, 0);
           }
         } else {
-          // 如果无法创建缓存，回退到直接绘制
-          for (const actionId of selectedLayer.actionIds) {
-            const action = actionMap.get(actionId);
-            if (action) {
-              await this.drawAction(selectedCtx, action);
-            }
-          }
+          // 如果无法创建缓存，回退到直接绘制（支持橡皮擦复合渲染）
+          await this.drawLayerActionsWithEraserSupport(
+            selectedCtx,
+            selectedLayer.actionIds,
+            actionMap,
+            selectedLayer.id
+          );
         }
       }
       
@@ -1719,13 +1951,13 @@ export class DrawingHandler {
             // 清空缓存Canvas
             cacheCtx.clearRect(0, 0, layerCache.width, layerCache.height);
             
-            // 在缓存Canvas上绘制该图层的所有动作
-            for (const actionId of layer.actionIds) {
-              const action = actionMap.get(actionId);
-              if (action) {
-                await this.drawAction(cacheCtx, action);
-              }
-            }
+            // 在缓存Canvas上绘制该图层的所有动作（支持橡皮擦复合渲染）
+            await this.drawLayerActionsWithEraserSupport(
+              cacheCtx,
+              layer.actionIds,
+              actionMap,
+              layer.id
+            );
             
             // 标记缓存为有效
             this.virtualLayerManager.markLayerCacheValid(layer.id);
@@ -1734,13 +1966,13 @@ export class DrawingHandler {
             ctx.drawImage(layerCache, 0, 0);
           }
         } else {
-          // 如果无法创建缓存，回退到直接绘制
-          for (const actionId of layer.actionIds) {
-            const action = actionMap.get(actionId);
-            if (action) {
-              await this.drawAction(ctx, action);
-            }
-          }
+          // 如果无法创建缓存，回退到直接绘制（支持橡皮擦复合渲染）
+          await this.drawLayerActionsWithEraserSupport(
+            ctx,
+            layer.actionIds,
+            actionMap,
+            layer.id
+          );
         }
       }
       
@@ -1777,6 +2009,57 @@ export class DrawingHandler {
         }
       }
     }
+  }
+
+  /**
+   * 绘制图层动作（支持橡皮擦复合渲染）
+   * 
+   * 渲染顺序：
+   * 1. 先绘制所有非橡皮擦动作
+   * 2. 再绘制橡皮擦动作（使用 destination-out 混合模式）
+   * 
+   * 这样可以确保橡皮擦正确地擦除同一图层内的内容
+   */
+  private async drawLayerActionsWithEraserSupport(
+    ctx: CanvasRenderingContext2D,
+    actionIds: string[],
+    actionMap: Map<string, DrawAction>,
+    layerId: string
+  ): Promise<void> {
+    // 分离普通动作和橡皮擦动作
+    const regularActions: DrawAction[] = [];
+    const eraserActions: EraserAction[] = [];
+    
+    for (const actionId of actionIds) {
+      const action = actionMap.get(actionId);
+      if (!action) continue;
+      
+      if (EraserTool.isEraserAction(action)) {
+        const eraserAction = action as EraserAction;
+        // 检查橡皮擦是否应该作用于当前图层
+        if (EraserTool.shouldAffectLayer(eraserAction, layerId)) {
+          eraserActions.push(eraserAction);
+        }
+      } else {
+        regularActions.push(action);
+      }
+    }
+    
+    // 1. 先绘制所有普通动作
+    for (const action of regularActions) {
+      await this.drawAction(ctx, action);
+    }
+    
+    // 2. 再绘制橡皮擦动作（会使用 destination-out）
+    for (const eraserAction of eraserActions) {
+      await this.drawAction(ctx, eraserAction);
+    }
+    
+    logger.debug('图层渲染完成（橡皮擦复合模式）', {
+      layerId,
+      regularCount: regularActions.length,
+      eraserCount: eraserActions.length
+    });
   }
 
   /**
@@ -2008,13 +2291,23 @@ export class DrawingHandler {
 
   /**
    * 重置绘制状态（用于工具切换时清理状态）
+   * 
+   * 注意：如果当前是橡皮擦工具且正在绘制，会先执行分割处理
    */
   public resetDrawingState(): void {
     if (this.isDrawing) {
-      logger.debug('重置绘制状态', {
+      logger.info('重置绘制状态', {
         wasDrawing: this.isDrawing,
-        hadCurrentAction: !!this.currentAction
+        hadCurrentAction: !!this.currentAction,
+        currentActionType: this.currentAction?.type
       });
+      
+      // 如果是橡皮擦工具且有有效的绘制路径，先执行分割处理
+      if (this.currentAction?.type === 'eraser' && this.currentAction.points.length >= 2) {
+        logger.info('工具切换时检测到未完成的橡皮擦绘制，执行分割处理');
+        this.handleEraserEnd();
+        return; // handleEraserEnd 会清理状态
+      }
     }
     this.isDrawing = false;
     this.currentAction = null;

@@ -43,6 +43,10 @@ export class SelectToolCoordinator {
   private lastRedrawTime: number = 0;
   private readonly redrawThrottleMs: number;
   private previousSelectedIds: string[] = [];
+  
+  // ✅ 变形操作状态（用于支持 undo/redo）
+  private transformStartActions: DrawAction[] = [];
+  private isTransforming: boolean = false;
 
   constructor(
     canvasEngine: CanvasEngine,
@@ -112,6 +116,21 @@ export class SelectToolCoordinator {
 
     // 同步图层数据（不保留选择，因为可能点击了新位置）
     this.syncLayerDataToSelectTool(false);
+
+    // ✅ 保存变形开始前的 actions 状态（用于 undo/redo）
+    const selectedActions = currentTool.getSelectedActions?.() || [];
+    if (selectedActions.length > 0) {
+      // 深拷贝原始状态
+      this.transformStartActions = selectedActions.map(a => JSON.parse(JSON.stringify(a)));
+      this.isTransforming = true;
+      logger.debug('变形操作开始，保存原始状态', { 
+        actionsCount: selectedActions.length,
+        actionIds: selectedActions.map(a => a.id)
+      });
+    } else {
+      this.transformStartActions = [];
+      this.isTransforming = false;
+    }
 
     // 处理鼠标按下
     currentTool.handleMouseDown(event.point);
@@ -204,7 +223,7 @@ export class SelectToolCoordinator {
 
   /**
    * 处理更新后的 Actions
-   * 注意：此方法是同步的，不需要 async
+   * 使用 recordTransform 记录变形操作，支持 undo/redo
    */
   public handleUpdatedActions(updatedActions: DrawAction | DrawAction[]): void {
     const actionsArray = Array.isArray(updatedActions) ? updatedActions : [updatedActions];
@@ -212,10 +231,37 @@ export class SelectToolCoordinator {
     // 发出选择变更事件
     this.emitSelectionChanged(actionsArray.map(a => a.id));
     
-    for (const action of actionsArray) {
-      this.historyManager.updateAction(action);
+    // ✅ 使用 recordTransform 记录可撤销的变形操作
+    if (this.isTransforming && this.transformStartActions.length > 0) {
+      // 检查是否真的有变化（比较点位置）
+      const hasChanges = this.hasActionChanges(this.transformStartActions, actionsArray);
       
-      // 发出 action 更新事件
+      if (hasChanges) {
+        // 记录变形操作（支持 undo/redo）
+        const transformId = this.historyManager.recordTransform(
+          this.transformStartActions,
+          actionsArray
+        );
+        logger.info('变形操作已记录', { 
+          transformId, 
+          actionsCount: actionsArray.length 
+        });
+      } else {
+        logger.debug('变形操作无变化，跳过记录');
+      }
+      
+      // 清理状态
+      this.transformStartActions = [];
+      this.isTransforming = false;
+    } else {
+      // 非变形操作，直接更新（如新建选择等）
+      for (const action of actionsArray) {
+        this.historyManager.updateAction(action);
+      }
+    }
+    
+    // 发出 action 更新事件
+    for (const action of actionsArray) {
       this.emitActionUpdated(action.id, { points: action.points });
       
       // 标记虚拟图层缓存过期
@@ -231,6 +277,42 @@ export class SelectToolCoordinator {
       count: actionsArray.length,
       ids: actionsArray.map(a => a.id)
     });
+  }
+
+  /**
+   * 检查 actions 是否有变化
+   * 比较点位置来判断是否真的发生了变形
+   */
+  private hasActionChanges(beforeActions: DrawAction[], afterActions: DrawAction[]): boolean {
+    if (beforeActions.length !== afterActions.length) {
+      return true;
+    }
+    
+    for (let i = 0; i < beforeActions.length; i++) {
+      const before = beforeActions[i];
+      const after = afterActions.find(a => a.id === before.id);
+      
+      if (!after) {
+        return true;
+      }
+      
+      // 比较点数量
+      if (before.points.length !== after.points.length) {
+        return true;
+      }
+      
+      // 比较每个点的位置（允许微小误差）
+      const tolerance = 0.01;
+      for (let j = 0; j < before.points.length; j++) {
+        const dx = Math.abs(before.points[j].x - after.points[j].x);
+        const dy = Math.abs(before.points[j].y - after.points[j].y);
+        if (dx > tolerance || dy > tolerance) {
+          return true;
+        }
+      }
+    }
+    
+    return false;
   }
 
   /**

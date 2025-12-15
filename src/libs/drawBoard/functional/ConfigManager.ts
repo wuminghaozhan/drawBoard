@@ -5,7 +5,7 @@
  * 包括默认配置生成、配置验证、配置合并等
  */
 
-import type { DrawBoardConfig } from '../DrawBoard';
+import type { DrawBoardConfig } from '../types/ConfigTypes';
 import type { StrokeConfig } from '../tools/stroke/StrokeTypes';
 import type { PerformanceConfig } from '../core/PerformanceManager';
 import { PerformanceMode } from '../core/PerformanceManager';

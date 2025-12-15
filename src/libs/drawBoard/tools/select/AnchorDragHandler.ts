@@ -148,6 +148,16 @@ export class AnchorDragHandler {
       return { success: false, error: '移动距离太小' };
     }
 
+    // ⭐ 文本框模式：拖拽水平边中点调整宽度
+    if (action.type === 'text' && TransformOperations.isHorizontalEdgeAnchor(anchor.type)) {
+      return this.handleTextWidthDrag(action, anchor, currentPoint);
+    }
+
+    // ⭐ 旋转锚点：处理旋转拖拽
+    if (TransformOperations.isRotateAnchor(anchor.type)) {
+      return this.handleRotateDrag(action, currentPoint, canvasBounds);
+    }
+
     // 获取形状处理器
     const handler = this.shapeHandlers.get(action.type);
     
@@ -182,6 +192,121 @@ export class AnchorDragHandler {
 
     // 没有形状处理器，使用默认处理（基于边界框变换）
     return this.handleDefaultDrag(action, anchor, currentPoint, canvasBounds);
+  }
+  
+  /**
+   * 处理文本宽度拖拽（文本框模式）
+   * 拖拽左右边中点调整文本框宽度，文字自动换行
+   */
+  private handleTextWidthDrag(
+    action: DrawAction,
+    anchor: AnchorPoint,
+    currentPoint: Point
+  ): DragResult {
+    if (!this.state) {
+      return { success: false, error: '未开始拖拽' };
+    }
+
+    const { startBounds, startPoint } = this.state;
+    const deltaX = currentPoint.x - startPoint.x;
+    
+    // 根据锚点类型确定是左边还是右边
+    const isLeftAnchor = ['left', 'resize-w'].includes(anchor.type);
+    const isRightAnchor = ['right', 'resize-e'].includes(anchor.type);
+    
+    let newWidth: number;
+    let anchorSide: 'left' | 'right';
+    
+    if (isRightAnchor) {
+      // 拖拽右边：宽度 = 起始宽度 + deltaX
+      newWidth = startBounds.width + deltaX;
+      anchorSide = 'right';
+    } else if (isLeftAnchor) {
+      // 拖拽左边：宽度 = 起始宽度 - deltaX（同时位置要左移）
+      newWidth = startBounds.width - deltaX;
+      anchorSide = 'left';
+    } else {
+      return { success: false, error: '非水平边锚点' };
+    }
+
+    // 调用 TransformOperations 调整宽度
+    const result = TransformOperations.resizeTextWidth(
+      this.state.startAction || action,
+      newWidth,
+      anchorSide
+    );
+
+    if (result.success && result.action) {
+      // 更新缓存
+      this.state.lastPoint = currentPoint;
+      this.state.lastResult = result.action;
+      
+      logger.debug('文本宽度拖拽', { 
+        anchorSide, 
+        oldWidth: startBounds.width, 
+        newWidth,
+        deltaX
+      });
+      
+      return { success: true, action: result.action };
+    }
+
+    return { success: false, error: result.error || '调整宽度失败' };
+  }
+
+  /**
+   * 处理旋转拖拽
+   * 根据鼠标位置计算旋转角度，并应用到 Action
+   */
+  private handleRotateDrag(
+    action: DrawAction,
+    currentPoint: Point,
+    canvasBounds?: { width: number; height: number }
+  ): DragResult {
+    if (!this.state) {
+      return { success: false, error: '未开始拖拽' };
+    }
+
+    const { startBounds, startPoint } = this.state;
+    
+    // 计算旋转中心（选区中心）
+    const centerX = startBounds.x + startBounds.width / 2;
+    const centerY = startBounds.y + startBounds.height / 2;
+    
+    // 计算旋转角度
+    const angle = TransformOperations.calculateRotationAngle(
+      centerX,
+      centerY,
+      startPoint.x,
+      startPoint.y,
+      currentPoint.x,
+      currentPoint.y
+    );
+
+    // 应用旋转变换到原始 action
+    const result = TransformOperations.rotateAction(
+      this.state.startAction || action,
+      angle,
+      centerX,
+      centerY,
+      canvasBounds
+    );
+
+    if (result.success && result.action) {
+      // 更新缓存
+      this.state.lastPoint = currentPoint;
+      this.state.lastResult = result.action;
+      
+      logger.debug('旋转拖拽', { 
+        angleDegrees: angle * (180 / Math.PI),
+        centerX,
+        centerY
+      });
+      
+      return { success: true, action: result.action };
+    }
+
+    return { success: false, error: result.error || '旋转失败' };
   }
 
   /**

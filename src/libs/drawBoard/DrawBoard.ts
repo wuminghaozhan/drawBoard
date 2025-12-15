@@ -4,7 +4,7 @@ import { HistoryManager } from './history/HistoryManager';
 import { EventManager } from './infrastructure/events/EventManager';
 import { ShortcutManager } from './shortcuts/ShortcutManager';
 import { ExportManager } from './utils/ExportManager';
-import { SelectionManager } from './core/SelectionManager';
+import { CoreSelectionManager } from './core/CoreSelectionManager';
 import { PerformanceManager, type PerformanceConfig, type MemoryStats } from './core/PerformanceManager';
 import { ComplexityManager } from './core/ComplexityManager';
 import { VirtualLayerManager, type VirtualLayer, type VirtualLayerMode, type VirtualLayerConfig } from './core/VirtualLayerManager';
@@ -30,16 +30,16 @@ import { DrawBoardSelectionAPI } from './api/DrawBoardSelectionAPI';
 import { DrawBoardToolAPI } from './api/DrawBoardToolAPI';
 import { DrawBoardHistoryAPI } from './api/DrawBoardHistoryAPI';
 
-// 函数式编程模块
+// 函数式编程模块（直接从子模块导入以避免循环依赖）
 import { 
-  validateAndCleanConfig, 
   calculateHistoryStats, 
   processStrokeData,
-  createStateSnapshot,
-  hasStateChanged,
   pipe,
-  memoize
-} from './functional';
+  memoize,
+  hasStateChanged
+} from './functional/DataProcessor';
+import { validateAndCleanConfig } from './functional/ConfigManager';
+import { createStateSnapshot } from './functional/StateManager';
 
 /**
  * 渲染优化配置接口
@@ -228,7 +228,7 @@ export class DrawBoard {
   private exportManager!: ExportManager;
   
   /** 选择管理器 - 管理选择区域和选中内容 */
-  private selectionManager!: SelectionManager;
+  private selectionManager!: CoreSelectionManager;
 
   /** 性能管理器 - 管理预渲染缓存和性能优化 */
   private performanceManager!: PerformanceManager;
@@ -352,7 +352,7 @@ export class DrawBoard {
     this.toolManager = new ToolManager(); // 工具管理器
     
     this.historyManager = new HistoryManager(); // 历史记录管理器
-    this.selectionManager = new SelectionManager(); // 选择管理器
+    this.selectionManager = new CoreSelectionManager(); // 核心选择管理器
     this.performanceManager = new PerformanceManager(config.performanceConfig); // 性能管理器
     this.complexityManager = new ComplexityManager(); // 复杂度管理器
     
@@ -2145,7 +2145,7 @@ export class DrawBoard {
       this.eventManager = null as unknown as EventManager;
       this.shortcutManager = null as unknown as ShortcutManager;
       this.exportManager = null as unknown as ExportManager;
-      this.selectionManager = null as unknown as SelectionManager;
+      this.selectionManager = null as unknown as CoreSelectionManager;
       this.performanceManager = null as unknown as PerformanceManager;
       this.complexityManager = null as unknown as ComplexityManager;
       this.virtualLayerManager = null as unknown as VirtualLayerManager;

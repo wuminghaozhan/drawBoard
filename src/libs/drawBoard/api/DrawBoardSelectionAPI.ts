@@ -1,7 +1,7 @@
 import type { DrawAction } from '../tools/DrawTool';
 import type { ToolManager } from '../tools/ToolManager';
 import type { HistoryManager } from '../history/HistoryManager';
-import type { SelectionManager } from '../core/SelectionManager';
+import type { CoreSelectionManager } from '../core/CoreSelectionManager';
 import type { VirtualLayerManager } from '../core/VirtualLayerManager';
 import type { DrawingHandler } from '../handlers/DrawingHandler';
 import type { CanvasEngine } from '../core/CanvasEngine';
@@ -23,7 +23,7 @@ export class DrawBoardSelectionAPI {
   private clipboard: DrawAction[] = [];
   private toolManager: ToolManager;
   private historyManager: HistoryManager;
-  private selectionManager: SelectionManager;
+  private selectionManager: CoreSelectionManager;
   private virtualLayerManager: VirtualLayerManager | null;
   private drawingHandler: DrawingHandler;
   private canvasEngine: CanvasEngine;
@@ -31,7 +31,7 @@ export class DrawBoardSelectionAPI {
   constructor(
     toolManager: ToolManager,
     historyManager: HistoryManager,
-    selectionManager: SelectionManager,
+    selectionManager: CoreSelectionManager,
     virtualLayerManager: VirtualLayerManager | null,
     drawingHandler: DrawingHandler,
     canvasEngine: CanvasEngine

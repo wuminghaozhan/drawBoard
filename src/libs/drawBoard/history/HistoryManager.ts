@@ -3,6 +3,52 @@ import { logger } from '../infrastructure/logging/Logger';
 import type { EventBus } from '../infrastructure/events/EventBus';
 
 /**
+ * 批量操作记录
+ * 用于将多个原子操作合并为一个可撤销的单元
+ */
+export interface BatchOperation {
+  /** 批量操作 ID */
+  id: string;
+  /** 操作类型 */
+  type: 'eraser-split' | 'multi-delete' | 'multi-transform' | 'custom';
+  /** 被移除的 Action IDs */
+  removedActionIds: string[];
+  /** 被移除的 Actions (用于撤销时恢复) - 可选，启用增量存储时为 undefined */
+  removedActions?: DrawAction[];
+  /** 新增的 Action IDs */
+  addedActionIds: string[];
+  /** 新增的 Actions (用于重做时恢复) - 可选，启用增量存储时为 undefined */
+  addedActions?: DrawAction[];
+  /** 时间戳 */
+  timestamp: number;
+  /** 描述 */
+  description?: string;
+  /** 是否使用增量存储 */
+  useIncrementalStorage?: boolean;
+}
+
+/**
+ * 增量操作存储
+ * 只存储 action ID 和必要的差异信息，减少内存占用
+ */
+export interface IncrementalBatchStorage {
+  /** 被移除的 Action 的快照（精简版） */
+  removedSnapshots: ActionSnapshot[];
+  /** 新增的 Action 的快照（精简版） */
+  addedSnapshots: ActionSnapshot[];
+}
+
+/**
+ * Action 快照（精简版，只存储必要信息）
+ */
+export interface ActionSnapshot {
+  id: string;
+  type: string;
+  /** 关键属性的 JSON 字符串（用于恢复） */
+  serializedData: string;
+}
+
+/**
  * 历史管理器 - 优化版本
  * 
  * 改进:
@@ -43,6 +89,12 @@ export class HistoryManager {
   // EventBus 相关
   private eventBus?: EventBus;
   private eventUnsubscribers: (() => void)[] = [];
+  
+  // 批量操作相关
+  private batchOperations: BatchOperation[] = [];
+  private maxBatchOperations: number = 50;
+  private incrementalStorage: Map<string, IncrementalBatchStorage> = new Map();
+  private useIncrementalStorage: boolean = true; // 默认启用增量存储
   
   /**
    * 添加动作到历史记录（智能内存管理）
@@ -356,9 +408,399 @@ export class HistoryManager {
 
     return false;
   }
+  
+  // ==================== 批量操作支持 ====================
+  
+  /**
+   * 执行批量操作（橡皮擦分割等）
+   * 
+   * 将多个原子操作合并为一个可撤销单元
+   * 支持增量存储以减少内存占用
+   * 
+   * @param type 操作类型
+   * @param removedActionIds 要移除的 Action IDs
+   * @param newActions 要添加的新 Actions
+   * @param description 操作描述
+   * @returns 批量操作 ID
+   */
+  public executeBatchOperation(
+    type: BatchOperation['type'],
+    removedActionIds: string[],
+    newActions: DrawAction[],
+    description?: string
+  ): string {
+    const batchId = `batch-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // 保存被移除的 Actions
+    const removedActions: DrawAction[] = [];
+    for (const actionId of removedActionIds) {
+      const action = this.history.find(a => a.id === actionId);
+      if (action) {
+        removedActions.push({ ...action });
+      }
+    }
+    
+    // 执行移除
+    for (const actionId of removedActionIds) {
+      this.removeActionById(actionId);
+    }
+    
+    // 执行添加
+    for (const action of newActions) {
+      this.addAction(action);
+    }
+    
+    // 根据是否启用增量存储决定存储方式
+    let batchOp: BatchOperation;
+    
+    if (this.useIncrementalStorage) {
+      // 增量存储：只存储 ID 和序列化快照
+      const incrementalData: IncrementalBatchStorage = {
+        removedSnapshots: removedActions.map(a => this.createActionSnapshot(a)),
+        addedSnapshots: newActions.map(a => this.createActionSnapshot(a))
+      };
+      this.incrementalStorage.set(batchId, incrementalData);
+      
+      batchOp = {
+        id: batchId,
+        type,
+        removedActionIds,
+        addedActionIds: newActions.map(a => a.id),
+        timestamp: Date.now(),
+        description,
+        useIncrementalStorage: true
+      };
+    } else {
+      // 完整存储
+      batchOp = {
+        id: batchId,
+        type,
+        removedActionIds,
+        removedActions,
+        addedActionIds: newActions.map(a => a.id),
+        addedActions: newActions.map(a => ({ ...a })),
+        timestamp: Date.now(),
+        description,
+        useIncrementalStorage: false
+      };
+    }
+    
+    this.batchOperations.push(batchOp);
+    
+    // 限制批量操作记录数量
+    if (this.batchOperations.length > this.maxBatchOperations) {
+      const removed = this.batchOperations.shift();
+      if (removed?.useIncrementalStorage) {
+        this.incrementalStorage.delete(removed.id);
+      }
+    }
+    
+    logger.info('批量操作已执行', {
+      batchId,
+      type,
+      removedCount: removedActionIds.length,
+      addedCount: newActions.length,
+      useIncrementalStorage: this.useIncrementalStorage,
+      description
+    });
+    
+    this.emitHistoryChanged();
+    return batchId;
+  }
+  
+  /**
+   * 创建 Action 快照（用于增量存储）
+   */
+  private createActionSnapshot(action: DrawAction): ActionSnapshot {
+    return {
+      id: action.id,
+      type: action.type,
+      serializedData: JSON.stringify(action)
+    };
+  }
+  
+  /**
+   * 从快照恢复 Action
+   */
+  private restoreActionFromSnapshot(snapshot: ActionSnapshot): DrawAction {
+    return JSON.parse(snapshot.serializedData) as DrawAction;
+  }
+  
+  /**
+   * 设置是否使用增量存储
+   */
+  public setIncrementalStorageEnabled(enabled: boolean): void {
+    this.useIncrementalStorage = enabled;
+    logger.debug('增量存储设置', { enabled });
+  }
+  
+  /**
+   * 获取增量存储统计
+   */
+  public getIncrementalStorageStats(): {
+    enabled: boolean;
+    storedBatches: number;
+    estimatedMemorySaved: number;
+  } {
+    let estimatedSaved = 0;
+    for (const [, data] of this.incrementalStorage) {
+      // 估算：完整存储约为快照的 1.5 倍（因为快照只有字符串）
+      const snapshotSize = data.removedSnapshots.length + data.addedSnapshots.length;
+      estimatedSaved += snapshotSize * 500; // 假设每个 Action 平均节省 500 字节
+    }
+    
+    return {
+      enabled: this.useIncrementalStorage,
+      storedBatches: this.incrementalStorage.size,
+      estimatedMemorySaved: estimatedSaved
+    };
+  }
+  
+  /**
+   * 撤销批量操作
+   * 
+   * @param batchId 批量操作 ID
+   * @returns 撤销结果，包含移除的 action IDs 和恢复的 actions
+   */
+  public undoBatchOperation(batchId: string): { success: boolean; removedActionIds: string[]; restoredActions: DrawAction[] } {
+    const batchIndex = this.batchOperations.findIndex(b => b.id === batchId);
+    if (batchIndex === -1) {
+      logger.warn('未找到批量操作', { batchId });
+      return { success: false, removedActionIds: [], restoredActions: [] };
+    }
+    
+    const batch = this.batchOperations[batchIndex];
+    
+    // 1. 移除添加的 Actions（从 HistoryManager 内部）
+    for (const actionId of batch.addedActionIds) {
+      this.removeActionById(actionId);
+    }
+    
+    // 2. 恢复移除的 Actions
+    let restoredActions: DrawAction[];
+    
+    if (batch.useIncrementalStorage) {
+      // 从增量存储恢复
+      const incrementalData = this.incrementalStorage.get(batchId);
+      if (!incrementalData) {
+        logger.error('增量存储数据丢失', { batchId });
+        return { success: false, removedActionIds: [], restoredActions: [] };
+      }
+      restoredActions = incrementalData.removedSnapshots.map(s => this.restoreActionFromSnapshot(s));
+    } else {
+      // 从完整存储恢复
+      restoredActions = (batch.removedActions || []).map(a => ({ ...a }));
+    }
+    
+    for (const action of restoredActions) {
+      this.history.push({ ...action });
+      this.currentMemoryBytes += this.calculateActionMemorySize(action);
+    }
+    
+    // ✅ 从批量操作列表中移除已撤销的操作（防止重复撤销）
+    this.batchOperations.splice(batchIndex, 1);
+    
+    // 清理增量存储
+    if (batch.useIncrementalStorage) {
+      this.incrementalStorage.delete(batchId);
+    }
+    
+    logger.info('批量操作已撤销', {
+      batchId,
+      type: batch.type,
+      restoredCount: restoredActions.length,
+      removedCount: batch.addedActionIds.length,
+      useIncrementalStorage: batch.useIncrementalStorage
+    });
+    
+    this.emitHistoryChanged();
+    return { 
+      success: true, 
+      removedActionIds: [...batch.addedActionIds], 
+      restoredActions 
+    };
+  }
+  
+  /**
+   * 重做批量操作
+   * 
+   * @param batchId 批量操作 ID
+   * @returns 是否成功
+   */
+  public redoBatchOperation(batchId: string): boolean {
+    const batch = this.batchOperations.find(b => b.id === batchId);
+    if (!batch) {
+      logger.warn('未找到批量操作', { batchId });
+      return false;
+    }
+    
+    // 1. 移除原始 Actions
+    for (const actionId of batch.removedActionIds) {
+      this.removeActionById(actionId);
+    }
+    
+    // 2. 添加新 Actions
+    let addedActions: DrawAction[];
+    
+    if (batch.useIncrementalStorage) {
+      // 从增量存储恢复
+      const incrementalData = this.incrementalStorage.get(batchId);
+      if (!incrementalData) {
+        logger.error('增量存储数据丢失', { batchId });
+        return false;
+      }
+      addedActions = incrementalData.addedSnapshots.map(s => this.restoreActionFromSnapshot(s));
+    } else {
+      // 从完整存储恢复
+      addedActions = batch.addedActions || [];
+    }
+    
+    for (const action of addedActions) {
+      this.addAction({ ...action });
+    }
+    
+    logger.info('批量操作已重做', {
+      batchId,
+      type: batch.type,
+      useIncrementalStorage: batch.useIncrementalStorage
+    });
+    
+    this.emitHistoryChanged();
+    return true;
+  }
+  
+  /**
+   * 获取最近的批量操作
+   */
+  public getLastBatchOperation(): BatchOperation | null {
+    return this.batchOperations[this.batchOperations.length - 1] || null;
+  }
+  
+  /**
+   * 获取所有批量操作
+   */
+  public getBatchOperations(): BatchOperation[] {
+    return [...this.batchOperations];
+  }
+  
+  /**
+   * 清空批量操作记录
+   */
+  public clearBatchOperations(): void {
+    this.batchOperations = [];
+  }
+  
+  // ==================== 批量操作支持结束 ====================
+
+  // ==================== 可撤销的变形操作 ====================
+  
+  /**
+   * 变形操作记录（用于支持 undo/redo 的变形）
+   */
+  private transformHistory: Array<{
+    id: string;
+    type: 'transform';
+    beforeActions: DrawAction[];
+    afterActions: DrawAction[];
+    timestamp: number;
+  }> = [];
+  private maxTransformHistory: number = 50;
+  
+  /**
+   * 记录可撤销的变形操作
+   * 用于选区移动/缩放/旋转等变形操作
+   * 
+   * @param beforeActions 变形前的 actions（深拷贝）
+   * @param afterActions 变形后的 actions
+   * @returns 变形操作 ID
+   */
+  public recordTransform(
+    beforeActions: DrawAction[],
+    afterActions: DrawAction[]
+  ): string {
+    const transformId = `transform-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // 保存变形记录
+    this.transformHistory.push({
+      id: transformId,
+      type: 'transform',
+      beforeActions: beforeActions.map(a => JSON.parse(JSON.stringify(a))), // 深拷贝
+      afterActions: afterActions.map(a => JSON.parse(JSON.stringify(a))),   // 深拷贝
+      timestamp: Date.now()
+    });
+    
+    // 限制记录数量
+    if (this.transformHistory.length > this.maxTransformHistory) {
+      this.transformHistory.shift();
+    }
+    
+    // 应用变形（更新历史记录中的 actions）
+    for (const action of afterActions) {
+      this.updateAction(action);
+    }
+    
+    logger.info('变形操作已记录', {
+      transformId,
+      actionsCount: afterActions.length,
+      actionIds: afterActions.map(a => a.id)
+    });
+    
+    this.emitHistoryChanged();
+    return transformId;
+  }
+  
+  /**
+   * 撤销变形操作
+   * @returns 是否成功撤销
+   */
+  public undoTransform(): boolean {
+    const lastTransform = this.transformHistory.pop();
+    if (!lastTransform) {
+      logger.debug('没有可撤销的变形操作');
+      return false;
+    }
+    
+    // 恢复变形前的状态
+    for (const action of lastTransform.beforeActions) {
+      this.updateAction(action);
+    }
+    
+    logger.info('变形操作已撤销', {
+      transformId: lastTransform.id,
+      actionsCount: lastTransform.beforeActions.length
+    });
+    
+    this.emitHistoryChanged();
+    return true;
+  }
+  
+  /**
+   * 检查是否有可撤销的变形操作
+   */
+  public canUndoTransform(): boolean {
+    return this.transformHistory.length > 0;
+  }
+  
+  /**
+   * 获取变形历史记录数量
+   */
+  public getTransformHistoryCount(): number {
+    return this.transformHistory.length;
+  }
+  
+  /**
+   * 清空变形历史
+   */
+  public clearTransformHistory(): void {
+    this.transformHistory = [];
+    logger.debug('变形历史已清空');
+  }
+  
+  // ==================== 可撤销的变形操作结束 ====================
 
   /**
    * 更新动作（用于修改已存在的action，如拖拽锚点、变换等）
+   * 注意：此方法直接更新，不记录到变形历史。如需支持 undo，请使用 recordTransform
    * @param updatedAction 更新后的action（必须包含相同的id）
    * @returns 是否成功更新
    */
@@ -490,6 +932,19 @@ export class HistoryManager {
     this.unsubscribeFromEvents();
     this.eventBus = eventBus;
     this.subscribeToEvents();
+  }
+
+  /**
+   * 发出历史变更事件
+   */
+  private emitHistoryChanged(): void {
+    if (!this.eventBus) return;
+    
+    this.eventBus.emit('history:changed', {
+      canUndo: this.canUndo(),
+      canRedo: this.canRedo(),
+      count: this.history.length
+    });
   }
 
   /**

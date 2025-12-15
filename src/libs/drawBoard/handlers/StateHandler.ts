@@ -2,7 +2,7 @@ import type { ToolType } from '../tools/DrawTool';
 import type { PerformanceManager } from '../core/PerformanceManager';
 import type { HistoryManager } from '../history/HistoryManager';
 import type { ToolManager } from '../tools/ToolManager';
-import type { SelectionManager } from '../core/SelectionManager';
+import type { CoreSelectionManager } from '../core/CoreSelectionManager';
 import type { DrawingHandler } from './DrawingHandler';
 import { logger } from '../infrastructure/logging/Logger';
 
@@ -89,14 +89,14 @@ export class StateHandler {
   // 依赖的管理器
   private toolManager: ToolManager;
   private historyManager: HistoryManager;
-  private selectionManager: SelectionManager;
+  private selectionManager: CoreSelectionManager;
   private performanceManager: PerformanceManager;
   private drawingHandler?: DrawingHandler;
 
   constructor(
     toolManager: ToolManager,
     historyManager: HistoryManager,
-    selectionManager: SelectionManager,
+    selectionManager: CoreSelectionManager,
     performanceManager: PerformanceManager,
     config: StateHandlerConfig = {}
   ) {
