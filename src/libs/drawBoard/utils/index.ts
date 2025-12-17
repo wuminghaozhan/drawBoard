@@ -55,3 +55,5 @@ export { ShapeConverter } from './ShapeConverter';
 // 调试工具
 export { DebugUtils } from './DebugUtils';
 
+// Action 校验工具
+export { ActionValidator, isDrawAction } from './ActionValidator';

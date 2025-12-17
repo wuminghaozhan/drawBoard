@@ -2,6 +2,7 @@ import type { DrawAction } from './DrawTool';
 import type { Point, CanvasEngine } from '../core/CanvasEngine';
 import type { StrokeConfig } from './stroke/StrokeTypes';
 import type { StrokePresetType } from './StrokePresets';
+import type { VirtualLayerMode } from '../core/VirtualLayerManager';
 
 /**
  * 选择工具接口
@@ -43,6 +44,35 @@ export interface SelectToolInterface {
   
   /** 设置图层动作列表 */
   setLayerActions(actions: DrawAction[], clearSelection?: boolean): void;
+  
+  /** 设置虚拟图层模式（individual 模式限制单选，grouped 模式允许多选） */
+  setVirtualLayerMode(mode: VirtualLayerMode): void;
+  
+  /** 设置选择限制事件回调（当 individual 模式下多选禁用锚点功能时触发） */
+  setOnSelectionLimited?(callback: (info: {
+    reason: 'individual-mode-no-transform';
+    message: string;
+    selectedCount: number;
+  }) => void): void;
+  
+  /** 设置选区浮动工具栏回调 */
+  setToolbarCallbacks?(callbacks: {
+    onToggleAnchors?: (visible: boolean) => void;
+    onStrokeColorChange?: (color: string) => void;
+    onFillColorChange?: (color: string) => void;
+    onLineWidthChange?: (width: number) => void;
+    onTextColorChange?: (color: string) => void;
+    onFontSizeChange?: (size: number) => void;
+    onFontWeightChange?: (weight: string) => void;
+    onToggleLock?: (locked: boolean) => void;
+    onMoveToTop?: () => void;
+    onMoveToBottom?: () => void;
+    onDuplicate?: () => void;
+    onDelete?: () => void;
+  }): void;
+  
+  /** 设置样式更新回调（当选中图形的样式被修改时立即调用，用于同步到数据源） */
+  setOnStyleUpdated?(callback: (actions: DrawAction[]) => void): void;
   
   /** 设置Canvas引擎和选中图层zIndex */
   setCanvasEngine?(canvasEngine: CanvasEngine, selectedLayerZIndex?: number | null): void;

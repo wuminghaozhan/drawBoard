@@ -74,6 +74,15 @@ export class DrawingHandler {
   private offscreenCacheDirty: boolean = true;
   private readonly OFFSCREEN_CACHE_THRESHOLD = 100; // 历史动作超过100个时使用离屏缓存
   
+  // 橡皮擦离屏Canvas（用于只对 pen 类型应用擦除效果）
+  private eraserPenCanvas?: HTMLCanvasElement;
+  private eraserPenCtx?: CanvasRenderingContext2D;
+  // 橡皮擦非 pen 缓存（优化：在橡皮擦绘制期间缓存非 pen actions 的渲染结果）
+  private eraserNonPenCanvas?: HTMLCanvasElement;
+  private eraserNonPenCtx?: CanvasRenderingContext2D;
+  private eraserNonPenCacheDirty: boolean = true;
+  private lastEraserSessionId: string | null = null; // 用于检测是否是同一次橡皮擦会话
+  
   // 智能内存管理
   private memoryMonitor: MemoryMonitor;
   private readonly MAX_MEMORY_USAGE = 0.8; // 80%内存使用率阈值
@@ -106,7 +115,7 @@ export class DrawingHandler {
       redrawThrottleMs: 16, // 约60fps
       maxPointsPerAction: 1000, // 最大点数限制
       enableErrorRecovery: true, // 启用错误恢复
-      geometricTools: ['rect', 'circle', 'line', 'polygon', 'select'], // 需要全量重绘的几何图形工具
+      geometricTools: ['rect', 'circle', 'line', 'polygon', 'select', 'eraser'], // 需要全量重绘的几何图形工具（橡皮擦需要全量重绘来实现只对 pen 类型的实时擦除效果）
       enableGeometricOptimization: true, // 是否启用几何图形优化
       enableDirtyRect: true, // 启用脏矩形优化
       ...config
@@ -264,6 +273,7 @@ export class DrawingHandler {
         // 强制清理之前的状态
         this.isDrawing = false;
         this.currentAction = null;
+        this.polygonDrawingCenter = null;
       }
       
       // 检查事件有效性
@@ -295,6 +305,7 @@ export class DrawingHandler {
       // 尝试恢复状态
       this.isDrawing = false;
       this.currentAction = null;
+      this.polygonDrawingCenter = null;
       this.handleError(error);
       // 重新抛出，让上层知道处理失败
       throw error;
@@ -312,6 +323,30 @@ export class DrawingHandler {
       }
 
       const point = this.getEventPoint(event);
+      
+      // 🔄 矩形特殊处理：实时更新4顶点以支持预览
+      if (this.currentAction.type === 'rect') {
+        this.updateRectVertices(point);
+        // 根据配置选择重绘策略
+        if (this.config.enableIncrementalRedraw) {
+          this.scheduleIncrementalRedraw();
+        } else {
+          this.scheduleFullRedraw();
+        }
+        return;
+      }
+      
+      // 🔄 多边形特殊处理：实时更新顶点以支持预览
+      if (this.currentAction.type === 'polygon') {
+        this.updatePolygonVertices(point);
+        // 根据配置选择重绘策略
+        if (this.config.enableIncrementalRedraw) {
+          this.scheduleIncrementalRedraw();
+        } else {
+          this.scheduleFullRedraw();
+        }
+        return;
+      }
       
       // 检查点数限制
       if (this.currentAction.points.length >= this.config.maxPointsPerAction) {
@@ -336,6 +371,28 @@ export class DrawingHandler {
       this.handleError(error);
     }
   }
+  
+  /**
+   * 更新矩形的4顶点（用于实时预览）
+   * 保持第一个点（起点）不变，根据当前鼠标位置更新其他3个顶点
+   */
+  private updateRectVertices(currentPoint: Point): void {
+    if (!this.currentAction || this.currentAction.points.length === 0) return;
+    
+    const start = this.currentAction.points[0];
+    const minX = Math.min(start.x, currentPoint.x);
+    const maxX = Math.max(start.x, currentPoint.x);
+    const minY = Math.min(start.y, currentPoint.y);
+    const maxY = Math.max(start.y, currentPoint.y);
+    
+    // 直接设置4顶点（覆盖所有已有点）
+    this.currentAction.points = [
+      { x: minX, y: minY },  // 左上
+      { x: maxX, y: minY },  // 右上
+      { x: maxX, y: maxY },  // 右下
+      { x: minX, y: maxY }   // 左下
+    ];
+  }
 
   /**
    * 处理绘制结束事件
@@ -357,8 +414,18 @@ export class DrawingHandler {
 
       const point = this.getEventPoint(event);
       
-      // 添加最后一个点
-      this.currentAction.points.push(point);
+      // 🔄 矩形和多边形使用顶点格式，不需要添加额外的点
+      // 它们的顶点在 handleDrawMove 中已经实时更新
+      if (this.currentAction.type === 'rect') {
+        // 矩形：使用最终点重新计算4顶点
+        this.updateRectVertices(point);
+      } else if (this.currentAction.type === 'polygon') {
+        // 多边形：使用最终点重新计算顶点
+        this.updatePolygonVertices(point);
+      } else {
+        // 其他工具：添加最后一个点
+        this.currentAction.points.push(point);
+      }
       
       // 橡皮擦分割模式特殊处理
       if (this.currentAction.type === 'eraser') {
@@ -396,8 +463,125 @@ export class DrawingHandler {
       // 确保状态被正确清理
       this.isDrawing = false;
       this.currentAction = null;
+      this.polygonDrawingCenter = null;
       this.onStateChange();
     }
+  }
+  
+  // 存储多边形绘制时的中心点
+  private polygonDrawingCenter: Point | null = null;
+  
+  /**
+   * 更新多边形顶点（用于实时预览）
+   * 根据中心点（第一次点击位置）和当前鼠标位置生成多边形顶点
+   */
+  private updatePolygonVertices(currentPoint: Point): void {
+    if (!this.currentAction) return;
+    
+    const polygonAction = this.currentAction as DrawAction & {
+      polygonType?: 'triangle' | 'pentagon' | 'hexagon' | 'star' | 'custom';
+      sides?: number;
+      innerRadius?: number;
+    };
+    
+    // 首次调用时保存中心点
+    if (!this.polygonDrawingCenter) {
+      if (this.currentAction.points.length === 0) return;
+      this.polygonDrawingCenter = { ...this.currentAction.points[0] };
+    }
+    
+    const center = this.polygonDrawingCenter;
+    
+    // 生成多边形顶点
+    const vertices = this.generatePolygonVertices(
+      center,
+      currentPoint,
+      polygonAction.polygonType || 'hexagon',
+      polygonAction.sides,
+      polygonAction.innerRadius
+    );
+    
+    // 更新顶点
+    this.currentAction.points = vertices;
+  }
+  
+  /**
+   * 生成多边形顶点
+   * @param center 中心点
+   * @param edge 边缘点（用于计算半径）
+   * @param polygonType 多边形类型
+   * @param sides 自定义边数
+   * @param innerRadiusRatio 内半径比例（星形用）
+   */
+  private generatePolygonVertices(
+    center: Point,
+    edge: Point,
+    polygonType: 'triangle' | 'pentagon' | 'hexagon' | 'star' | 'custom' = 'hexagon',
+    sides?: number,
+    innerRadiusRatio: number = 0.5
+  ): Point[] {
+    const radius = Math.sqrt(
+      Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
+    );
+    
+    if (radius <= 0) {
+      return [center];
+    }
+    
+    // 根据类型确定边数
+    let numSides: number;
+    switch (polygonType) {
+      case 'triangle': numSides = 3; break;
+      case 'pentagon': numSides = 5; break;
+      case 'hexagon': numSides = 6; break;
+      case 'star': numSides = 5; break; // 星形特殊处理
+      case 'custom': numSides = sides || 6; break;
+      default: numSides = 6;
+    }
+    
+    // 星形特殊处理
+    if (polygonType === 'star') {
+      return this.generateStarVertices(center, radius, innerRadiusRatio);
+    }
+    
+    // 生成正多边形顶点
+    const vertices: Point[] = [];
+    const angleStep = (2 * Math.PI) / numSides;
+    
+    for (let i = 0; i < numSides; i++) {
+      const angle = i * angleStep - Math.PI / 2; // 从顶部开始
+      vertices.push({
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle)
+      });
+    }
+    
+    return vertices;
+  }
+  
+  /**
+   * 生成星形顶点
+   */
+  private generateStarVertices(
+    center: Point,
+    outerRadius: number,
+    innerRadiusRatio: number = 0.5
+  ): Point[] {
+    const vertices: Point[] = [];
+    const points = 5; // 5角星
+    const innerRadius = outerRadius * innerRadiusRatio;
+    const angleStep = Math.PI / points;
+    
+    for (let i = 0; i < points * 2; i++) {
+      const angle = i * angleStep - Math.PI / 2; // 从顶部开始
+      const radius = i % 2 === 0 ? outerRadius : innerRadius;
+      vertices.push({
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle)
+      });
+    }
+    
+    return vertices;
   }
 
   /**
@@ -558,9 +742,15 @@ export class DrawingHandler {
     
     this.isDrawing = false;
     this.currentAction = null;
+    this.polygonDrawingCenter = null;
+    
+    // 🔧 清理橡皮擦缓存状态
+    this.lastEraserSessionId = null;
+    this.eraserNonPenCacheDirty = true;
+    
     this.onStateChange();
     
-    logger.debug('橡皮擦操作完成');
+    logger.debug('橡皮擦操作完成，缓存已清理');
   }
 
   /**
@@ -581,12 +771,13 @@ export class DrawingHandler {
       context: {
         strokeStyle: (ctx?.strokeStyle as string) || '#000000',
         lineWidth: ctx?.lineWidth || 2,
-        fillStyle: (ctx?.fillStyle as string) || '#000000'
+        fillStyle: 'transparent' // 默认透明填充，闭合图形需要手动设置填充色
       },
       timestamp: timestamp
     };
     
     // 橡皮擦工具特殊处理：分割模式，不需要图层信息
+    // 注：缓存状态由 finishEraserAction() 和 drawWithEraserEffect() 管理
     if (currentToolType === 'eraser') {
       const eraserAction: EraserAction = {
         ...baseAction,
@@ -624,6 +815,15 @@ export class DrawingHandler {
       x: event.point.x,
       y: event.point.y
     };
+  }
+  
+  /**
+   * 检查橡皮擦是否处于激活状态（正在绘制且有足够的点）
+   * 
+   * 橡皮擦只对 pen 类型起作用，需要至少 2 个点才能形成擦除路径
+   */
+  private isEraserActive(): boolean {
+    return this.currentAction?.type === 'eraser' && this.currentAction.points.length >= 2;
   }
 
   /**
@@ -715,11 +915,23 @@ export class DrawingHandler {
    */
   private async performGeometricRedraw(ctx: CanvasRenderingContext2D): Promise<void> {
     try {
-      const allActions = this.historyManager.getAllActions();
+      // 🔧 使用覆盖数据（拖拽过程中的实时渲染）
+      const allActions = this.getAllActionsWithOverrides();
       const historyCount = allActions.length;
       const canvas = this.canvasEngine.getCanvas();
       const canvasWidth = canvas.width;
       const canvasHeight = canvas.height;
+      
+      // 🔧 橡皮擦特殊处理：只对 pen 类型实时显示擦除效果
+      if (this.isEraserActive()) {
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        await this.drawWithEraserEffect(ctx, allActions, this.currentAction!);
+        logger.debug('几何图形重绘完成（橡皮擦模式）', {
+          historyActions: historyCount,
+          eraserPointsCount: this.currentAction!.points.length
+        });
+        return;
+      }
       
       // 检查是否应该使用离屏缓存（智能内存管理）
       const shouldUseCache = this.shouldUseOffscreenCache(historyCount);
@@ -860,7 +1072,8 @@ export class DrawingHandler {
   private async drawAllHistoryActionsToOffscreen(): Promise<void> {
     if (!this.offscreenCtx) return;
     
-    const allActions = this.historyManager.getAllActions();
+    // 🔧 使用覆盖数据（拖拽过程中的实时渲染）
+    const allActions = this.getAllActionsWithOverrides();
     const canvas = this.offscreenCanvas!;
     
     // 清空离屏Canvas
@@ -931,7 +1144,8 @@ export class DrawingHandler {
     if (!this.virtualLayerManager) return;
     
     const allLayers = this.virtualLayerManager.getAllVirtualLayers();
-    const allActions = this.historyManager.getAllActions();
+    // 🔧 使用覆盖数据（拖拽过程中的实时渲染）
+    const allActions = this.getAllActionsWithOverrides();
     
     // 创建动作ID到动作的映射
     const actionMap = new Map<string, DrawAction>();
@@ -950,7 +1164,8 @@ export class DrawingHandler {
       
       for (const layer of bottomLayers) {
         // 边界检查：图层可能在使用过程中被删除
-        if (!layer || !layer.visible || layer.locked) continue;
+        // 注意：锁定的图层仍需绘制，只是不能编辑
+        if (!layer || !layer.visible) continue;
         
         // 验证图层是否仍然存在（防止在绘制过程中被删除）
         if (this.virtualLayerManager && !this.virtualLayerManager.getVirtualLayer(layer.id)) {
@@ -1001,7 +1216,8 @@ export class DrawingHandler {
       
       for (const layer of topLayers) {
         // 边界检查：图层可能在使用过程中被删除
-        if (!layer || !layer.visible || layer.locked) continue;
+        // 注意：锁定的图层仍需绘制，只是不能编辑
+        if (!layer || !layer.visible) continue;
         
         // 验证图层是否仍然存在（防止在绘制过程中被删除）
         if (this.virtualLayerManager && !this.virtualLayerManager.getVirtualLayer(layer.id)) {
@@ -1061,30 +1277,37 @@ export class DrawingHandler {
       // 清空画布
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // 获取所有历史动作
-      const allActions = this.historyManager.getAllActions();
+      // 🔧 使用覆盖数据（拖拽过程中的实时渲染）
+      const allActions = this.getAllActionsWithOverrides();
       
-      // 检查是否需要更新缓存
-      if (allActions.length !== this.lastCachedActionCount) {
+      // 检查是否需要更新缓存（使用历史记录数量，避免覆盖数据影响缓存判断）
+      const historyCount = this.historyManager.getAllActions().length;
+      if (historyCount !== this.lastCachedActionCount) {
         this.updateActionCache(allActions);
-        this.lastCachedActionCount = allActions.length;
+        this.lastCachedActionCount = historyCount;
         // 历史动作数量变化，标记离屏缓存过期
         this.offscreenCacheDirty = true;
       }
       
-      // 按虚拟图层分组绘制
-      if (this.virtualLayerManager) {
-        await this.drawActionsByVirtualLayers(ctx, allActions);
+      // 🔧 橡皮擦特殊处理：只对 pen 类型实时显示擦除效果
+      if (this.isEraserActive()) {
+        // 橡皮擦模式：分离 pen 和非 pen，用离屏 canvas 处理 pen + 擦除效果
+        await this.drawWithEraserEffect(ctx, allActions, this.currentAction!);
       } else {
-        // 兼容模式：直接绘制所有动作
-        for (const action of allActions) {
-          await this.drawAction(ctx, action);
+        // 正常模式：按虚拟图层分组绘制
+        if (this.virtualLayerManager) {
+          await this.drawActionsByVirtualLayers(ctx, allActions);
+        } else {
+          // 兼容模式：直接绘制所有动作
+          for (const action of allActions) {
+            await this.drawAction(ctx, action);
+          }
         }
-      }
 
-      // 绘制当前动作
-      if (this.currentAction && this.currentAction.points.length > 0) {
-        await this.drawAction(ctx, this.currentAction);
+        // 绘制当前动作
+        if (this.currentAction && this.currentAction.points.length > 0) {
+          await this.drawAction(ctx, this.currentAction);
+        }
       }
 
       // 优化：只在必要时调用drawSelectToolUI
@@ -1111,15 +1334,10 @@ export class DrawingHandler {
         this.needsClearSelectionUI;
       
       if (shouldCallDrawSelectToolUI) {
-        logger.info('redrawCanvasFull: 调用drawSelectToolUI', {
-          currentTool,
-          needsClearSelectionUI: this.needsClearSelectionUI
-        });
         await this.drawSelectToolUI();
         // 清除标志
         this.needsClearSelectionUI = false;
         this.needsClearSelectionUITime = 0;
-        logger.info('redrawCanvasFull: drawSelectToolUI完成');
       } else {
         logger.debug('redrawCanvasFull: 跳过drawSelectToolUI', {
           currentTool,
@@ -1144,6 +1362,115 @@ export class DrawingHandler {
       logger.error('全量重绘失败', error);
       this.handleError(error);
     }
+  }
+  
+  /**
+   * 使用橡皮擦效果绘制（只对 pen 类型实时显示擦除）
+   * 
+   * 橡皮擦只对 pen 类型起作用，此方法实现：
+   * 1. 缓存非 pen 类型的渲染结果（同一橡皮擦会话内复用）
+   * 2. 在离屏 canvas 上绘制所有 pen 类型
+   * 3. 在离屏 canvas 上应用橡皮擦擦除效果
+   * 4. 合成：非 pen 缓存 + pen 擦除结果
+   * 
+   * 性能优化：
+   * - 非 pen actions 在同一次橡皮擦会话内只绘制一次
+   * - 使用 eraserAction.id 判断会话边界
+   * 
+   * @param ctx 主 Canvas 上下文
+   * @param allActions 所有历史动作
+   * @param eraserAction 当前橡皮擦动作
+   */
+  private async drawWithEraserEffect(
+    ctx: CanvasRenderingContext2D,
+    allActions: DrawAction[],
+    eraserAction: DrawAction
+  ): Promise<void> {
+    const canvas = this.canvasEngine.getCanvas();
+    const canvasWidth = canvas.width;
+    const canvasHeight = canvas.height;
+    
+    // 分离 pen 和非 pen 类型的 actions
+    const penActions = allActions.filter(a => a.type === 'pen');
+    const nonPenActions = allActions.filter(a => a.type !== 'pen');
+    
+    // 🔧 性能优化：检查是否是同一次橡皮擦会话
+    const isNewSession = this.lastEraserSessionId !== eraserAction.id;
+    if (isNewSession) {
+      this.lastEraserSessionId = eraserAction.id;
+      this.eraserNonPenCacheDirty = true;
+    }
+    
+    // 1. 初始化或复用非 pen 缓存 canvas
+    if (!this.eraserNonPenCanvas || 
+        this.eraserNonPenCanvas.width !== canvasWidth || 
+        this.eraserNonPenCanvas.height !== canvasHeight) {
+      this.eraserNonPenCanvas = document.createElement('canvas');
+      this.eraserNonPenCanvas.width = canvasWidth;
+      this.eraserNonPenCanvas.height = canvasHeight;
+      this.eraserNonPenCtx = this.eraserNonPenCanvas.getContext('2d') || undefined;
+      this.eraserNonPenCacheDirty = true;
+    }
+    
+    // 2. 绘制非 pen 到缓存（只在需要时）
+    if (this.eraserNonPenCacheDirty && this.eraserNonPenCtx) {
+      this.eraserNonPenCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+      if (this.virtualLayerManager) {
+        await this.drawActionsByVirtualLayers(this.eraserNonPenCtx, nonPenActions);
+      } else {
+        for (const action of nonPenActions) {
+          await this.drawAction(this.eraserNonPenCtx, action);
+        }
+      }
+      this.eraserNonPenCacheDirty = false;
+      logger.debug('drawWithEraserEffect: 非 pen 缓存已更新', { nonPenCount: nonPenActions.length });
+    }
+    
+    // 3. 绘制非 pen 缓存到主 canvas
+    if (this.eraserNonPenCanvas) {
+      ctx.drawImage(this.eraserNonPenCanvas, 0, 0);
+    }
+    
+    // 4. 如果没有 pen actions，直接返回
+    if (penActions.length === 0) {
+      return;
+    }
+    
+    // 5. 初始化或复用 pen + eraser 离屏 canvas
+    if (!this.eraserPenCanvas || 
+        this.eraserPenCanvas.width !== canvasWidth || 
+        this.eraserPenCanvas.height !== canvasHeight) {
+      this.eraserPenCanvas = document.createElement('canvas');
+      this.eraserPenCanvas.width = canvasWidth;
+      this.eraserPenCanvas.height = canvasHeight;
+      this.eraserPenCtx = this.eraserPenCanvas.getContext('2d') || undefined;
+    }
+    
+    if (!this.eraserPenCtx) {
+      logger.error('drawWithEraserEffect: 无法获取 pen 离屏 canvas 上下文');
+      return;
+    }
+    
+    // 6. 清空 pen canvas 并绘制所有 pen actions
+    this.eraserPenCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+    for (const action of penActions) {
+      await this.drawAction(this.eraserPenCtx, action);
+    }
+    
+    // 7. 在 pen canvas 上应用橡皮擦擦除效果
+    const eraserTool = await this.toolManager.getTool('eraser') as EraserTool | null;
+    if (eraserTool && eraserTool.drawEraseEffect) {
+      eraserTool.drawEraseEffect(this.eraserPenCtx, eraserAction);
+    }
+    
+    // 8. 将 pen canvas 合成到主 canvas
+    ctx.drawImage(this.eraserPenCanvas, 0, 0);
+    
+    logger.debug('drawWithEraserEffect: 橡皮擦效果绘制完成', {
+      penActionsCount: penActions.length,
+      nonPenActionsCount: nonPenActions.length,
+      eraserPointsCount: eraserAction.points.length
+    });
   }
 
   /**
@@ -1187,7 +1514,8 @@ export class DrawingHandler {
     // 绘制所有图层
     for (const layer of layers) {
       // 边界检查：图层可能在使用过程中被删除
-      if (!layer || !layer.visible || layer.locked) continue;
+      // 注意：锁定的图层仍需绘制，只是不能编辑
+      if (!layer || !layer.visible) continue;
 
       // 验证图层是否仍然存在（防止在绘制过程中被删除）
       if (this.virtualLayerManager && !this.virtualLayerManager.getVirtualLayer(layer.id)) {
@@ -1242,7 +1570,8 @@ export class DrawingHandler {
     try {
       const allLayers = this.virtualLayerManager.getAllVirtualLayers();
       const bottomLayers = allLayers.filter(l => l.zIndex < selectedLayerZIndex);
-      const allActions = this.historyManager.getAllActions();
+      // 🔧 使用覆盖数据（拖拽过程中的实时渲染）
+      const allActions = this.getAllActionsWithOverrides();
       const bottomCtx = this.canvasEngine.getBottomLayersDrawContext();
 
       await this.redrawLayersInContext(bottomCtx, bottomLayers, allActions, 'bottom');
@@ -1265,7 +1594,8 @@ export class DrawingHandler {
     try {
       const allLayers = this.virtualLayerManager.getAllVirtualLayers();
       const topLayers = allLayers.filter(l => l.zIndex > selectedLayerZIndex);
-      const allActions = this.historyManager.getAllActions();
+      // 🔧 使用覆盖数据（拖拽过程中的实时渲染）
+      const allActions = this.getAllActionsWithOverrides();
       const topCtx = this.canvasEngine.getTopLayersDrawContext();
 
       await this.redrawLayersInContext(topCtx, topLayers, allActions, 'top');
@@ -1333,7 +1663,8 @@ export class DrawingHandler {
 
       // 只绘制选中图层的内容
       const actionMap = new Map<string, DrawAction>();
-      const allActions = this.historyManager.getAllActions();
+      // 🔧 使用覆盖数据（拖拽过程中的实时渲染）
+      const allActions = this.getAllActionsWithOverrides();
       for (const action of allActions) {
         if (action.virtualLayerId === selectedLayer.id) {
           actionMap.set(action.id, action);
@@ -1604,8 +1935,9 @@ export class DrawingHandler {
   /**
    * 绘制选择工具的UI（选择框、锚点等）
    * 公开此方法以支持脏矩形优化时单独重绘选择UI
+   * @param force 是否强制绘制（跳过节流检查，用于关键交互时刻）
    */
-  public async drawSelectToolUI(): Promise<void> {
+  public async drawSelectToolUI(force: boolean = false): Promise<void> {
     // 防止无限循环调用
     if (this.isDrawingSelectToolUI) {
       // 检查是否超时，如果超时则强制重置
@@ -1624,9 +1956,9 @@ export class DrawingHandler {
       }
     }
 
-    // 节流：防止过于频繁调用
+    // 节流：防止过于频繁调用（除非强制）
     const now = Date.now();
-    if (now - this.lastDrawSelectToolUITime < this.DRAW_SELECT_TOOL_UI_INTERVAL) {
+    if (!force && now - this.lastDrawSelectToolUITime < this.DRAW_SELECT_TOOL_UI_INTERVAL) {
       logger.debug('drawSelectToolUI: 调用过于频繁，跳过', {
         timeSinceLastCall: now - this.lastDrawSelectToolUITime
       });
@@ -1806,7 +2138,7 @@ export class DrawingHandler {
           context: {
             strokeStyle: '#000000',
             lineWidth: 1,
-            fillStyle: '#000000'
+            fillStyle: 'transparent'
           },
           timestamp: Date.now()
         };
@@ -1844,7 +2176,7 @@ export class DrawingHandler {
             context: {
               strokeStyle: '#000000',
               lineWidth: 1,
-              fillStyle: '#000000'
+              fillStyle: 'transparent'
             },
             timestamp: Date.now()
           };
@@ -1895,10 +2227,8 @@ export class DrawingHandler {
     
     for (const layer of virtualLayers) {
       // 跳过不可见图层
+      // 注意：锁定的图层仍需绘制，只是不能编辑
       if (!layer.visible) continue;
-      
-      // 跳过锁定图层（可选，取决于业务需求）
-      if (layer.locked) continue;
       
       // 设置图层透明度
       const originalGlobalAlpha = ctx.globalAlpha;
@@ -2092,6 +2422,7 @@ export class DrawingHandler {
     // 重置绘制状态
     this.isDrawing = false;
     this.currentAction = null;
+    this.polygonDrawingCenter = null;
     
     // 记录错误
     logger.error('DrawingHandler错误处理', error);
@@ -2201,9 +2532,48 @@ export class DrawingHandler {
   // 防止重绘任务堆积
   private isRedrawing: boolean = false;
   private pendingRedraw: boolean = false;
+  private rafId: number | null = null; // RAF ID，用于节流
+  private redrawPromiseResolvers: Array<() => void> = []; // 等待重绘完成的 Promise resolvers
 
+  /**
+   * 强制重绘（使用 RAF 节流，合并多次调用）
+   * 
+   * 优化策略：
+   * 1. 多次调用会被合并为一次 RAF 回调
+   * 2. 返回 Promise，调用者可以等待重绘完成
+   * 3. 避免重绘任务堆积
+   */
   public async forceRedraw(): Promise<void> {
-    // 如果正在重绘，标记为待重绘，避免重复调用
+    // 如果正在重绘，标记为待重绘
+    if (this.isRedrawing) {
+      this.pendingRedraw = true;
+      return new Promise(resolve => {
+        this.redrawPromiseResolvers.push(resolve);
+      });
+    }
+
+    // 如果已经有 RAF 调度，复用它
+    if (this.rafId !== null) {
+      return new Promise(resolve => {
+        this.redrawPromiseResolvers.push(resolve);
+      });
+    }
+
+    // 使用 RAF 节流，合并短时间内的多次调用
+    return new Promise(resolve => {
+      this.redrawPromiseResolvers.push(resolve);
+      
+      this.rafId = requestAnimationFrame(async () => {
+        this.rafId = null;
+        await this.executeRedraw();
+      });
+    });
+  }
+
+  /**
+   * 执行实际的重绘操作
+   */
+  private async executeRedraw(): Promise<void> {
     if (this.isRedrawing) {
       this.pendingRedraw = true;
       return;
@@ -2215,17 +2585,116 @@ export class DrawingHandler {
     try {
       await this.redrawCanvas();
       
-      // 循环处理所有待重绘请求，确保不丢失
+      // 循环处理所有待重绘请求
       while (this.pendingRedraw) {
         this.pendingRedraw = false;
         await this.redrawCanvas();
       }
     } catch (error) {
       logger.error('强制重绘失败', error);
-      this.pendingRedraw = false; // 出错时清除标志
+      this.pendingRedraw = false;
     } finally {
       this.isRedrawing = false;
+      
+      // 通知所有等待的调用者
+      const resolvers = this.redrawPromiseResolvers;
+      this.redrawPromiseResolvers = [];
+      resolvers.forEach(resolve => resolve());
     }
+  }
+
+  /**
+   * 立即重绘（跳过 RAF 节流，用于需要同步更新的场景）
+   * @param forceSelectUI 是否强制重绘选择 UI（跳过节流，用于关键交互时刻如拖拽结束）
+   */
+  public async forceRedrawImmediate(forceSelectUI: boolean = false): Promise<void> {
+    // 取消待执行的 RAF
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    
+    await this.executeRedraw();
+    
+    // 🔧 关键交互时刻（如拖拽结束），强制重绘选择 UI 以确保锚点和工具栏立即显示
+    if (forceSelectUI && this.toolManager.getCurrentTool() === 'select') {
+      await this.drawSelectToolUI(true);
+    }
+  }
+  
+  // 拖拽覆盖数据（用于拖拽过程中的实时渲染，不更新历史）
+  private actionOverrides: Map<string, DrawAction> = new Map();
+  
+  /**
+   * 使用覆盖数据重绘（用于拖拽过程中的实时渲染）
+   * 覆盖数据不会写入历史，只用于渲染
+   * 
+   * @param overrides 覆盖数据 Map<actionId, action>
+   */
+  public async redrawWithOverrides(overrides: Map<string, DrawAction>): Promise<void> {
+    // 🔧 使用上一帧的覆盖数据计算脏矩形（而不是历史记录中的原始数据）
+    const previousOverrides = this.actionOverrides;
+    
+    // 设置新的覆盖数据
+    this.actionOverrides = overrides;
+    
+    try {
+      // 🔧 简化拖拽重绘：直接标记图层缓存为脏并重绘
+      // 脏矩形优化在 individual 模式下效果不明显，因为每个图层只有一个 action
+      if (this.virtualLayerManager) {
+        for (const action of overrides.values()) {
+          if (action.virtualLayerId) {
+            this.virtualLayerManager.markLayerCacheDirty(action.virtualLayerId);
+          }
+        }
+      }
+      
+      // 使用选中图层重绘（individual 模式下只重绘被拖拽的图层）
+      await this.redrawCanvas();
+    } catch (error) {
+      logger.error('拖拽重绘失败', error);
+    }
+  }
+  
+  /**
+   * 清除覆盖数据（拖拽结束时调用）
+   */
+  public clearActionOverrides(): void {
+    this.actionOverrides.clear();
+  }
+  
+  /**
+   * 获取 action（优先使用覆盖数据）
+   * @param actionId action ID
+   * @returns 覆盖数据中的 action，或历史记录中的 action
+   */
+  private getActionWithOverride(actionId: string): DrawAction | null {
+    // 优先使用覆盖数据
+    if (this.actionOverrides.has(actionId)) {
+      return this.actionOverrides.get(actionId)!;
+    }
+    // 回退到历史记录
+    return this.historyManager.getActionById(actionId);
+  }
+  
+  /**
+   * 获取所有 actions（使用覆盖数据）
+   * @returns 合并了覆盖数据的 actions 数组
+   */
+  private getAllActionsWithOverrides(): DrawAction[] {
+    const allActions = this.historyManager.getAllActions();
+    
+    if (this.actionOverrides.size === 0) {
+      return allActions;
+    }
+    
+    // 用覆盖数据替换对应的 action
+    return allActions.map(action => {
+      if (this.actionOverrides.has(action.id)) {
+        return this.actionOverrides.get(action.id)!;
+      }
+      return action;
+    });
   }
 
   /**
@@ -2279,6 +2748,7 @@ export class DrawingHandler {
     }
     this.isDrawing = false;
     this.currentAction = null;
+    this.polygonDrawingCenter = null;
     this.redrawScheduled = false;
   }
 
@@ -2356,7 +2826,8 @@ export class DrawingHandler {
         return false;
       }
 
-      const allActions = this.historyManager.getAllActions();
+      // 🔧 使用覆盖数据（拖拽过程中的实时渲染）
+      const allActions = this.getAllActionsWithOverrides();
 
       // 使用脏矩形进行局部重绘
       await this.dirtyRectManager.clipAndRedraw(ctx, async (ctx, clipRect) => {
@@ -2389,6 +2860,13 @@ export class DrawingHandler {
 
       // 清除脏标记
       this.dirtyRectManager.clear();
+      
+      // 🔧 脏矩形重绘成功后，也需要绘制选择 UI
+      // 选择 UI 在独立的交互层上，不需要脏矩形优化
+      if (this.toolManager.getCurrentTool() === 'select') {
+        await this.drawSelectToolUI();
+      }
+      
       return true;
     } catch (error) {
       logger.error('脏矩形重绘失败', error);
@@ -2526,6 +3004,7 @@ export class DrawingHandler {
     
     this.isDrawing = false;
     this.currentAction = null;
+    this.polygonDrawingCenter = null;
     this.cachedActions.clear();
     this.redrawScheduled = false;
     

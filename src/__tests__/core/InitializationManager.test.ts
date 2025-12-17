@@ -3,7 +3,7 @@ import type { DrawBoardConfig } from '../../libs/drawBoard/DrawBoard';
 import { CanvasEngine } from '../../libs/drawBoard/core/CanvasEngine';
 import { ToolManager } from '../../libs/drawBoard/tools/ToolManager';
 import { HistoryManager } from '../../libs/drawBoard/history/HistoryManager';
-import { SelectionManager } from '../../libs/drawBoard/core/SelectionManager';
+import { CoreSelectionManager as SelectionManager } from '../../libs/drawBoard/core/CoreSelectionManager';
 import { PerformanceManager } from '../../libs/drawBoard/core/PerformanceManager';
 import { ComplexityManager } from '../../libs/drawBoard/core/ComplexityManager';
 import { VirtualLayerManager } from '../../libs/drawBoard/core/VirtualLayerManager';

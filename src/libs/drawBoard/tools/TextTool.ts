@@ -122,6 +122,9 @@ export class TextTool extends DrawTool {
    * 创建文字 Action
    */
   private createTextAction(event: TextCommitEvent): TextAction {
+    // 估算文本宽高，用于选区边界计算
+    const { width, height } = this.estimateTextBounds(event.text, event.fontSize);
+    
     return {
       id: event.actionId || `text-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'text',
@@ -129,6 +132,8 @@ export class TextTool extends DrawTool {
       text: event.text,
       fontSize: event.fontSize,
       fontFamily: event.fontFamily,
+      width,
+      height,
       context: {
         fillStyle: event.color,
         strokeStyle: event.color,
@@ -136,6 +141,33 @@ export class TextTool extends DrawTool {
       },
       timestamp: Date.now()
     };
+  }
+  
+  /**
+   * 估算文本边界（不需要 canvas context）
+   * 用于选区边界计算
+   */
+  private estimateTextBounds(text: string, fontSize: number): { width: number; height: number } {
+    if (!text) {
+      return { width: fontSize, height: fontSize * 1.2 };
+    }
+    
+    // 估算文本宽度：中文字符约等于 fontSize，英文字符约等于 fontSize * 0.6
+    let estimatedWidth = 0;
+    for (const char of text) {
+      // 判断是否是中文字符（或其他宽字符）
+      if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
+        estimatedWidth += fontSize;
+      } else {
+        estimatedWidth += fontSize * 0.6;
+      }
+    }
+    
+    // 最小宽度为一个字符宽度
+    const width = Math.max(estimatedWidth, fontSize);
+    const height = fontSize * 1.2; // 行高约为字体大小的 1.2 倍
+    
+    return { width, height };
   }
 
   /**
@@ -221,10 +253,19 @@ export class TextTool extends DrawTool {
   private getTextConfig(action: TextAction) {
     const fontSize = this.calculateFontSize(action);
     const fontFamily = action.fontFamily || TextTool.DEFAULT_CONFIG.fontFamily;
+    const fontWeight = action.fontWeight || 'normal';
     const textAlign = action.textAlign || TextTool.DEFAULT_CONFIG.textAlign;
     const textBaseline = action.textBaseline || TextTool.DEFAULT_CONFIG.textBaseline;
 
-    return { fontSize, fontFamily, textAlign, textBaseline };
+    return { fontSize, fontFamily, fontWeight, textAlign, textBaseline };
+  }
+  
+  /**
+   * 构建 CSS font 字符串
+   * 格式: [font-weight] font-size font-family
+   */
+  private buildFontString(fontSize: number, fontFamily: string, fontWeight: string = 'normal'): string {
+    return `${fontWeight} ${fontSize}px ${fontFamily}`;
   }
 
   /**
@@ -268,10 +309,10 @@ export class TextTool extends DrawTool {
       this.setContext(ctx, action.context);
 
       const point = action.points[0];
-      const { fontSize, fontFamily, textAlign, textBaseline } = this.getTextConfig(action);
+      const { fontSize, fontFamily, fontWeight, textAlign, textBaseline } = this.getTextConfig(action);
       
       // 设置字体属性
-      ctx.font = `${fontSize}px ${fontFamily}`;
+      ctx.font = this.buildFontString(fontSize, fontFamily, fontWeight);
       ctx.textAlign = textAlign;
       ctx.textBaseline = textBaseline;
       
@@ -292,7 +333,7 @@ export class TextTool extends DrawTool {
         textBaseline: TextTool.DEFAULT_CONFIG.textBaseline,
         strokeStyle: '#000000',
         lineWidth: 1,
-        fillStyle: '#000000',
+        fillStyle: 'transparent',
         globalCompositeOperation: 'source-over'
       });
     }
@@ -443,7 +484,7 @@ export class TextTool extends DrawTool {
   /**
    * 测量文字尺寸
    */
-  public measureText(ctx: CanvasRenderingContext2D, text: string, fontSize: number = 16, fontFamily: string = 'Arial'): TextMetrics {
+  public measureText(ctx: CanvasRenderingContext2D, text: string, fontSize: number = 16, fontFamily: string = 'Arial', fontWeight: string = 'normal'): TextMetrics {
     try {
       if (!text || text.trim().length === 0) {
         text = ' ';
@@ -453,7 +494,7 @@ export class TextTool extends DrawTool {
                          Math.min(fontSize, TextTool.DEFAULT_CONFIG.maxFontSize));
       
       const originalFont = ctx.font;
-      ctx.font = `${fontSize}px ${fontFamily}`;
+      ctx.font = this.buildFontString(fontSize, fontFamily, fontWeight);
       const metrics = ctx.measureText(text);
       ctx.font = originalFont;
       return metrics;
@@ -504,8 +545,8 @@ export class TextTool extends DrawTool {
         return { x: point.x, y: point.y, width: 0, height: 0 };
       }
       
-      const { fontSize, fontFamily, textAlign, textBaseline } = this.getTextConfig(action);
-      ctx.font = `${fontSize}px ${fontFamily}`;
+      const { fontSize, fontFamily, fontWeight, textAlign, textBaseline } = this.getTextConfig(action);
+      ctx.font = this.buildFontString(fontSize, fontFamily, fontWeight);
 
       // 如果设置了宽度，使用多行模式计算边界
       if (action.width && action.width > 0) {
@@ -513,7 +554,7 @@ export class TextTool extends DrawTool {
       }
 
       // 单行模式
-      const metrics = this.measureText(ctx, text, fontSize, fontFamily);
+      const metrics = this.measureText(ctx, text, fontSize, fontFamily, fontWeight);
       
       // 根据对齐方式计算实际位置
       let x = point.x;
@@ -603,10 +644,10 @@ export class TextTool extends DrawTool {
   /**
    * 截断文字以适应指定宽度
    */
-  public truncateText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, fontSize: number = 16, fontFamily: string = 'Arial'): string {
+  public truncateText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, fontSize: number = 16, fontFamily: string = 'Arial', fontWeight: string = 'normal'): string {
     if (maxWidth <= 0) return '';
     
-    const metrics = this.measureText(ctx, text, fontSize, fontFamily);
+    const metrics = this.measureText(ctx, text, fontSize, fontFamily, fontWeight);
     if (metrics.width <= maxWidth) return text;
     
     let start = 0;
@@ -616,7 +657,7 @@ export class TextTool extends DrawTool {
     while (start <= end) {
       const mid = Math.floor((start + end) / 2);
       const truncated = text.substring(0, mid) + '...';
-      const truncatedMetrics = this.measureText(ctx, truncated, fontSize, fontFamily);
+      const truncatedMetrics = this.measureText(ctx, truncated, fontSize, fontFamily, fontWeight);
       
       if (truncatedMetrics.width <= maxWidth) {
         result = truncated;
@@ -673,7 +714,7 @@ export class TextTool extends DrawTool {
     
     for (const word of words) {
       const testLine = currentLine ? `${currentLine} ${word}` : word;
-      const metrics = this.measureText(ctx, testLine, this.calculateFontSize(action), action.fontFamily || 'Arial');
+      const metrics = this.measureText(ctx, testLine, this.calculateFontSize(action), action.fontFamily || 'Arial', action.fontWeight || 'normal');
       
       if (metrics.width > maxWidth && currentLine) {
         lines.push(currentLine);

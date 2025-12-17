@@ -90,15 +90,7 @@ export class CircleAnchorHandler extends BaseAnchorHandler {
     
     anchors.push(topAnchor, bottomAnchor, leftAnchor, rightAnchor);
     
-    logger.info('CircleAnchorHandler.generateAnchors: 锚点生成完成', {
-      actionId: action.id,
-      totalAnchors: anchors.length,
-      centerAnchor: anchors.find(a => a.isCenter) ? true : false,
-      edgeAnchors: anchors.filter(a => !a.isCenter).length,
-      radius,
-      center: { x: center.x, y: center.y },
-      bounds
-    });
+    logger.debug('CircleAnchorHandler: 生成 ' + anchors.length + ' 个锚点');
     
     return anchors;
   }

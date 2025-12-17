@@ -83,3 +83,10 @@ export {
 export {
   SpatialSelectionHelper
 } from './SpatialSelectionHelper';
+
+// 选区浮动工具栏
+export {
+  SelectionToolbar,
+  type SelectionToolbarConfig,
+  type SelectionToolbarCallbacks
+} from './SelectionToolbar';

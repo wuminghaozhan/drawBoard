@@ -134,8 +134,9 @@ export class DataImporter {
             }
             break;
           case 'rect':
-            if (!actionAny.position || actionAny.width === undefined || actionAny.height === undefined) {
-              errors.push(`actions[${index}]: rect 类型需要 position, width 和 height`);
+            // 支持新格式（vertices）和旧格式（position + width + height）
+            if (!actionAny.vertices && (!actionAny.position || actionAny.width === undefined || actionAny.height === undefined)) {
+              errors.push(`actions[${index}]: rect 类型需要 vertices 数组 或 (position, width, height)`);
             }
             break;
           case 'line':
@@ -144,14 +145,9 @@ export class DataImporter {
             }
             break;
           case 'polygon':
-            if (actionAny.format === 'vertices') {
-              if (!actionAny.vertices || !Array.isArray(actionAny.vertices)) {
-                errors.push(`actions[${index}]: polygon (vertices) 类型需要 vertices 数组`);
-              }
-            } else {
-              if (!actionAny.center || actionAny.radius === undefined) {
-                errors.push(`actions[${index}]: polygon (center-radius) 类型需要 center 和 radius`);
-              }
+            // 支持新格式（vertices）和旧格式（center + radius）
+            if (!actionAny.vertices && (!actionAny.center || actionAny.radius === undefined)) {
+              errors.push(`actions[${index}]: polygon 类型需要 vertices 数组 或 (center, radius)`);
             }
             break;
           case 'text':
@@ -220,11 +216,7 @@ export class DataImporter {
     if (exported.type === 'polygon') {
       const polygonExport = exportedAny;
       if (polygonExport.polygonType) actionAny.polygonType = polygonExport.polygonType;
-      if (polygonExport.sides) actionAny.sides = polygonExport.sides;
-      if (polygonExport.innerRadius) actionAny.innerRadius = polygonExport.innerRadius;
-      if (polygonExport.format === 'vertices') {
-        actionAny.isVertexList = true;
-      }
+      // 不再需要 isVertexList 标记，统一使用顶点列表格式
     }
 
     // 变换属性
@@ -269,14 +261,23 @@ export class DataImporter {
       }
 
       case 'rect': {
-        // rect: position + 对角点
+        // 新格式：vertices 数组（4顶点）
+        if (Array.isArray(exportedAny.vertices)) {
+          return (exportedAny.vertices as Array<{ x: number; y: number }>).map(v => ({
+            x: v.x,
+            y: v.y
+          }));
+        }
+        // 兼容旧格式：position + width + height → 转换为4顶点
         const position = exportedAny.position as { x: number; y: number };
         const width = exportedAny.width as number;
         const height = exportedAny.height as number;
         if (position && width !== undefined && height !== undefined) {
           return [
-            { x: position.x, y: position.y },
-            { x: position.x + width, y: position.y + height }
+            { x: position.x, y: position.y },                            // 左上
+            { x: position.x + width, y: position.y },                    // 右上
+            { x: position.x + width, y: position.y + height },           // 右下
+            { x: position.x, y: position.y + height }                    // 左下
           ];
         }
         return [];
@@ -296,21 +297,25 @@ export class DataImporter {
       }
 
       case 'polygon': {
-        // polygon: vertices 或 center + radius
-        if (exportedAny.format === 'vertices' && Array.isArray(exportedAny.vertices)) {
+        // 新格式：vertices 数组（顶点列表）
+        if (Array.isArray(exportedAny.vertices)) {
           return (exportedAny.vertices as Array<{ x: number; y: number }>).map(v => ({
             x: v.x,
             y: v.y
           }));
-        } else {
-          const center = exportedAny.center as { x: number; y: number };
-          const radius = exportedAny.radius as number;
-          if (center && radius !== undefined) {
-            return [
-              { x: center.x, y: center.y },
-              { x: center.x + radius, y: center.y }
-            ];
+        }
+        // 兼容旧格式：center + radius → 生成顶点
+        const center = exportedAny.center as { x: number; y: number };
+        const radius = exportedAny.radius as number;
+        const polygonType = (exportedAny.polygonType as string) || 'hexagon';
+        const sides = (exportedAny.sides as number) || this.getDefaultSides(polygonType);
+        
+        if (center && radius !== undefined && radius > 0) {
+          // 根据多边形类型生成顶点
+          if (polygonType === 'star') {
+            return this.generateStarVertices(center, radius);
           }
+          return this.generateRegularPolygonVertices(center, radius, sides);
         }
         return [];
       }
@@ -508,6 +513,67 @@ export class DataImporter {
 
       input.click();
     });
+  }
+
+  /**
+   * 根据多边形类型获取默认边数
+   */
+  private static getDefaultSides(polygonType: string): number {
+    switch (polygonType) {
+      case 'triangle': return 3;
+      case 'pentagon': return 5;
+      case 'hexagon': return 6;
+      case 'star': return 10;
+      case 'custom': return 6;
+      default: return 6;
+    }
+  }
+
+  /**
+   * 生成正多边形顶点
+   */
+  private static generateRegularPolygonVertices(
+    center: { x: number; y: number },
+    radius: number,
+    sides: number
+  ): Point[] {
+    const vertices: Point[] = [];
+    const angleStep = (2 * Math.PI) / sides;
+
+    for (let i = 0; i < sides; i++) {
+      const angle = i * angleStep - Math.PI / 2; // 从顶部开始
+      vertices.push({
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle)
+      });
+    }
+
+    return vertices;
+  }
+
+  /**
+   * 生成星形顶点
+   */
+  private static generateStarVertices(
+    center: { x: number; y: number },
+    outerRadius: number,
+    innerRadiusRatio: number = 0.5
+  ): Point[] {
+    const vertices: Point[] = [];
+    const points = 5;
+    const innerRadius = outerRadius * innerRadiusRatio;
+    const angleStep = Math.PI / points;
+
+    for (let i = 0; i < points * 2; i++) {
+      const angle = i * angleStep - Math.PI / 2;
+      const radius = i % 2 === 0 ? outerRadius : innerRadius;
+      vertices.push({
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle)
+      });
+    }
+
+    return vertices;
   }
 }
 

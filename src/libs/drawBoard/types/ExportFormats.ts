@@ -84,19 +84,14 @@ export interface CircleShape {
 
 /**
  * 矩形 (Rect) 标准格式
- * 由左上角坐标和宽高定义
+ * 使用4顶点定义，支持旋转
+ * 顶点顺序：左上、右上、右下、左下（顺时针）
  */
 export interface RectShape {
   type: 'rect';
   id: string;
-  /** 左上角 X */
-  x: number;
-  /** 左上角 Y */
-  y: number;
-  /** 宽度 */
-  width: number;
-  /** 高度 */
-  height: number;
+  /** 4个顶点坐标（顺时针：左上、右上、右下、左下） */
+  vertices: Point2D[];
   style: StyleContext;
   /** 是否填充 */
   filled?: boolean;
@@ -159,24 +154,17 @@ export interface TextShape {
 
 /**
  * 多边形 (Polygon) 标准格式
- * 规则多边形由中心、半径和边数定义
- * 自定义多边形由顶点列表定义
+ * 统一使用顶点列表格式，支持旋转
+ * 
+ * 顶点顺序：从顶部开始，顺时针排列
  */
 export interface PolygonShape {
   type: 'polygon';
   id: string;
-  /** 多边形类型 */
+  /** 多边形类型（用于标识原始形状类型） */
   polygonType: 'triangle' | 'pentagon' | 'hexagon' | 'star' | 'custom';
-  /** 中心点（规则多边形） */
-  center?: Point2D;
-  /** 外接圆半径（规则多边形） */
-  radius?: number;
-  /** 边数 */
-  sides?: number;
-  /** 顶点列表（自定义多边形） */
-  vertices?: Point2D[];
-  /** 内半径（星形） */
-  innerRadius?: number;
+  /** 顶点列表（所有顶点坐标） */
+  vertices: Point2D[];
   style: StyleContext;
   /** 是否填充 */
   filled?: boolean;

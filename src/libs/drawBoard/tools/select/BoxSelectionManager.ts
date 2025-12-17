@@ -70,25 +70,88 @@ export class BoxSelectionManager {
 
   /**
    * 检查矩形是否在选择框内
+   * 矩形使用4顶点格式，支持旋转矩形
    */
   public isRectInBox(bounds: SelectionBox, action: DrawAction): boolean {
-    if (action.points.length < 2) return false;
+    if (action.points.length < 4) return false;
     
-    const p1 = action.points[0];
-    const p2 = action.points[action.points.length - 1];
+    // 使用所有4个顶点计算边界框
+    let rectMinX = Infinity;
+    let rectMaxX = -Infinity;
+    let rectMinY = Infinity;
+    let rectMaxY = -Infinity;
     
-    const rectMinX = Math.min(p1.x, p2.x);
-    const rectMaxX = Math.max(p1.x, p2.x);
-    const rectMinY = Math.min(p1.y, p2.y);
-    const rectMaxY = Math.max(p1.y, p2.y);
+    for (const p of action.points) {
+      rectMinX = Math.min(rectMinX, p.x);
+      rectMaxX = Math.max(rectMaxX, p.x);
+      rectMinY = Math.min(rectMinY, p.y);
+      rectMaxY = Math.max(rectMaxY, p.y);
+    }
     
     const boxRight = bounds.x + bounds.width;
     const boxBottom = bounds.y + bounds.height;
     
-    return rectMinX < boxRight &&
-           rectMaxX > bounds.x &&
-           rectMinY < boxBottom &&
-           rectMaxY > bounds.y;
+    // 快速边界框检测
+    if (rectMaxX < bounds.x || rectMinX > boxRight ||
+        rectMaxY < bounds.y || rectMinY > boxBottom) {
+      return false;
+    }
+    
+    // 检查是否有任何顶点在选择框内
+    for (const p of action.points) {
+      if (p.x >= bounds.x && p.x <= boxRight &&
+          p.y >= bounds.y && p.y <= boxBottom) {
+        return true;
+      }
+    }
+    
+    // 检查矩形的边是否与选择框相交
+    for (let i = 0; i < 4; i++) {
+      const p1 = action.points[i];
+      const p2 = action.points[(i + 1) % 4];
+      if (this.isLineSegmentIntersectBox(p1, p2, bounds)) {
+        return true;
+      }
+    }
+    
+    // 检查选择框是否完全在矩形内
+    const corners = [
+      { x: bounds.x, y: bounds.y },
+      { x: boxRight, y: bounds.y },
+      { x: boxRight, y: boxBottom },
+      { x: bounds.x, y: boxBottom }
+    ];
+    
+    for (const corner of corners) {
+      if (this.isPointInPolygon(corner, action.points)) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+  
+  /**
+   * 检查点是否在多边形内（使用射线法）
+   */
+  private isPointInPolygon(point: Point, vertices: Point[]): boolean {
+    let inside = false;
+    const n = vertices.length;
+    
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const xi = vertices[i].x;
+      const yi = vertices[i].y;
+      const xj = vertices[j].x;
+      const yj = vertices[j].y;
+      
+      const intersect = ((yi > point.y) !== (yj > point.y)) &&
+                       (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi);
+      if (intersect) {
+        inside = !inside;
+      }
+    }
+    
+    return inside;
   }
 
   /**
@@ -122,30 +185,12 @@ export class BoxSelectionManager {
 
   /**
    * 检查多边形是否在选择框内
-   * 
-   * 注意：多边形有两种数据格式
-   * 1. 中心+半径格式：action.points 包含拖拽点，不是实际顶点
-   * 2. 顶点列表格式：action.points 包含实际顶点（isVertexList = true）
-   * 
-   * 对于中心+半径格式，使用边界框检测
+   * 多边形统一使用顶点列表格式，支持旋转
    */
   public isPolygonInBox(bounds: SelectionBox, action: DrawAction): boolean {
-    if (action.points.length < 2) {
-      return false;
-    }
-    
-    // 检查是否是顶点列表格式
-    const polygonAction = action as DrawAction & { isVertexList?: boolean };
-    
-    if (polygonAction.isVertexList !== true) {
-      // 中心+半径格式：使用边界框检测
-      // 边界框已经在 HitTestManager 中正确计算（基于中心+半径）
-      return this.isBoundingBoxIntersect(bounds, this.hitTestManager.getActionBoundingBox(action));
-    }
-    
-    // 顶点列表格式：使用精确的顶点检测
+    // 多边形至少需要3个顶点
     if (action.points.length < 3) {
-      return this.isBoundingBoxIntersect(bounds, this.hitTestManager.getActionBoundingBox(action));
+      return false;
     }
     
     const boxRight = bounds.x + bounds.width;

@@ -890,6 +890,36 @@ export class HistoryManager {
   }
 
   /**
+   * 更新动作（不触发历史事件）
+   * 用于拖拽过程中的实时更新，避免产生大量历史记录
+   * 
+   * @param updatedAction 更新后的action
+   * @returns 是否成功更新
+   */
+  public updateActionWithoutHistory(updatedAction: DrawAction): boolean {
+    if (!updatedAction || !updatedAction.id) {
+      return false;
+    }
+
+    // 从历史记录中查找并更新（静默更新，不记录日志）
+    const historyIndex = this.history.findIndex(action => action.id === updatedAction.id);
+    if (historyIndex !== -1) {
+      const oldAction = this.history[historyIndex];
+      const oldMemorySize = this.calculateActionMemorySize(oldAction);
+      const newMemorySize = this.calculateActionMemorySize(updatedAction);
+      
+      // 更新action
+      this.history[historyIndex] = updatedAction;
+      
+      // 更新内存计数
+      this.currentMemoryBytes = this.currentMemoryBytes - oldMemorySize + newMemorySize;
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
    * 批量更新动作（用于同时更新多个actions）
    * @param updatedActions 更新后的actions数组
    * @returns 成功更新的数量

@@ -259,6 +259,9 @@ export class DrawBoard {
   /** 事件总线 - 组件间解耦通信 */
   private eventBus: EventBus;
 
+  /** EventBus 事件取消订阅函数列表 */
+  private eventUnsubscribers: Array<() => void> = [];
+
   /** 容器元素引用 */
   private container!: HTMLElement;
 
@@ -476,7 +479,7 @@ export class DrawBoard {
       this.historyManager,
       this.drawingHandler,
       this.virtualLayerManager,
-      { redrawThrottleMs: 16 }
+      { redrawThrottleMs: 16, eventBus: this.eventBus }
     );
 
     // 初始化鼠标样式处理器 - 使用与EventManager相同的interactionCanvas
@@ -603,6 +606,71 @@ export class DrawBoard {
       allEventTypes: Array.from(eventManagerInternal.handlers?.keys() || []),
       totalHandlers: Array.from(eventManagerInternal.handlers?.values() || []).reduce((sum: number, h: Array<unknown>) => sum + h.length, 0)
     });
+
+    // 监听工具栏样式变更事件
+    this.eventUnsubscribers.push(
+      this.eventBus.on('toolbar:stroke-color', ({ color }) => {
+        this.updateSelectionStyle({ strokeStyle: color });
+      })
+    );
+    this.eventUnsubscribers.push(
+      this.eventBus.on('toolbar:fill-color', ({ color }) => {
+        this.updateSelectionStyle({ fillStyle: color });
+      })
+    );
+    this.eventUnsubscribers.push(
+      this.eventBus.on('toolbar:line-width', ({ width }) => {
+        this.updateSelectionStyle({ lineWidth: width });
+      })
+    );
+    
+    // 监听文本样式变更事件
+    this.eventUnsubscribers.push(
+      this.eventBus.on('toolbar:text-color', ({ color }) => {
+        this.updateTextStyle({ color });
+      })
+    );
+    this.eventUnsubscribers.push(
+      this.eventBus.on('toolbar:font-size', ({ size }) => {
+        this.updateTextStyle({ fontSize: size });
+      })
+    );
+    this.eventUnsubscribers.push(
+      this.eventBus.on('toolbar:font-weight', ({ weight }) => {
+        this.updateTextStyle({ fontWeight: weight });
+      })
+    );
+
+    // 监听工具栏删除和复制事件
+    this.eventUnsubscribers.push(
+      this.eventBus.on('toolbar:delete', () => {
+        this.deleteSelection();
+      })
+    );
+    this.eventUnsubscribers.push(
+      this.eventBus.on('toolbar:duplicate', () => {
+        this.duplicateSelection();
+      })
+    );
+    
+    // 监听图层移动事件
+    this.eventUnsubscribers.push(
+      this.eventBus.on('toolbar:move-to-top', () => {
+        this.moveSelectionToTop();
+      })
+    );
+    this.eventUnsubscribers.push(
+      this.eventBus.on('toolbar:move-to-bottom', () => {
+        this.moveSelectionToBottom();
+      })
+    );
+    
+    // 监听锁定/解锁事件
+    this.eventUnsubscribers.push(
+      this.eventBus.on('toolbar:toggle-lock', ({ locked }) => {
+        this.toggleSelectionLock(locked);
+      })
+    );
   }
 
   /**
@@ -1125,9 +1193,9 @@ export class DrawBoard {
   private async handleDrawEnd(event: DrawEvent): Promise<void> {
     try {
       // 如果是选择工具，委托给 SelectToolCoordinator 处理
+      // 注意：handleDrawEnd 内部已经调用了 forceRedraw()，不需要重复调用
       if (this.toolManager.getCurrentTool() === 'select') {
         await this.selectToolCoordinator.handleDrawEnd();
-      await this.drawingHandler.forceRedraw();
         this.updateCursor();
         return;
       }
@@ -1598,6 +1666,36 @@ export class DrawBoard {
   }
 
   /**
+   * 复制选中的图形（在画布上直接创建副本）
+   * individual 模式下会复制图层 + action
+   */
+  public async duplicateSelection(): Promise<DrawAction[]> {
+    return this.selectionAPI.duplicateSelection();
+  }
+  
+  /**
+   * 将选中图形的图层移动到最顶层
+   */
+  public async moveSelectionToTop(): Promise<void> {
+    return this.selectionAPI.moveSelectionToTop();
+  }
+  
+  /**
+   * 将选中图形的图层移动到最底层
+   */
+  public async moveSelectionToBottom(): Promise<void> {
+    return this.selectionAPI.moveSelectionToBottom();
+  }
+  
+  /**
+   * 切换选中图形的锁定状态
+   * @param locked 是否锁定
+   */
+  public async toggleSelectionLock(locked: boolean): Promise<void> {
+    return this.selectionAPI.toggleSelectionLock(locked);
+  }
+
+  /**
    * 粘贴选择
    * @param offsetX 水平偏移量，默认10px
    * @param offsetY 垂直偏移量，默认10px
@@ -1635,6 +1733,30 @@ export class DrawBoard {
    */
   public getSelectedActions(): DrawAction[] {
     return this.selectionAPI.getSelectedActions();
+  }
+
+  /**
+   * 更新选中图形的样式（颜色、线宽等）
+   * @param style 样式对象，支持 strokeStyle（描边颜色）、fillStyle（填充颜色）和 lineWidth（线宽）
+   * @example
+   * // 修改描边颜色
+   * drawBoard.updateSelectionStyle({ strokeStyle: '#ff0000' });
+   * // 修改填充颜色
+   * drawBoard.updateSelectionStyle({ fillStyle: '#00ff00' });
+   * // 修改线宽
+   * drawBoard.updateSelectionStyle({ lineWidth: 3 });
+   * // 同时修改多个属性
+   * drawBoard.updateSelectionStyle({ strokeStyle: '#ff0000', fillStyle: '#00ff00', lineWidth: 5 });
+   */
+  public async updateSelectionStyle(style: { strokeStyle?: string; fillStyle?: string; lineWidth?: number }): Promise<void> {
+    return this.selectionAPI.updateSelectionStyle(style);
+  }
+
+  /**
+   * 更新选中文本的样式
+   */
+  public async updateTextStyle(style: { color?: string; fontSize?: number; fontWeight?: string }): Promise<void> {
+    return this.selectionAPI.updateTextStyle(style);
   }
 
   /**
@@ -2197,6 +2319,13 @@ export class DrawBoard {
       
       // 1. 解绑事件处理器（在销毁 EventManager 之前）
       this.unbindEvents();
+      
+      // 1.5 清理 EventBus 订阅
+      for (const unsubscribe of this.eventUnsubscribers) {
+        unsubscribe();
+      }
+      this.eventUnsubscribers = [];
+      logger.debug('✅ EventBus订阅已清理');
       
       // 2. 停止所有事件监听
       if (this.eventManager) {

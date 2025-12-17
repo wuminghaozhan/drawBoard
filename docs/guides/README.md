@@ -61,6 +61,24 @@ await drawBoard.deleteSelection();
 drawBoard.copySelection();
 drawBoard.cutSelection();
 await drawBoard.pasteSelection();
+
+// 复制选中（通过选择操作栏）
+await drawBoard.duplicateSelection();
+
+// 更新选中图形样式
+await drawBoard.updateSelectionStyle({
+  strokeColor: '#ff0000',
+  fillColor: 'rgba(255,0,0,0.2)',
+  lineWidth: 3
+});
+
+// 图层控制
+await drawBoard.moveSelectionToTop();
+await drawBoard.moveSelectionToBottom();
+
+// 锁定/解锁
+await drawBoard.toggleSelectionLock(true);  // 锁定
+await drawBoard.toggleSelectionLock(false); // 解锁
 ```
 
 ### 图层管理

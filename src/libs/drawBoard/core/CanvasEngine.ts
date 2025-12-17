@@ -83,7 +83,7 @@ export class CanvasEngine {
     this.context = {
       strokeStyle: '#000000',
       lineWidth: 2,
-      fillStyle: '#000000'
+      fillStyle: 'transparent'
     };
     
     this.createLayers();
@@ -793,14 +793,8 @@ export class CanvasEngine {
       const currentStyleZIndex = layer.canvas.style.zIndex;
       const computedZIndex = getComputedStyle(layer.canvas).zIndex;
       
-      logger.info('getSelectionLayerForVirtualLayer: 使用已存在的动态图层', {
-        layerId,
-        virtualLayerZIndex,
-        expectedZIndex,
-        currentStyleZIndex,
-        computedZIndex,
-        pointerEvents: layer.canvas.style.pointerEvents
-      });
+      // 使用已存在的动态图层（debug 级别，避免频繁日志）
+      logger.debug('getSelectionLayerForVirtualLayer: 复用动态图层', { layerId });
       
       // 检查并修复 zIndex：如果没有设置或与期望值不匹配，则重新设置
       const needsUpdate = !currentStyleZIndex || 

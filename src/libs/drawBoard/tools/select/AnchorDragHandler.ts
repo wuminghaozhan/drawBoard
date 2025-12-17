@@ -22,8 +22,10 @@ export interface DragHandlerState {
   startPoint: Point;
   /** 拖拽起始边界 */
   startBounds: Bounds;
-  /** 拖拽起始 Action */
+  /** 拖拽起始 Action（单选） */
   startAction: DrawAction | null;
+  /** 拖拽起始 Actions（多选） */
+  startActions: DrawAction[] | null;
   /** 上次拖拽点 */
   lastPoint: Point;
   /** 上次结果（用于缓存） */
@@ -79,12 +81,14 @@ export class AnchorDragHandler {
   startDrag(
     startPoint: Point,
     startBounds: Bounds,
-    startAction: DrawAction | null = null
+    startAction: DrawAction | null = null,
+    startActions: DrawAction[] | null = null
   ): void {
     this.state = {
       startPoint,
       startBounds,
       startAction,
+      startActions,
       lastPoint: startPoint,
       lastResult: null
     };
@@ -322,6 +326,11 @@ export class AnchorDragHandler {
       return { success: false, error: '未开始拖拽' };
     }
 
+    // 🔄 旋转锚点：处理批量旋转
+    if (TransformOperations.isRotateAnchor(anchor.type)) {
+      return this.handleMultiSelectionRotateDrag(actions, currentPoint, canvasBounds);
+    }
+
     // 计算缩放比例
     const { startBounds, startPoint } = this.state;
     
@@ -366,6 +375,62 @@ export class AnchorDragHandler {
     // 更新缓存
     this.state.lastPoint = currentPoint;
     this.state.lastResult = result.actions;
+
+    return { success: true, actions: result.actions };
+  }
+
+  /**
+   * 处理多选旋转拖拽
+   * 所有选中的 actions 围绕共同的中心点旋转
+   */
+  private handleMultiSelectionRotateDrag(
+    actions: DrawAction[],
+    currentPoint: Point,
+    canvasBounds?: { width: number; height: number }
+  ): DragResult {
+    if (!this.state) {
+      return { success: false, error: '未开始拖拽' };
+    }
+
+    const { startBounds, startPoint, startActions } = this.state;
+    
+    // 计算旋转中心（选区中心）
+    const centerX = startBounds.x + startBounds.width / 2;
+    const centerY = startBounds.y + startBounds.height / 2;
+    
+    // 计算旋转角度
+    const angle = TransformOperations.calculateRotationAngle(
+      centerX,
+      centerY,
+      startPoint.x,
+      startPoint.y,
+      currentPoint.x,
+      currentPoint.y
+    );
+
+    // 应用旋转变换到所有原始 actions
+    const result = TransformOperations.rotateActions(
+      startActions || actions,
+      angle,
+      centerX,
+      centerY,
+      canvasBounds
+    );
+
+    if (!result.success) {
+      return { success: false, error: result.errors.join(', ') };
+    }
+
+    // 更新缓存
+    this.state.lastPoint = currentPoint;
+    this.state.lastResult = result.actions;
+    
+    logger.debug('多选旋转拖拽', { 
+      angleDegrees: angle * (180 / Math.PI),
+      centerX,
+      centerY,
+      actionsCount: actions.length
+    });
 
     return { success: true, actions: result.actions };
   }
@@ -550,18 +615,64 @@ export class AnchorDragHandler {
   }
 
   /**
-   * 限制 Action 的点在画布范围内
+   * 🔧 智能边界约束：保持形状完整性
+   * 
+   * 与单独约束每个点不同，此方法计算整体偏移量，
+   * 将形状推回画布内，保持形状完整性。
    */
   private clampActionToCanvas(
     action: DrawAction,
     canvasBounds: { width: number; height: number }
   ): DrawAction {
+    if (!action.points || action.points.length === 0) {
+      return action;
+    }
+    
+    // 计算形状的边界框
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    
+    for (const point of action.points) {
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minY = Math.min(minY, point.y);
+      maxY = Math.max(maxY, point.y);
+    }
+    
+    // 计算需要的偏移量
+    let offsetX = 0;
+    let offsetY = 0;
+    
+    // 如果超出左边界
+    if (minX < 0) {
+      offsetX = -minX;
+    }
+    // 如果超出右边界
+    else if (maxX > canvasBounds.width) {
+      offsetX = canvasBounds.width - maxX;
+    }
+    
+    // 如果超出上边界
+    if (minY < 0) {
+      offsetY = -minY;
+    }
+    // 如果超出下边界
+    else if (maxY > canvasBounds.height) {
+      offsetY = canvasBounds.height - maxY;
+    }
+    
+    // 如果不需要调整，直接返回原 action
+    if (offsetX === 0 && offsetY === 0) {
+      return action;
+    }
+    
+    // 应用偏移量，保持形状完整性
     return {
       ...action,
       points: action.points.map(p => ({
         ...p,
-        x: Math.max(0, Math.min(canvasBounds.width, p.x)),
-        y: Math.max(0, Math.min(canvasBounds.height, p.y))
+        x: p.x + offsetX,
+        y: p.y + offsetY
       }))
     };
   }

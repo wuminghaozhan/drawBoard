@@ -1,4 +1,4 @@
-import { SelectionManager, type SelectionBox } from '../../libs/drawBoard/core/SelectionManager';
+import { CoreSelectionManager as SelectionManager, type SelectionBox } from '../../libs/drawBoard/core/CoreSelectionManager';
 import type { DrawAction } from '../../libs/drawBoard/tools/DrawTool';
 
 describe('SelectionManager', () => {

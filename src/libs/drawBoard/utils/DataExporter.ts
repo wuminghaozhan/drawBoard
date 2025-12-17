@@ -100,17 +100,14 @@ export interface ExportedCircleAction {
 }
 
 /**
- * 矩形动作 - 左上角 + 宽高
+ * 矩形动作 - 4顶点格式（支持旋转）
+ * 顶点顺序：左上、右上、右下、左下（顺时针）
  */
 export interface ExportedRectAction {
   id: string;
   type: 'rect';
-  /** 左上角坐标 */
-  position: { x: number; y: number };
-  /** 宽度 */
-  width: number;
-  /** 高度 */
-  height: number;
+  /** 4个顶点坐标（顺时针：左上、右上、右下、左下） */
+  vertices: Array<{ x: number; y: number }>;
   context: ExportedContext;
   timestamp: number;
   virtualLayerId?: string;
@@ -270,19 +267,6 @@ export interface ExportOptions {
 
 export class DataExporter {
   /**
-   * 根据多边形类型获取默认边数
-   */
-  private static getDefaultSides(polygonType: string): number {
-    switch (polygonType) {
-      case 'triangle': return 3;
-      case 'pentagon': return 5;
-      case 'hexagon': return 6;
-      case 'star': return 5;
-      default: return 6;
-    }
-  }
-
-  /**
    * 提取通用上下文
    */
   private static extractContext(action: DrawAction): ExportedContext {
@@ -345,21 +329,14 @@ export class DataExporter {
       }
 
       case 'rect': {
-        // 矩形：左上角 + 宽高
-        // 绘制时使用 points[0] 和 points[length-1] 作为对角点
-        const p1 = action.points[0] || { x: 0, y: 0 };
-        const p2 = action.points[action.points.length - 1] || p1;
-        const x = Math.min(p1.x, p2.x);
-        const y = Math.min(p1.y, p2.y);
-        const width = Math.abs(p2.x - p1.x);
-        const height = Math.abs(p2.y - p1.y);
+        // 矩形：4顶点格式（支持旋转）
+        // 顶点顺序：左上、右上、右下、左下
+        const vertices = action.points.map(p => ({ x: p.x, y: p.y }));
         
         return {
           id: action.id,
           type: 'rect',
-          position: { x, y },
-          width,
-          height,
+          vertices,
           context,
           timestamp: action.timestamp,
           ...(action.virtualLayerId && { virtualLayerId: action.virtualLayerId }),
@@ -386,50 +363,20 @@ export class DataExporter {
       }
 
       case 'polygon': {
-        // 多边形有两种格式：
-        // 1. 中心+半径格式（原始绘制）：polygonType + sides，points[0]=中心, points[length-1]=边上的点
-        // 2. 顶点列表格式（变换后）：isVertexList=true，points 是实际顶点
-        const isVertexList = actionAny.isVertexList === true;
-        const polygonType = actionAny.polygonType as string || 'hexagon';
-        const sides = actionAny.sides as number || this.getDefaultSides(polygonType);
+        // 多边形统一使用顶点列表格式，支持旋转
+        const polygonType = actionAny.polygonType as string || 'custom';
         
-        if (isVertexList) {
-          // 顶点列表格式：直接导出顶点
-          return {
-            id: action.id,
-            type: 'polygon',
-            format: 'vertices',
-            vertices: action.points.map(p => ({ x: p.x, y: p.y })),
-            polygonType,
-            closed: true,
-            context,
-            timestamp: action.timestamp,
-            ...(action.virtualLayerId && { virtualLayerId: action.virtualLayerId }),
-            ...(rotation !== undefined && { rotation })
-          };
-        } else {
-          // 中心+半径格式：计算中心和半径
-          const center = action.points[0] || { x: 0, y: 0 };
-          const edge = action.points[action.points.length - 1] || center;
-          const radius = Math.sqrt(
-            Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-          );
-          
-          return {
-            id: action.id,
-            type: 'polygon',
-            format: 'center-radius',
-            center: { x: center.x, y: center.y },
-            radius,
-            polygonType,
-            sides,
-            ...(actionAny.innerRadius !== undefined && { innerRadius: actionAny.innerRadius as number }),
-            context,
-            timestamp: action.timestamp,
-            ...(action.virtualLayerId && { virtualLayerId: action.virtualLayerId }),
-            ...(rotation !== undefined && { rotation })
-          };
-        }
+        return {
+          id: action.id,
+          type: 'polygon',
+          vertices: action.points.map(p => ({ x: p.x, y: p.y })),
+          polygonType,
+          closed: true,
+          context,
+          timestamp: action.timestamp,
+          ...(action.virtualLayerId && { virtualLayerId: action.virtualLayerId }),
+          ...(rotation !== undefined && { rotation })
+        };
       }
 
       case 'text': {

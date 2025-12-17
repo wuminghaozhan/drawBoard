@@ -12,6 +12,11 @@ import CursorDemo from './pages/CursorDemo';
 import PerformanceDemo from './pages/PerformanceDemo';
 import EDBDemo from './pages/EDBDemo';
 import Test from './pages/Test';
+import VirtualLayerDemo from './pages/VirtualLayerDemo';
+import VirtualLayerModeDemo from './pages/VirtualLayerModeDemo';
+import LayerDemo from './pages/LayerDemo';
+import ErrorHandlingDemo from './pages/ErrorHandlingDemo';
+import FunctionalDemo from './pages/FunctionalDemo';
 import './App.css';
 
 function App() {
@@ -33,6 +38,11 @@ function App() {
             <Route path="/performance" element={<PerformanceDemo />} />
             <Route path="/edb" element={<EDBDemo />} />
             <Route path="/test" element={<Test />} />
+            <Route path="/virtual-layer" element={<VirtualLayerDemo />} />
+            <Route path="/virtual-layer-mode" element={<VirtualLayerModeDemo />} />
+            <Route path="/layer" element={<LayerDemo />} />
+            <Route path="/error-handling" element={<ErrorHandlingDemo />} />
+            <Route path="/functional" element={<FunctionalDemo />} />
           </Routes>
         </main>
       </div>

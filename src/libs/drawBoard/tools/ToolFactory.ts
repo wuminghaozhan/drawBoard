@@ -470,10 +470,16 @@ class BasicBrushTool extends DrawTool {
 class BasicRectTool extends DrawTool {
   constructor() { super('基础矩形', 'rect'); }
   draw(ctx: CanvasRenderingContext2D, action: DrawAction): void {
-    if (action.points.length < 2) return;
-    const start = action.points[0];
-    const end = action.points[action.points.length - 1];
-    ctx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
+    // 统一使用 4 顶点格式
+    if (action.points.length < 4) return;
+    
+    ctx.beginPath();
+    ctx.moveTo(action.points[0].x, action.points[0].y);
+    ctx.lineTo(action.points[1].x, action.points[1].y);
+    ctx.lineTo(action.points[2].x, action.points[2].y);
+    ctx.lineTo(action.points[3].x, action.points[3].y);
+    ctx.closePath();
+    ctx.stroke();
   }
   getActionType(): string { return 'rect'; }
 }

@@ -413,7 +413,8 @@ export class RedrawManager {
     
     // 绘制所有图层
     for (const layer of layers) {
-      if (!layer || !layer.visible || layer.locked) continue;
+      // 注意：锁定的图层仍需绘制，只是不能编辑
+      if (!layer || !layer.visible) continue;
       
       // 验证图层是否仍然存在
       if (!this.virtualLayerManager.getVirtualLayer(layer.id)) {
@@ -470,7 +471,8 @@ export class RedrawManager {
     }
     
     for (const layer of layers) {
-      if (!layer.visible || layer.locked) continue;
+      // 注意：锁定的图层仍需绘制，只是不能编辑
+      if (!layer.visible) continue;
       
       const originalGlobalAlpha = ctx.globalAlpha;
       ctx.globalAlpha = layer.opacity;
@@ -654,7 +656,8 @@ export class RedrawManager {
       }
       
       for (const layer of layers) {
-        if (!layer.visible || layer.locked) continue;
+        // 注意：锁定的图层仍需绘制，只是不能编辑
+        if (!layer.visible) continue;
         
         const originalGlobalAlpha = ctx.globalAlpha;
         ctx.globalAlpha = layer.opacity;

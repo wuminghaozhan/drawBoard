@@ -126,17 +126,14 @@ export class ShapeConverter {
   }
 
   private static toRectShape(action: DrawAction): RectShape {
-    // 绘制时使用 points[0] 和 points[length-1] 作为对角点
-    const p1 = action.points[0] || { x: 0, y: 0 };
-    const p2 = action.points[action.points.length - 1] || p1;
+    // 矩形统一使用4顶点格式
+    // 顶点顺序：左上、右上、右下、左下
+    const vertices = action.points.map(p => ({ x: p.x, y: p.y }));
 
     return {
       type: 'rect',
       id: action.id,
-      x: Math.min(p1.x, p2.x),
-      y: Math.min(p1.y, p2.y),
-      width: Math.abs(p2.x - p1.x),
-      height: Math.abs(p2.y - p1.y),
+      vertices,
       style: this.toStyleContext(action.context),
       transform: this.getTransformProps(action),
       timestamp: action.timestamp
@@ -186,55 +183,19 @@ export class ShapeConverter {
 
   private static toPolygonShape(action: DrawAction): PolygonShape {
     const any = action as Record<string, unknown>;
-    const polygonType = (any.polygonType as PolygonShape['polygonType']) || 'hexagon';
+    const polygonType = (any.polygonType as PolygonShape['polygonType']) || 'custom';
     
-    // 使用 isVertexList 标记判断格式（由 PolygonAnchorHandler 设置）
-    const isVertexList = any.isVertexList === true;
-
-    if (isVertexList) {
-      // 顶点列表格式（变换后的多边形）
-      return {
-        type: 'polygon',
-        id: action.id,
-        polygonType: 'custom',
-        vertices: action.points.map(p => ({ x: p.x, y: p.y })),
-        style: this.toStyleContext(action.context),
-        filled: any.filled as boolean | undefined,
-        transform: this.getTransformProps(action),
-        timestamp: action.timestamp
-      };
-    }
-
-    // 中心+半径格式（原始绘制）
-    const center = action.points[0] || { x: 0, y: 0 };
-    const edge = action.points[action.points.length - 1] || center;
-    const radius = Math.sqrt(
-      Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-    );
-
+    // 统一使用顶点列表格式
     return {
       type: 'polygon',
       id: action.id,
       polygonType,
-      center: { x: center.x, y: center.y },
-      radius,
-      sides: (any.sides as number | undefined) || this.getDefaultSides(polygonType),
-      innerRadius: any.innerRadius as number | undefined,
+      vertices: action.points.map(p => ({ x: p.x, y: p.y })),
       style: this.toStyleContext(action.context),
       filled: any.filled as boolean | undefined,
       transform: this.getTransformProps(action),
       timestamp: action.timestamp
     };
-  }
-
-  private static getDefaultSides(polygonType: string): number {
-    switch (polygonType) {
-      case 'triangle': return 3;
-      case 'pentagon': return 5;
-      case 'hexagon': return 6;
-      case 'star': return 5;
-      default: return 6;
-    }
   }
 
   // ============================================
@@ -328,13 +289,11 @@ export class ShapeConverter {
   }
 
   private static fromRectShape(shape: RectShape): DrawAction {
+    // 矩形使用4顶点格式
     const action: DrawAction = {
       id: shape.id,
       type: 'rect',
-      points: [
-        { x: shape.x, y: shape.y },
-        { x: shape.x + shape.width, y: shape.y + shape.height }
-      ],
+      points: shape.vertices.map(v => ({ x: v.x, y: v.y })),
       context: this.fromStyleContext(shape.style),
       timestamp: shape.timestamp
     };
@@ -390,20 +349,10 @@ export class ShapeConverter {
   }
 
   private static fromPolygonShape(shape: PolygonShape): DrawAction {
-    let points: Point[];
-
-    if (shape.vertices) {
-      // 自定义多边形
-      points = shape.vertices.map(v => ({ x: v.x, y: v.y }));
-    } else if (shape.center && shape.radius) {
-      // 规则多边形：中心 + 边上的点
-      points = [
-        shape.center,
-        { x: shape.center.x + shape.radius, y: shape.center.y }
-      ];
-    } else {
-      points = [];
-    }
+    // 统一使用顶点列表格式
+    const points: Point[] = shape.vertices 
+      ? shape.vertices.map(v => ({ x: v.x, y: v.y }))
+      : [];
 
     const action: DrawAction & Record<string, unknown> = {
       id: shape.id,
@@ -414,8 +363,6 @@ export class ShapeConverter {
     };
 
     action.polygonType = shape.polygonType;
-    if (shape.sides) action.sides = shape.sides;
-    if (shape.innerRadius) action.innerRadius = shape.innerRadius;
     if (shape.filled) action.filled = shape.filled;
     if (shape.transform) Object.assign(action, shape.transform);
 

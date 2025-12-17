@@ -13,6 +13,8 @@ export interface TextAction extends DrawAction {
   text?: string;
   fontSize?: number;
   fontFamily?: string;
+  /** 字体粗细，如 'normal', 'bold', '100'-'900' */
+  fontWeight?: string;
   textAlign?: CanvasTextAlign;
   textBaseline?: CanvasTextBaseline;
   /** 文本框宽度（像素），如果设置则启用自动换行 */

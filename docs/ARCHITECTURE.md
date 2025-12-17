@@ -94,7 +94,11 @@ src/libs/drawBoard/              # ~35,000 行代码
 │   ├── SelectTool.ts            # 选择工具 (~2,480 行, 已优化)
 │   ├── PenToolRefactored.ts     # 画笔工具
 │   ├── RectTool.ts / CircleTool.ts / LineTool.ts
-│   ├── PolygonTool.ts / EraserTool.ts
+│   ├── PolygonTool.ts
+│   ├── EraserTool.ts              # 橡皮擦（只对 pen 类型起作用）
+│   │   └── eraser/                # 橡皮擦子模块 ⭐ NEW
+│   │       ├── PathSplitter.ts    # 路径分割器（可配置精度）
+│   │       └── SpatialIndex.ts    # 四叉树空间索引
 │   ├── TextTool.ts                   # 文字工具
 │   │   └── text/                     # 文字工具子模块 ⭐ NEW
 │   │       ├── TextEditingManager.ts # 文字编辑管理器
@@ -197,7 +201,7 @@ interface VirtualLayer {
   name: string;
   visible: boolean;
   opacity: number;
-  locked: boolean;
+  locked: boolean;              // 锁定状态：锁定后无法拖拽/变换
   zIndex: number;
   actionIds: string[];
   cacheCanvas?: HTMLCanvasElement;  // 离屏缓存
@@ -209,6 +213,11 @@ interface VirtualLayer {
 - `grouped` - 多动作共享图层
 - `individual` - 每动作独立图层
 
+**图层操作**：
+- `moveLayerToTop(id)` - 置于顶层
+- `moveLayerToBottom(id)` - 置于底层
+- `setVirtualLayerLocked(id, locked)` - 设置锁定状态
+
 **EventBus 集成**：
 - 订阅 `action:updated` 自动标记缓存过期
 - 订阅 `selection:changed` 更新活动图层
@@ -219,15 +228,15 @@ interface VirtualLayer {
 
 | 模块 | 职责 |
 |------|------|
-| `TransformOperations` | 缩放、旋转、平移变换、文本宽度调整 ⭐ |
-| `AnchorGenerator` | 锚点生成（含旋转锚点）、缓存 ⭐ |
+| `TransformOperations` | 缩放、旋转、平移变换、文本宽度调整、边界智能约束 ⭐ |
+| `AnchorGenerator` | 锚点生成（含旋转锚点，圆形除外）、缓存 ⭐ |
 | `AnchorDragHandler` | 锚点拖拽处理（含旋转拖拽、文本宽度拖拽） ⭐ |
 | `BoundsCalculator` | 边界框计算（含多行文本） ⭐ |
-| `MouseEventHandler` | 鼠标事件处理 ⭐ |
+| `MouseEventHandler` | 鼠标事件处理、锁定状态检查 ⭐ |
 | `SelectionRenderer` | 选择框渲染（含旋转手柄绘制） ⭐ |
+| `SelectionToolbar` | 选择操作栏（样式编辑、图层控制、锁定） ⭐ NEW |
 | `HitTestManager` | 点击测试、碰撞检测 |
 | `BoxSelectionManager` | 框选逻辑 |
-| `SelectionRenderer` | 选区/锚点渲染 |
 | `AnchorCacheManager` | 锚点缓存 |
 | `DragStateManager` | 拖拽状态 |
 | `BoundsCacheManager` | 边界框缓存 |
@@ -560,9 +569,17 @@ drawBoard.setDirtyRectDebugEnabled(true);
 
 ---
 
-**文档版本**: 4.0  
+**文档版本**: 4.1  
 **最后更新**: 2024-12  
-**主要更新**:
+**主要更新 (v4.1)**:
+- 新增智能橡皮擦系统（PathSplitter + SpatialIndex）
+- 新增图层锁定功能
+- 新增选择操作栏（SelectionToolbar）
+- 新增边界智能约束（TransformOperations）
+- 新增闭合图形填充色支持
+- 圆形不再支持旋转（无意义操作）
+
+**历史更新 (v4.0)**:
 - 新增基础设施层 (infrastructure)
 - 新增 EventBus 事件总线
 - 新增 SelectToolCoordinator 协调器

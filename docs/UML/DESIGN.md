@@ -224,6 +224,9 @@ classDiagram
     DrawTool <|-- TextTool
     DrawTool <|-- EraserTool
     
+    EraserTool --> PathSplitter
+    PathSplitter --> SpatialIndex
+    
     SelectTool --> TransformOperations
     SelectTool --> AnchorGenerator
     SelectTool --> AnchorDragHandler
@@ -231,6 +234,7 @@ classDiagram
     SelectTool --> HitTestManager
     SelectTool --> BoxSelectionManager
     SelectTool --> SelectionRenderer
+    SelectTool --> SelectionToolbar
 ```
 
 ---
@@ -487,7 +491,7 @@ graph TB
     end
     
     subgraph "变换操作"
-        TO[TransformOperations<br/>缩放/旋转/平移]
+        TO[TransformOperations<br/>缩放/旋转/平移/边界约束]
         BC[BoundsCalculator<br/>边界计算]
     end
     
@@ -508,6 +512,10 @@ graph TB
         BCM[BoundsCacheManager<br/>边界缓存]
     end
     
+    subgraph "操作栏"
+        STB[SelectionToolbar<br/>样式/图层/锁定]
+    end
+    
     subgraph "事件处理"
         MEH[MouseEventHandler<br/>鼠标事件]
     end
@@ -516,6 +524,7 @@ graph TB
     ST --> AG & ADH & ACM
     ST --> HTM & BSM & DSM
     ST --> SR & BCM
+    ST --> STB
     ST --> MEH
     
     TO --> BC
@@ -527,6 +536,7 @@ graph TB
     style AG fill:#2196f3,color:#fff
     style HTM fill:#4caf50,color:#fff
     style SR fill:#ff9800,color:#fff
+    style STB fill:#00bcd4,color:#fff
 ```
 
 ---
@@ -614,9 +624,15 @@ graph TB
 
 ---
 
-**文档版本**: 4.0  
+**文档版本**: 4.1  
 **最后更新**: 2024-12  
-**主要更新**:
+**主要更新 (v4.1)**:
+- 新增 SelectionToolbar 操作栏组件
+- 新增 PathSplitter 和 SpatialIndex（橡皮擦）
+- 更新 TransformOperations 包含边界约束
+- 更新 SelectTool 子模块架构图
+
+**历史更新 (v4.0)**:
 - 新增 EventBus 事件总线图
 - 新增 SelectToolCoordinator 协调器
 - 新增脏矩形优化时序图

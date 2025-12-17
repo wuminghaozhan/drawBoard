@@ -210,8 +210,9 @@ export class SelectionRenderer {
     bounds?: Bounds | null
   ): void {
     const halfSize = this.anchorSize / 2;
-    const anchorCenterX = anchor.x;
-    const anchorCenterY = anchor.y;
+    // 锚点中心位置（anchor.x/y 存储的是左上角，需要加上 halfSize 得到中心）
+    const anchorCenterX = anchor.x + halfSize;
+    const anchorCenterY = anchor.y + halfSize;
     
     // 绘制连接线（从边界框顶部中心到旋转锚点）
     if (bounds) {
@@ -220,7 +221,7 @@ export class SelectionRenderer {
       
       ctx.save();
       ctx.strokeStyle = '#007AFF';
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.5;
       ctx.setLineDash([]);
       ctx.beginPath();
       ctx.moveTo(topCenterX, topCenterY);
@@ -230,16 +231,17 @@ export class SelectionRenderer {
     }
     
     // 绘制旋转锚点（圆形，带旋转图标）
-    let anchorSize = this.anchorSize;
+    let anchorSize = this.anchorSize + 4; // 旋转锚点稍大一些
     if (isHovered) {
-      anchorSize = 10;
+      anchorSize = this.anchorSize + 6;
     } else if (isDragging) {
-      anchorSize = 12;
+      anchorSize = this.anchorSize + 8;
     }
     
     const radius = anchorSize / 2;
     
-    // 外圈
+    // 外圈背景
+    ctx.save();
     ctx.fillStyle = '#FFFFFF';
     if (isDragging) {
       ctx.strokeStyle = '#FF9500';
@@ -248,34 +250,63 @@ export class SelectionRenderer {
     } else {
       ctx.strokeStyle = '#007AFF';
     }
-    ctx.lineWidth = isHovered || isDragging ? 3 : 2;
+    ctx.lineWidth = isHovered || isDragging ? 2.5 : 2;
     
+    // 绘制外框（方形带圆角，模拟图中样式）
+    const boxSize = anchorSize + 4;
+    const boxHalf = boxSize / 2;
     ctx.beginPath();
-    ctx.arc(anchorCenterX, anchorCenterY, radius, 0, 2 * Math.PI);
+    this.roundRect(ctx, anchorCenterX - boxHalf, anchorCenterY - boxHalf, boxSize, boxSize, 3);
     ctx.fill();
     ctx.stroke();
     
-    // 绘制旋转图标（一个弧形箭头）
-    const iconRadius = radius * 0.6;
-    ctx.save();
-    ctx.strokeStyle = ctx.strokeStyle;
-    ctx.lineWidth = 1.5;
+    // 绘制旋转图标（弧形箭头）
+    const iconRadius = radius * 0.5;
+    ctx.strokeStyle = isDragging ? '#FF9500' : (isHovered ? '#34C759' : '#007AFF');
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    
+    // 绘制弧线（大约 270 度的弧）
     ctx.beginPath();
-    ctx.arc(anchorCenterX, anchorCenterY, iconRadius, -Math.PI * 0.7, Math.PI * 0.3);
+    ctx.arc(anchorCenterX, anchorCenterY, iconRadius, -Math.PI * 0.8, Math.PI * 0.5);
     ctx.stroke();
     
     // 箭头头部
-    const arrowAngle = Math.PI * 0.3;
+    const arrowAngle = Math.PI * 0.5;
     const arrowX = anchorCenterX + iconRadius * Math.cos(arrowAngle);
     const arrowY = anchorCenterY + iconRadius * Math.sin(arrowAngle);
-    const arrowSize = 3;
+    const arrowSize = 4;
     
     ctx.beginPath();
-    ctx.moveTo(arrowX - arrowSize, arrowY - arrowSize);
-    ctx.lineTo(arrowX, arrowY);
-    ctx.lineTo(arrowX + arrowSize, arrowY - arrowSize);
+    ctx.moveTo(arrowX - arrowSize, arrowY);
+    ctx.lineTo(arrowX, arrowY + arrowSize);
+    ctx.lineTo(arrowX + arrowSize, arrowY);
     ctx.stroke();
+    
     ctx.restore();
+  }
+  
+  /**
+   * 绘制圆角矩形路径
+   */
+  private roundRect(
+    ctx: CanvasRenderingContext2D, 
+    x: number, 
+    y: number, 
+    width: number, 
+    height: number, 
+    radius: number
+  ): void {
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
   }
 
   /**

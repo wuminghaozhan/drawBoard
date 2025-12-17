@@ -75,9 +75,9 @@ export class TransformOperations {
         break;
     }
 
-    // 限制点在画布范围内
+    // 🔧 智能边界约束：检查缩放后是否超出画布，如果超出则将形状推回边界内
     if (canvasBounds) {
-      newPoints = this.clampPointsToCanvas(newPoints, canvasBounds);
+      newPoints = this.constrainShapeToCanvas(newPoints, canvasBounds);
     }
 
     // 构建更新后的 action
@@ -199,6 +199,7 @@ export class TransformOperations {
 
   /**
    * 旋转单个 Action
+   * 矩形统一使用4顶点格式，无需特殊处理
    */
   static rotateAction(
     action: DrawAction,
@@ -220,12 +221,12 @@ export class TransformOperations {
       y: centerY + (point.x - centerX) * sin + (point.y - centerY) * cos
     }));
 
-    // 限制点在画布范围内
+    // 🔧 智能边界约束：旋转后如果超出画布，将形状推回边界内
     if (canvasBounds) {
-      newPoints = this.clampPointsToCanvas(newPoints, canvasBounds);
+      newPoints = this.constrainShapeToCanvas(newPoints, canvasBounds);
     }
 
-    const updatedAction = {
+    const updatedAction: DrawAction & { rotation?: number } = {
       ...action,
       points: newPoints,
       // 保存累计旋转角度
@@ -235,7 +236,7 @@ export class TransformOperations {
     logger.debug('TransformOperations: 旋转完成', {
       actionType: action.type,
       angle: angle * (180 / Math.PI),
-      totalRotation: (updatedAction as DrawAction & { rotation?: number }).rotation
+      totalRotation: updatedAction.rotation
     });
 
     return { success: true, action: updatedAction };
@@ -302,6 +303,10 @@ export class TransformOperations {
 
   /**
    * 移动单个 Action
+   * 
+   * 【重要】边界约束逻辑：
+   * - 不再单独约束每个点（会导致形状变形/消失）
+   * - 而是限制移动距离，保持形状完整性
    */
   static moveAction(
     action: DrawAction,
@@ -313,16 +318,44 @@ export class TransformOperations {
       return { success: false, error: '无效的 action: 没有点' };
     }
 
-    let newPoints = action.points.map(point => ({
-      ...point,
-      x: point.x + deltaX,
-      y: point.y + deltaY
-    }));
+    let adjustedDeltaX = deltaX;
+    let adjustedDeltaY = deltaY;
 
-    // 限制点在画布范围内
+    // 🔧 智能边界约束：限制移动距离而不是约束每个点
     if (canvasBounds) {
-      newPoints = this.clampPointsToCanvas(newPoints, canvasBounds);
+      // 计算当前形状的边界框
+      const bounds = this.getActionBounds(action.points);
+      
+      // 计算移动后的边界框位置
+      const newMinX = bounds.minX + deltaX;
+      const newMaxX = bounds.maxX + deltaX;
+      const newMinY = bounds.minY + deltaY;
+      const newMaxY = bounds.maxY + deltaY;
+      
+      // 调整 deltaX：如果超出左边界，限制向左移动
+      if (newMinX < 0) {
+        adjustedDeltaX = deltaX - newMinX; // 将 minX 推回到 0
+      }
+      // 如果超出右边界，限制向右移动
+      else if (newMaxX > canvasBounds.width) {
+        adjustedDeltaX = deltaX - (newMaxX - canvasBounds.width);
+      }
+      
+      // 调整 deltaY：如果超出上边界，限制向上移动
+      if (newMinY < 0) {
+        adjustedDeltaY = deltaY - newMinY;
+      }
+      // 如果超出下边界，限制向下移动
+      else if (newMaxY > canvasBounds.height) {
+        adjustedDeltaY = deltaY - (newMaxY - canvasBounds.height);
+      }
     }
+
+    const newPoints = action.points.map(point => ({
+      ...point,
+      x: point.x + adjustedDeltaX,
+      y: point.y + adjustedDeltaY
+    }));
 
     const updatedAction = {
       ...action,
@@ -330,6 +363,28 @@ export class TransformOperations {
     };
 
     return { success: true, action: updatedAction };
+  }
+  
+  /**
+   * 计算点集的边界框
+   */
+  private static getActionBounds(points: Point[]): {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  } {
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    
+    for (const point of points) {
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minY = Math.min(minY, point.y);
+      maxY = Math.max(maxY, point.y);
+    }
+    
+    return { minX, maxX, minY, maxY };
   }
 
   /**
@@ -534,6 +589,62 @@ export class TransformOperations {
       ...point,
       x: Math.max(0, Math.min(canvasBounds.width, point.x)),
       y: Math.max(0, Math.min(canvasBounds.height, point.y))
+    }));
+  }
+  
+  /**
+   * 🔧 智能边界约束：保持形状完整性
+   * 
+   * 与 clampPointsToCanvas 不同，此方法不会单独约束每个点，
+   * 而是计算整体偏移量，将形状推回画布内，保持形状完整性。
+   * 
+   * @param points 形状的点集
+   * @param canvasBounds 画布边界
+   * @returns 约束后的点集（形状保持完整）
+   */
+  private static constrainShapeToCanvas(
+    points: Point[],
+    canvasBounds: { width: number; height: number }
+  ): Point[] {
+    if (points.length === 0) {
+      return points;
+    }
+    
+    // 计算形状的边界框
+    const bounds = this.getActionBounds(points);
+    
+    // 计算需要的偏移量
+    let offsetX = 0;
+    let offsetY = 0;
+    
+    // 如果超出左边界
+    if (bounds.minX < 0) {
+      offsetX = -bounds.minX;
+    }
+    // 如果超出右边界
+    else if (bounds.maxX > canvasBounds.width) {
+      offsetX = canvasBounds.width - bounds.maxX;
+    }
+    
+    // 如果超出上边界
+    if (bounds.minY < 0) {
+      offsetY = -bounds.minY;
+    }
+    // 如果超出下边界
+    else if (bounds.maxY > canvasBounds.height) {
+      offsetY = canvasBounds.height - bounds.maxY;
+    }
+    
+    // 如果不需要调整，直接返回原点集
+    if (offsetX === 0 && offsetY === 0) {
+      return points;
+    }
+    
+    // 应用偏移量
+    return points.map(point => ({
+      ...point,
+      x: point.x + offsetX,
+      y: point.y + offsetY
     }));
   }
 

@@ -34,6 +34,11 @@ export class ShapeUtils {
   
   /**
    * 移动图形
+   * 
+   * 🔧 智能边界约束：
+   * - 不再单独约束每个点（会导致形状变形/消失）
+   * - 而是限制移动距离，保持形状完整性
+   * 
    * @param shape 图形动作
    * @param deltaX X方向偏移
    * @param deltaY Y方向偏移
@@ -51,18 +56,47 @@ export class ShapeUtils {
       return null;
     }
     
-    const newPoints = shape.points.map(p => {
-      let newX = p.x + deltaX;
-      let newY = p.y + deltaY;
+    let adjustedDeltaX = deltaX;
+    let adjustedDeltaY = deltaY;
+    
+    // 🔧 智能边界约束：限制移动距离而不是约束每个点
+    if (canvasBounds && shape.points.length > 0) {
+      // 计算当前形状的边界框
+      let minX = Infinity, maxX = -Infinity;
+      let minY = Infinity, maxY = -Infinity;
       
-      // 限制在画布范围内
-      if (canvasBounds) {
-        newX = Math.max(0, Math.min(canvasBounds.width, newX));
-        newY = Math.max(0, Math.min(canvasBounds.height, newY));
+      for (const point of shape.points) {
+        minX = Math.min(minX, point.x);
+        maxX = Math.max(maxX, point.x);
+        minY = Math.min(minY, point.y);
+        maxY = Math.max(maxY, point.y);
       }
       
-      return { x: newX, y: newY };
-    });
+      // 计算移动后的边界框位置
+      const newMinX = minX + deltaX;
+      const newMaxX = maxX + deltaX;
+      const newMinY = minY + deltaY;
+      const newMaxY = maxY + deltaY;
+      
+      // 调整 deltaX
+      if (newMinX < 0) {
+        adjustedDeltaX = deltaX - newMinX;
+      } else if (newMaxX > canvasBounds.width) {
+        adjustedDeltaX = deltaX - (newMaxX - canvasBounds.width);
+      }
+      
+      // 调整 deltaY
+      if (newMinY < 0) {
+        adjustedDeltaY = deltaY - newMinY;
+      } else if (newMaxY > canvasBounds.height) {
+        adjustedDeltaY = deltaY - (newMaxY - canvasBounds.height);
+      }
+    }
+    
+    const newPoints = shape.points.map(p => ({
+      x: p.x + adjustedDeltaX,
+      y: p.y + adjustedDeltaY
+    }));
     
     return { ...shape, points: newPoints };
   }

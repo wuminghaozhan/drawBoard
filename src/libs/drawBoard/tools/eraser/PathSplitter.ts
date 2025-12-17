@@ -39,6 +39,10 @@ export interface PathSplitterConfig {
   canvasWidth: number;
   /** 画布高度 */
   canvasHeight: number;
+  /** 边缘容差：擦除范围比橡皮擦本身多出的像素数（默认 1） */
+  edgeTolerance: number;
+  /** 细分粒度：控制豁口精度的像素值，越小越精确但计算量越大（默认 3） */
+  subdivisionGranularity: number;
 }
 
 const DEFAULT_CONFIG: PathSplitterConfig = {
@@ -46,7 +50,9 @@ const DEFAULT_CONFIG: PathSplitterConfig = {
   enableSmoothing: true,
   smoothingSamples: 3,
   canvasWidth: 1920,
-  canvasHeight: 1080
+  canvasHeight: 1080,
+  edgeTolerance: 1,
+  subdivisionGranularity: 3
 };
 
 /**
@@ -185,70 +191,26 @@ export class PathSplitter {
   /**
    * 找出被橡皮擦覆盖的点的索引
    * 
-   * 改进算法（v3）：
-   * 1. 找到橡皮擦与画笔线段的交点
-   * 2. 在交点附近插入虚拟分割点
-   * 3. 只标记交点附近的点为"被擦除"
+   * 简化算法（v4）：
+   * 由于 refinePathForEraser 已经将长线段细分为小段（~3px），
+   * 我们只需检查每个点是否在橡皮擦路径的影响范围内即可。
    * 
-   * 这样可以精确控制擦除范围，不会因为 A-B 距离大而擦除整段
+   * 这种方法更简单、更准确，且不会有冗余的细分逻辑。
    */
   private findErasedPointIndices(penPoints: Point[], eraserPoints: Point[]): Set<number> {
     const erasedIndices = new Set<number>();
     
-    // 1. 检查画笔的每个线段是否与橡皮擦路径相交
-    for (let i = 0; i < penPoints.length - 1; i++) {
-      const penSegStart = penPoints[i];
-      const penSegEnd = penPoints[i + 1];
-      const segmentLength = this.getDistance(penSegStart, penSegEnd);
-      
-      // 检查该画笔线段是否与橡皮擦的任何线段相交
-      for (let j = 0; j < eraserPoints.length - 1; j++) {
-        const eraserSegStart = eraserPoints[j];
-        const eraserSegEnd = eraserPoints[j + 1];
-        
-        // 检测线段相交（考虑橡皮擦半径）
-        if (this.segmentsIntersectWithRadius(
-          penSegStart, penSegEnd,
-          eraserSegStart, eraserSegEnd,
-          this.eraserRadius
-        )) {
-          // 如果线段很短（<= 2 * eraserRadius），直接标记两个端点
-          if (segmentLength <= this.eraserRadius * 2) {
-            erasedIndices.add(i);
-            erasedIndices.add(i + 1);
-          } else {
-            // 线段较长，需要找到交点位置，只标记交点附近的部分
-            // 通过检查端点到橡皮擦路径的距离来决定
-            const startDist = this.minDistanceToPath(penSegStart, eraserPoints);
-            const endDist = this.minDistanceToPath(penSegEnd, eraserPoints);
-            
-            if (startDist <= this.eraserRadius) {
-              erasedIndices.add(i);
-            }
-            if (endDist <= this.eraserRadius) {
-              erasedIndices.add(i + 1);
-            }
-            
-            // 如果两个端点都不在半径内，说明交点在中间
-            // 需要标记这个线段，让后续处理时进行细分
-            if (startDist > this.eraserRadius && endDist > this.eraserRadius) {
-              // 标记为需要细分的线段
-              this.markSegmentForSubdivision(i, penPoints, eraserPoints, erasedIndices);
-            }
-          }
-          break;
-        }
-      }
-    }
+    // 擦除检测半径：橡皮擦半径 + 边缘容差
+    const eraseDetectionRadius = this.eraserRadius + this.config.edgeTolerance;
     
-    // 2. 额外检查：画笔的点是否在橡皮擦路径附近
+    // 直接检查每个点是否在橡皮擦路径附近
+    // 由于路径已经被细分（refinePathForEraser），点间距很小，
+    // 直接检测点即可获得足够精度
     for (let i = 0; i < penPoints.length; i++) {
-      if (erasedIndices.has(i)) continue;
-      
       const penPoint = penPoints[i];
       const distToPath = this.minDistanceToPath(penPoint, eraserPoints);
       
-      if (distToPath <= this.eraserRadius) {
+      if (distToPath <= eraseDetectionRadius) {
         erasedIndices.add(i);
       }
     }
@@ -264,7 +226,8 @@ export class PathSplitter {
    */
   private refinePathForEraser(penPoints: Point[], eraserPoints: Point[]): Point[] {
     const refinedPoints: Point[] = [];
-    const maxSegmentLength = this.eraserRadius * 2; // 最大线段长度 = 2倍橡皮擦半径
+    // 使用配置的细分粒度，确保豁口精度
+    const maxSegmentLength = this.config.subdivisionGranularity;
     
     for (let i = 0; i < penPoints.length; i++) {
       const currentPoint = penPoints[i];
@@ -312,44 +275,6 @@ export class PathSplitter {
    */
   private minDistanceToPath(point: Point, pathPoints: Point[]): number {
     return GeometryUtils.pointToPathDistance(point, pathPoints);
-  }
-  
-  /**
-   * 标记需要细分的线段
-   * 当交点在线段中间时，需要找到交点附近的点
-   */
-  private markSegmentForSubdivision(
-    segmentIndex: number,
-    penPoints: Point[],
-    eraserPoints: Point[],
-    erasedIndices: Set<number>
-  ): void {
-    const start = penPoints[segmentIndex];
-    const end = penPoints[segmentIndex + 1];
-    
-    // 在线段上采样，找到与橡皮擦路径最近的点
-    const samples = 10;
-    for (let t = 0; t <= samples; t++) {
-      const ratio = t / samples;
-      const samplePoint: Point = {
-        x: start.x + (end.x - start.x) * ratio,
-        y: start.y + (end.y - start.y) * ratio
-      };
-      
-      const dist = this.minDistanceToPath(samplePoint, eraserPoints);
-      if (dist <= this.eraserRadius) {
-        // 找到了交点附近的位置
-        // 标记相邻的原始点
-        if (ratio < 0.5) {
-          erasedIndices.add(segmentIndex);
-        } else {
-          erasedIndices.add(segmentIndex + 1);
-        }
-        
-        // 只需要标记一个端点，因为我们会在分割时创建新的边界点
-        break;
-      }
-    }
   }
   
   /**

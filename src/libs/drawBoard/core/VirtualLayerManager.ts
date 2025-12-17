@@ -1480,6 +1480,138 @@ export class VirtualLayerManager {
   }
 
   // ============================================
+  // 图层复制方法
+  // ============================================
+
+  /**
+   * 复制图层及其 action（individual 模式专用）
+   * 
+   * zIndex 处理策略（参考 Figma/Sketch 的实现）：
+   * - 新图层 zIndex = 源图层 zIndex + 1
+   * - 如果存在冲突（已有图层占用该 zIndex），将所有 >= 新 zIndex 的图层 zIndex 加 1
+   * 
+   * @param sourceLayerId - 源图层 ID
+   * @param sourceAction - 源 action
+   * @returns 新的图层和 action，如果失败返回 null
+   */
+  public duplicateLayerWithAction(
+    sourceLayerId: string,
+    sourceAction: DrawAction
+  ): { layer: VirtualLayer; action: DrawAction } | null {
+    const sourceLayer = this.getVirtualLayer(sourceLayerId);
+    if (!sourceLayer) {
+      logger.warn('复制失败：源图层不存在', sourceLayerId);
+      return null;
+    }
+
+    // 检查图层数量限制
+    if (this.virtualLayers.size >= this.maxLayers) {
+      logger.warn('复制失败：已达到最大图层数量限制', this.maxLayers);
+      return null;
+    }
+
+    // 计算新图层的 zIndex
+    const newZIndex = sourceLayer.zIndex + 1;
+
+    // 检查是否存在 zIndex 冲突，如果有则将所有 >= newZIndex 的图层 zIndex 加 1
+    const conflictingLayers = Array.from(this.virtualLayers.values())
+      .filter(layer => layer.zIndex >= newZIndex)
+      .sort((a, b) => b.zIndex - a.zIndex); // 从大到小排序，避免覆盖
+
+    if (conflictingLayers.length > 0) {
+      logger.debug('复制图层：检测到 zIndex 冲突，调整其他图层', {
+        newZIndex,
+        conflictingCount: conflictingLayers.length
+      });
+
+      // 从大到小调整，避免冲突
+      for (const layer of conflictingLayers) {
+        const oldZIndex = layer.zIndex;
+        layer.zIndex++;
+        
+        // 更新 nextZIndex 以确保后续创建的图层不会冲突
+        if (layer.zIndex >= this.nextZIndex) {
+          this.nextZIndex = layer.zIndex + 1;
+        }
+        
+        // 如果是活动图层，更新动态图层
+        if (this.activeLayerId === layer.id && this.canvasEngine) {
+          this.updateDynamicLayerForLayer(layer, oldZIndex);
+        }
+      }
+    }
+
+    // 深拷贝 action 并生成新 ID
+    const newActionId = `action-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+    const newAction: DrawAction = {
+      ...sourceAction,
+      id: newActionId,
+      points: sourceAction.points.map(p => ({ ...p })), // 深拷贝点
+      context: { ...sourceAction.context }, // 深拷贝上下文
+      timestamp: Date.now(),
+      virtualLayerId: undefined, // 稍后设置
+      // 清除状态相关属性（新图形需要重新计算）
+      selected: false,
+      selectedActions: undefined,
+      preRenderedCache: undefined,
+      complexityScore: undefined, // 重新计算
+      supportsCaching: undefined  // 重新计算
+    };
+
+    // 偏移复制的图形（避免完全重叠）
+    const offset = 20;
+    newAction.points = newAction.points.map(p => ({
+      x: p.x + offset,
+      y: p.y + offset
+    }));
+
+    // 创建新图层
+    const layerId = this.generateLayerId();
+    const now = Date.now();
+
+    const newLayer: VirtualLayer = {
+      id: layerId,
+      name: `${sourceLayer.name} 副本`,
+      visible: sourceLayer.visible,
+      opacity: sourceLayer.opacity,
+      locked: false, // 复制的图层默认不锁定
+      created: now,
+      modified: now,
+      actionIds: [newActionId],
+      actionIdsSet: new Set([newActionId]),
+      zIndex: newZIndex,
+      cacheDirty: true,
+      cacheWidth: this.canvasWidth,
+      cacheHeight: this.canvasHeight
+    };
+
+    // 更新 action 的 virtualLayerId
+    newAction.virtualLayerId = layerId;
+
+    // 注册图层和映射
+    this.virtualLayers.set(layerId, newLayer);
+    this.actionLayerMap.set(newActionId, layerId);
+
+    // 更新 nextZIndex
+    if (newZIndex >= this.nextZIndex) {
+      this.nextZIndex = newZIndex + 1;
+    }
+
+    // 标记缓存过期
+    this.invalidateCache();
+
+    logger.debug('复制图层成功', {
+      sourceLayerId,
+      newLayerId: layerId,
+      newActionId,
+      newZIndex,
+      offset
+    });
+
+    return { layer: newLayer, action: newAction };
+  }
+
+  // ============================================
   // 图层顺序管理方法
   // ============================================
 
@@ -1579,6 +1711,57 @@ export class VirtualLayerManager {
 
     logger.debug('图层顺序已调整:', layer.name, `位置: ${newIndex}`);
     return true;
+  }
+  
+  /**
+   * 将图层移动到最顶层
+   * @param layerId - 要移动的图层ID
+   * @returns 是否成功
+   */
+  public moveLayerToTop(layerId: string): boolean {
+    const allLayers = this.getAllVirtualLayers();
+    if (allLayers.length === 0) return false;
+    
+    const currentIndex = allLayers.findIndex(l => l.id === layerId);
+    if (currentIndex < 0) {
+      logger.warn('moveLayerToTop: 图层不存在:', layerId);
+      return false;
+    }
+    
+    // 最顶层是数组的最后一个位置
+    const topIndex = allLayers.length - 1;
+    if (currentIndex === topIndex) {
+      logger.debug('图层已在顶层，无需移动:', layerId);
+      return true;
+    }
+    
+    logger.info('移动图层到顶层:', layerId);
+    return this.reorderLayer(layerId, topIndex);
+  }
+  
+  /**
+   * 将图层移动到最底层
+   * @param layerId - 要移动的图层ID
+   * @returns 是否成功
+   */
+  public moveLayerToBottom(layerId: string): boolean {
+    const allLayers = this.getAllVirtualLayers();
+    if (allLayers.length === 0) return false;
+    
+    const currentIndex = allLayers.findIndex(l => l.id === layerId);
+    if (currentIndex < 0) {
+      logger.warn('moveLayerToBottom: 图层不存在:', layerId);
+      return false;
+    }
+    
+    // 最底层是数组的第一个位置
+    if (currentIndex === 0) {
+      logger.debug('图层已在底层，无需移动:', layerId);
+      return true;
+    }
+    
+    logger.info('移动图层到底层:', layerId);
+    return this.reorderLayer(layerId, 0);
   }
 
   /**
@@ -1752,40 +1935,22 @@ export class VirtualLayerManager {
       warningCount: result.warnings.length
     });
     
-    // 使用 console.group 在开发者工具中提供格式化输出
-    // eslint-disable-next-line no-console
-    console.group('🔍 VirtualLayerManager 状态验证报告');
-    // eslint-disable-next-line no-console
-    console.log(`状态: ${result.isValid ? '✅ 有效' : '❌ 无效'}`);
-    // eslint-disable-next-line no-console
-    console.log(`图层数量: ${this.virtualLayers.size}`);
-    // eslint-disable-next-line no-console
-    console.log(`Action 映射数量: ${this.actionLayerMap.size}`);
-    // eslint-disable-next-line no-console
-    console.log(`当前模式: ${this.mode}`);
-    // eslint-disable-next-line no-console
-    console.log(`活动图层: ${this.activeLayerId || '无'}`);
+    // 使用 logger 输出调试信息
+    logger.debug('🔍 VirtualLayerManager 状态验证报告', {
+      status: result.isValid ? '✅ 有效' : '❌ 无效',
+      layerCount: this.virtualLayers.size,
+      actionMapCount: this.actionLayerMap.size,
+      currentMode: this.mode,
+      activeLayer: this.activeLayerId || '无'
+    });
     
     if (result.errors.length > 0) {
-      // eslint-disable-next-line no-console
-      console.group('❌ 错误:');
-      // eslint-disable-next-line no-console
-      result.errors.forEach(err => console.error(err));
-      // eslint-disable-next-line no-console
-      console.groupEnd();
+      result.errors.forEach(err => logger.error('VirtualLayerManager 错误:', err));
     }
     
     if (result.warnings.length > 0) {
-      // eslint-disable-next-line no-console
-      console.group('⚠️ 警告:');
-      // eslint-disable-next-line no-console
-      result.warnings.forEach(warn => console.warn(warn));
-      // eslint-disable-next-line no-console
-      console.groupEnd();
+      result.warnings.forEach(warn => logger.warn('VirtualLayerManager 警告:', warn));
     }
-    
-    // eslint-disable-next-line no-console
-    console.groupEnd();
   }
 
   /**

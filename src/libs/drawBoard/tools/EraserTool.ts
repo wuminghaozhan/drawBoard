@@ -207,21 +207,33 @@ export class EraserTool extends DrawTool {
     };
   }
 
-  public draw(ctx: CanvasRenderingContext2D, action: DrawAction): void {
+  /**
+   * 橡皮擦主绘制方法 - 不绘制任何内容（透明指示器）
+   * 
+   * 橡皮擦只对 pen 类型起作用，为避免用户误解，绘制阶段不显示任何痕迹。
+   * 实际擦除效果通过 drawEraseEffect 方法在离屏 canvas 上实现。
+   */
+  public draw(_ctx: CanvasRenderingContext2D, _action: DrawAction): void {
+    // 不绘制任何内容 - 橡皮擦轨迹是透明的
+    // 实际擦除效果由 DrawingHandler 通过 drawEraseEffect 在离屏 canvas 上处理
+  }
+  
+  /**
+   * 绘制擦除效果（用于离屏 canvas，只对 pen 起作用）
+   * 
+   * 此方法使用 destination-out 混合模式在给定的 context 上绘制擦除效果。
+   * 应该在只包含 pen 类型 action 的离屏 canvas 上调用。
+   * 
+   * @param ctx 离屏 Canvas 上下文（应只包含 pen action）
+   * @param action 橡皮擦 action
+   */
+  public drawEraseEffect(ctx: CanvasRenderingContext2D, action: DrawAction): void {
     if (action.points.length < 2) return;
 
     const eraserAction = action as EraserAction;
     const originalContext = this.saveContext(ctx);
     
-    // 设置复杂度评分和缓存支持
-    if (!action.complexityScore) {
-      action.complexityScore = this.calculateComplexity(action);
-    }
-    if (action.supportsCaching === undefined) {
-      action.supportsCaching = false; // 橡皮擦不需要缓存
-    }
-    
-    // 设置橡皮擦模式 - 使用 destination-out 实现擦除效果
+    // 使用 destination-out 实现真正的擦除效果
     ctx.globalCompositeOperation = 'destination-out';
     ctx.strokeStyle = 'rgba(0,0,0,1)';
     ctx.lineWidth = action.context.lineWidth;
@@ -233,12 +245,11 @@ export class EraserTool extends DrawTool {
 
     this.restoreContext(ctx, originalContext);
     
-    logger.debug('橡皮擦绘制', {
+    logger.debug('橡皮擦擦除效果绘制', {
       actionId: action.id,
       pointsCount: action.points.length,
       lineWidth: action.context.lineWidth,
-      eraserMode: eraserAction.eraserMode,
-      targetLayerId: eraserAction.targetLayerId
+      eraserMode: eraserAction.eraserMode
     });
   }
 
@@ -362,15 +373,5 @@ export class EraserTool extends DrawTool {
       default:
         return eraserAction.targetLayerId === layerId;
     }
-  }
-
-  /**
-   * 计算橡皮擦工具的复杂度评分
-   */
-  private calculateComplexity(action: DrawAction): number {
-    // 基于点数和线宽计算复杂度
-    const pointsComplexity = Math.min(action.points.length / 10, 5);
-    const lineWidthComplexity = action.context.lineWidth * 0.3;
-    return Math.round(pointsComplexity + lineWidthComplexity + 2);
   }
 } 

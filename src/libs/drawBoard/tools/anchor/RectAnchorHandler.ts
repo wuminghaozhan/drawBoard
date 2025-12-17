@@ -30,6 +30,7 @@ export class RectAnchorHandler extends BaseAnchorHandler {
    * 中心点：移动整个矩形
    * 边中点：只改变对应边的位置和尺寸
    * 角点：同时改变两个相邻边的位置和尺寸
+   * 旋转锚点：由 AnchorDragHandler.handleRotateDrag 处理，这里不做处理
    */
   public handleAnchorDrag(
     action: DrawAction,
@@ -39,6 +40,12 @@ export class RectAnchorHandler extends BaseAnchorHandler {
     dragStartBounds: Bounds,
     _dragStartAction?: DrawAction
   ): DrawAction | null {
+    // 🔄 旋转锚点：由 AnchorDragHandler 处理，这里不应该被调用
+    // 但为了安全起见，返回 null 让上层处理
+    if (anchorType === 'rotate') {
+      return null;
+    }
+    
     // 中心点拖拽：移动整个矩形
     if (anchorType === 'center') {
       const deltaX = currentPoint.x - startPoint.x;

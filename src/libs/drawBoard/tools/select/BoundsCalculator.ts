@@ -1,5 +1,6 @@
 import type { DrawAction } from '../DrawTool';
 import type { Bounds } from '../anchor/AnchorTypes';
+import type { TextAction } from '../../types/TextTypes';
 
 /**
  * 边界框计算配置
@@ -175,23 +176,29 @@ export class BoundsCalculator {
 
   /**
    * 计算矩形边界框
+   * 矩形统一使用4顶点格式，支持旋转矩形
    */
   private calculateRectBounds(action: DrawAction): Bounds {
-    if (action.points.length < 2) {
+    if (action.points.length < 4) {
       return { x: 0, y: 0, width: 0, height: 0 };
     }
 
-    const start = action.points[0];
-    const end = action.points[action.points.length - 1];
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
 
-    if (!isFinite(start.x) || !isFinite(start.y) || !isFinite(end.x) || !isFinite(end.y)) {
-      return { x: 0, y: 0, width: 0, height: 0 };
+    for (const p of action.points) {
+      if (!isFinite(p.x) || !isFinite(p.y)) continue;
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
     }
 
-    const minX = Math.min(start.x, end.x);
-    const minY = Math.min(start.y, end.y);
-    const maxX = Math.max(start.x, end.x);
-    const maxY = Math.max(start.y, end.y);
+    if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
 
     return {
       x: minX,
@@ -231,29 +238,36 @@ export class BoundsCalculator {
 
   /**
    * 计算多边形边界框
+   * 多边形统一使用顶点列表格式，支持旋转
    */
   private calculatePolygonBounds(action: DrawAction): Bounds {
-    if (action.points.length < 2) {
+    // 多边形至少需要3个顶点
+    if (action.points.length < 3) {
       return { x: 0, y: 0, width: 0, height: 0 };
     }
 
-    const center = action.points[0];
-    const edge = action.points[action.points.length - 1];
-    
-    const radius = Math.sqrt(
-      Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-    );
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
 
-    if (!isFinite(center.x) || !isFinite(center.y) || !isFinite(radius) || radius <= 0) {
+    for (const p of action.points) {
+      if (!isFinite(p.x) || !isFinite(p.y)) continue;
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+
+    if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
       return { x: 0, y: 0, width: 0, height: 0 };
     }
 
-    // 多边形的边界框是以中心为圆心、半径为 radius 的正方形
     return {
-      x: center.x - radius,
-      y: center.y - radius,
-      width: radius * 2,
-      height: radius * 2
+      x: minX,
+      y: minY,
+      width: Math.max(maxX - minX, 1),
+      height: Math.max(maxY - minY, 1)
     };
   }
 
@@ -261,8 +275,48 @@ export class BoundsCalculator {
    * 计算文字边界框
    */
   private calculateTextBounds(action: DrawAction): Bounds {
-    // 文字使用通用计算方法
-    return this.calculateGenericBounds(action);
+    const textAction = action as TextAction;
+    const point = action.points[0];
+    
+    if (!point || !isFinite(point.x) || !isFinite(point.y)) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
+    
+    // 如果 TextAction 已经存储了宽高，直接使用
+    if (textAction.width && textAction.height && textAction.width > 0 && textAction.height > 0) {
+      return {
+        x: point.x,
+        y: point.y,
+        width: textAction.width,
+        height: textAction.height
+      };
+    }
+    
+    // 否则根据文本内容和字体大小估算
+    const text = textAction.text || '';
+    const fontSize = textAction.fontSize || 16;
+    
+    // 估算文本宽度：中文字符约等于 fontSize，英文字符约等于 fontSize * 0.6
+    let estimatedWidth = 0;
+    for (const char of text) {
+      // 判断是否是中文字符（或其他宽字符）
+      if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
+        estimatedWidth += fontSize;
+      } else {
+        estimatedWidth += fontSize * 0.6;
+      }
+    }
+    
+    // 最小宽度为一个字符宽度
+    const width = Math.max(estimatedWidth, fontSize);
+    const height = fontSize * 1.2; // 行高约为字体大小的 1.2 倍
+    
+    return {
+      x: point.x,
+      y: point.y,
+      width,
+      height
+    };
   }
 
   /**

@@ -11,7 +11,9 @@ import { LineAnchorHandler } from './anchor/LineAnchorHandler';
 import { PenAnchorHandler } from './anchor/PenAnchorHandler';
 import { PolygonAnchorHandler } from './anchor/PolygonAnchorHandler';
 import { BoundsValidator, type Bounds as BoundsType } from '../utils/BoundsValidator';
+import { ActionValidator } from '../utils/ActionValidator';
 import { SpatialIndex } from '../infrastructure/performance/SpatialIndex';
+import type { VirtualLayerMode } from '../core/VirtualLayerManager';
 // 模块化拆分后的子模块
 import { 
   HitTestManager, 
@@ -23,8 +25,13 @@ import {
   TransformOperations,
   AnchorGenerator,
   BoundsCalculator,
-  AnchorDragHandler
+  AnchorDragHandler,
+  SelectionToolbar,
+  type SelectionToolbarCallbacks
 } from './select';
+
+// 使用 ActionValidator 的深拷贝方法
+const deepCloneAction = ActionValidator.deepClone.bind(ActionValidator);
 
 /**
  * 选择动作接口
@@ -87,18 +94,15 @@ export class SelectTool extends DrawTool {
   private currentSelectionBounds: { x: number; y: number; width: number; height: number } | null = null;
 
   // 锚点系统：区分变形锚点和移动区域
-  // 锚点数组：包含边锚点和中心点
+  // 锚点数组：边锚点（缩放/变形）
   private anchorPoints: AnchorPoint[] = [];
-  // 中心点锚点（单独存储，便于快速访问）
-  private centerAnchorPoint: AnchorPoint | null = null;
-  // 移动区域：选区内部区域，用于移动整个选区
+  // 移动区域：整个选区框内都是可拖拽区域
   private moveArea: { x: number; y: number; width: number; height: number } | null = null;
   
   // 拖拽状态
   private isDraggingResizeAnchor: boolean = false; // 是否正在拖拽变形锚点
   private draggedAnchorIndex: number = -1; // 正在拖拽的锚点索引
   private isDraggingMove: boolean = false; // 是否正在移动选区
-  private isDraggingCenter: boolean = false; // 是否正在拖拽中心点
   
   // 图形处理器映射
   private shapeHandlers: Map<string, ShapeAnchorHandler> = new Map();
@@ -165,6 +169,16 @@ export class SelectTool extends DrawTool {
   // 动态图层支持
   private canvasEngine?: CanvasEngine;
   private selectedLayerZIndex?: number | null;
+  
+  // 虚拟图层模式（用于决定选择行为）
+  private virtualLayerMode: VirtualLayerMode = 'individual';
+  
+  // 选择限制事件回调（用于通知 UI 层：individual 模式多选时无锚点）
+  private onSelectionLimited?: (info: {
+    reason: 'individual-mode-no-transform';
+    message: string;
+    selectedCount: number;
+  }) => void;
 
   // 空间索引优化（性能优化）
   private spatialIndex: SpatialIndex | null = null;
@@ -180,6 +194,14 @@ export class SelectTool extends DrawTool {
   private selectionRenderer: SelectionRenderer;
   private boundsCalculator: BoundsCalculator;
   private anchorDragHandler: AnchorDragHandler;
+  
+  // 选区浮动工具栏
+  private selectionToolbar: SelectionToolbar | null = null;
+  private showAnchorsAndRotation: boolean = true; // 是否显示锚点和旋转功能
+  private toolbarCallbacks: SelectionToolbarCallbacks | null = null;
+  
+  // 样式更新回调（用于立即同步到数据源）
+  private onStyleUpdatedCallback: ((actions: DrawAction[]) => void) | null = null;
 
   constructor(config?: Partial<{
     sensitivity: number;
@@ -276,6 +298,217 @@ export class SelectTool extends DrawTool {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (this.transformTool as any).setCanvasEngine(canvasEngine, selectedLayerZIndex);
     }
+    
+    // 初始化选区浮动工具栏
+    this.initSelectionToolbar();
+  }
+  
+  /**
+   * 初始化选区浮动工具栏
+   */
+  private initSelectionToolbar(): void {
+    if (!this.canvasEngine) return;
+    
+    // 获取 canvas 容器
+    const container = this.canvasEngine.getContainer();
+    if (!container) return;
+    
+    // 如果已存在，先销毁
+    if (this.selectionToolbar) {
+      this.selectionToolbar.destroy();
+    }
+    
+    // 创建工具栏回调
+    const callbacks: SelectionToolbarCallbacks = {
+      onToggleAnchors: (visible) => {
+        this.showAnchorsAndRotation = visible;
+        this.toolbarCallbacks?.onToggleAnchors?.(visible);
+        // 触发重绘
+        this.updateAnchorPoints();
+      },
+      onStrokeColorChange: (color) => {
+        this.updateSelectedActionsStyle({ strokeStyle: color });
+        this.toolbarCallbacks?.onStrokeColorChange?.(color);
+      },
+      onFillColorChange: (color) => {
+        this.updateSelectedActionsStyle({ fillStyle: color });
+        this.toolbarCallbacks?.onFillColorChange?.(color);
+      },
+      onLineWidthChange: (width) => {
+        this.updateSelectedActionsStyle({ lineWidth: width });
+        this.toolbarCallbacks?.onLineWidthChange?.(width);
+      },
+      // 文本样式回调 - 立即更新并同步
+      onTextColorChange: (color) => {
+        this.updateSelectedTextStyle({ color });
+        this.toolbarCallbacks?.onTextColorChange?.(color);
+      },
+      onFontSizeChange: (size) => {
+        this.updateSelectedTextStyle({ fontSize: size });
+        this.toolbarCallbacks?.onFontSizeChange?.(size);
+      },
+      onFontWeightChange: (weight) => {
+        this.updateSelectedTextStyle({ fontWeight: weight });
+        this.toolbarCallbacks?.onFontWeightChange?.(weight);
+      },
+      onToggleLock: (locked) => {
+        this.toggleSelectedActionsLock(locked);
+        this.toolbarCallbacks?.onToggleLock?.(locked);
+      },
+      onMoveToTop: () => {
+        this.toolbarCallbacks?.onMoveToTop?.();
+      },
+      onMoveToBottom: () => {
+        this.toolbarCallbacks?.onMoveToBottom?.();
+      },
+      onDuplicate: () => {
+        this.toolbarCallbacks?.onDuplicate?.();
+      },
+      onDelete: () => {
+        this.toolbarCallbacks?.onDelete?.();
+      }
+    };
+    
+    this.selectionToolbar = new SelectionToolbar(container, callbacks);
+    logger.debug('SelectTool: 选区浮动工具栏已初始化');
+  }
+  
+  /**
+   * 设置工具栏外部回调
+   */
+  public setToolbarCallbacks(callbacks: SelectionToolbarCallbacks): void {
+    this.toolbarCallbacks = callbacks;
+  }
+  
+  /**
+   * 设置样式更新回调
+   * 当选中图形的样式被修改时立即调用，用于同步到数据源
+   */
+  public setOnStyleUpdated(callback: (actions: DrawAction[]) => void): void {
+    this.onStyleUpdatedCallback = callback;
+  }
+  
+  /**
+   * 更新选中图形的样式
+   * 更新后立即调用 onStyleUpdatedCallback 同步到数据源
+   */
+  private updateSelectedActionsStyle(style: { strokeStyle?: string; fillStyle?: string; lineWidth?: number }): void {
+    if (this.selectedActions.length === 0) return;
+    
+    this.selectedActions.forEach(action => {
+      if (!action.context) {
+        action.context = {};
+      }
+      if (style.strokeStyle !== undefined) {
+        action.context.strokeStyle = style.strokeStyle;
+      }
+      if (style.fillStyle !== undefined) {
+        action.context.fillStyle = style.fillStyle;
+      }
+      if (style.lineWidth !== undefined) {
+        action.context.lineWidth = style.lineWidth;
+      }
+    });
+    
+    logger.debug('SelectTool: 更新选中图形样式', { style, count: this.selectedActions.length });
+    
+    // 立即通知外部同步到数据源，确保在失焦前数据已持久化
+    if (this.onStyleUpdatedCallback) {
+      this.onStyleUpdatedCallback([...this.selectedActions]);
+    }
+  }
+  
+  /**
+   * 更新选中文本的样式（颜色、字体大小、字体粗细）
+   * 更新后立即调用 onStyleUpdatedCallback 同步到数据源
+   */
+  private updateSelectedTextStyle(style: { color?: string; fontSize?: number; fontWeight?: string }): void {
+    if (this.selectedActions.length === 0) return;
+    
+    this.selectedActions.forEach(action => {
+      if (action.type !== 'text') return;
+      
+      const textAction = action as DrawAction & {
+        fontSize?: number;
+        fontWeight?: string;
+        text?: string;
+        width?: number;
+        height?: number;
+      };
+      
+      // 更新文本颜色（使用 fillStyle）
+      if (style.color !== undefined) {
+        if (!action.context) {
+          action.context = {};
+        }
+        action.context.fillStyle = style.color;
+        action.context.strokeStyle = style.color;
+      }
+      
+      // 更新字体大小
+      if (style.fontSize !== undefined) {
+        textAction.fontSize = style.fontSize;
+      }
+      
+      // 更新字体粗细
+      if (style.fontWeight !== undefined) {
+        textAction.fontWeight = style.fontWeight;
+      }
+      
+      // 重新计算文本边界
+      if (style.fontSize !== undefined || style.fontWeight !== undefined) {
+        const text = textAction.text || '';
+        const fontSize = textAction.fontSize || 16;
+        let estimatedWidth = 0;
+        for (const char of text) {
+          if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
+            estimatedWidth += fontSize;
+          } else {
+            estimatedWidth += fontSize * 0.6;
+          }
+        }
+        textAction.width = Math.max(estimatedWidth, fontSize);
+        textAction.height = fontSize * 1.2;
+      }
+    });
+    
+    logger.debug('SelectTool: 更新选中文本样式', { style, count: this.selectedActions.length });
+    
+    // 立即通知外部同步到数据源
+    if (this.onStyleUpdatedCallback) {
+      this.onStyleUpdatedCallback([...this.selectedActions]);
+    }
+  }
+  
+  /**
+   * 切换选中图形的锁定状态（仅更新本地状态）
+   * 注意：实际的持久化由 DrawBoardSelectionAPI.toggleSelectionLock 完成
+   */
+  private toggleSelectedActionsLock(locked: boolean): void {
+    // 仅更新本地引用的状态，用于即时的 UI 响应（如锚点隐藏）
+    // VirtualLayerManager 和 HistoryManager 的同步由 DrawBoardSelectionAPI 处理
+    this.selectedActions.forEach(action => {
+      action.layerLocked = locked;
+    });
+    logger.debug('SelectTool: 更新本地锁定状态', { locked, count: this.selectedActions.length });
+  }
+  
+  /**
+   * 检查选中的 actions 是否被锁定
+   * @returns 如果任意一个选中的 action 被锁定，返回 true
+   */
+  public isSelectionLocked(): boolean {
+    return this.selectedActions.some(action => this.isActionLocked(action));
+  }
+  
+  /**
+   * 检查单个 action 是否被锁定
+   * @param action 要检查的 action
+   * @returns 如果 action 被锁定，返回 true
+   */
+  private isActionLocked(action: DrawAction): boolean {
+    return action.layerLocked === true || 
+           (action as DrawAction & { locked?: boolean }).locked === true;
   }
 
   /**
@@ -360,20 +593,45 @@ export class SelectTool extends DrawTool {
       this.selectedActions = filteredActions;
       
       // 如果选中的 actions 发生变化，更新变换模式
+      this.clearAnchorCache(); // 统一清除锚点缓存
       if (this.selectedActions.length === 1) {
-        this.clearAnchorCache();
         this.enterTransformMode(this.selectedActions[0]);
-      } else if (this.selectedActions.length === 0) {
-        this.exitTransformMode();
-        this.clearAnchorCache();
       } else {
         this.exitTransformMode();
-        this.clearAnchorCache();
       }
     }
     
     this.clearBoundsCache();
     this.clearSpatialIndex();
+  }
+
+  /**
+   * 设置虚拟图层模式
+   * individual 模式下只允许单选（因为每个 action 是独立图层，不支持跨图层多选）
+   * grouped 模式下允许多选
+   */
+  public setVirtualLayerMode(mode: VirtualLayerMode): void {
+    this.virtualLayerMode = mode;
+    logger.debug('SelectTool.setVirtualLayerMode', { mode });
+  }
+
+  /**
+   * 获取当前虚拟图层模式
+   */
+  public getVirtualLayerMode(): VirtualLayerMode {
+    return this.virtualLayerMode;
+  }
+
+  /**
+   * 设置选择限制事件回调
+   * 当 individual 模式下多选禁用锚点功能时触发
+   */
+  public setOnSelectionLimited(callback: (info: {
+    reason: 'individual-mode-no-transform';
+    message: string;
+    selectedCount: number;
+  }) => void): void {
+    this.onSelectionLimited = callback;
   }
 
   /**
@@ -407,7 +665,7 @@ export class SelectTool extends DrawTool {
     if (!this.dragStartState) return false;
     
     // 检查是否正在拖拽
-    if (this.isDraggingResizeAnchor || this.isDraggingMove || this.isDraggingCenter) {
+    if (this.isDraggingResizeAnchor || this.isDraggingMove) {
       // 恢复原始状态
       this.selectedActions = this.dragStartState.actions.map(action => ({ ...action }));
       
@@ -424,7 +682,6 @@ export class SelectTool extends DrawTool {
       // 清除拖拽状态
       this.isDraggingResizeAnchor = false;
       this.isDraggingMove = false;
-      this.isDraggingCenter = false;
       this.draggedAnchorIndex = -1;
       this.dragStartPoint = null;
       this.dragStartBounds = null;
@@ -642,14 +899,15 @@ export class SelectTool extends DrawTool {
   public clearSelection(): void {
     this.selectedActions = [];
     this.anchorPoints = [];
-    this.centerAnchorPoint = null;
     this.moveArea = null;
     this.isDraggingResizeAnchor = false;
     this.draggedAnchorIndex = -1;
     this.isDraggingMove = false;
-    this.isDraggingCenter = false;
     this.clearBoundsCache(); // 清除边界框缓存
     this.exitTransformMode();
+    
+    // 隐藏浮动工具栏
+    this.hideSelectionToolbar();
   }
 
   /**
@@ -689,8 +947,15 @@ export class SelectTool extends DrawTool {
 
   /**
    * 生成锚点（根据图形类型使用不同的处理器）
+   * 🔒 锁定的图形不生成锚点
    */
   private generateResizeAnchorPoints(): void {
+    // 🔒 锁定状态下不生成锚点
+    if (this.isSelectionLocked()) {
+      this.clearAnchorPointsState();
+      return;
+    }
+    
     if (this.isDraggingResizeAnchor) {
       this.clearAnchorCache();
     }
@@ -725,14 +990,19 @@ export class SelectTool extends DrawTool {
 
   /**
    * 生成锚点缓存 key
+   * 使用所有点坐标的累加值，确保任意点变化时缓存失效
    */
   private getAnchorCacheKey(): string {
     const actionIds = this.selectedActions.map(a => a.id).sort();
     const fingerprint = this.selectedActions.map(a => {
       if (a.points.length === 0) return `${a.id}:empty`;
-      const first = a.points[0];
-      const last = a.points[a.points.length - 1];
-      return `${a.id}:${Math.round(first.x)},${Math.round(first.y)},${Math.round(last.x)},${Math.round(last.y)},${a.points.length}`;
+      // 计算所有点坐标的累加值
+      let sumX = 0, sumY = 0;
+      for (const p of a.points) {
+        sumX += p.x;
+        sumY += p.y;
+      }
+      return `${a.id}:${Math.round(sumX)},${Math.round(sumY)},${a.points.length}`;
     }).join('|');
     return `${actionIds.join(',')}_${fingerprint}`;
   }
@@ -751,7 +1021,6 @@ export class SelectTool extends DrawTool {
     
     if ((isValidCache || isThrottled) && this.anchorCache) {
           this.anchorPoints = this.anchorCache.anchors;
-          this.centerAnchorPoint = this.anchorCache.centerAnchor;
           this.moveArea = this.anchorCache.moveArea;
       return true;
     }
@@ -764,7 +1033,6 @@ export class SelectTool extends DrawTool {
   private clearAnchorPointsState(): void {
       this.clearAnchorCache();
       this.anchorPoints = [];
-      this.centerAnchorPoint = null;
       this.moveArea = null;
   }
 
@@ -793,7 +1061,6 @@ export class SelectTool extends DrawTool {
       this.generateAnchorsWithHandler(handler, action, actionBounds || bounds);
       } else {
       this.generateDefaultAnchors(bounds);
-      this.centerAnchorPoint = null;
     }
 
     this.updateMoveArea(bounds);
@@ -803,6 +1070,7 @@ export class SelectTool extends DrawTool {
 
   /**
    * 使用 handler 生成锚点
+   * 自动添加旋转锚点（如果显示锚点功能开启）
    */
   private generateAnchorsWithHandler(
     handler: ShapeAnchorHandler,
@@ -814,20 +1082,35 @@ export class SelectTool extends DrawTool {
       : bounds;
       
     const anchors = handler.generateAnchors(action, effectiveBounds);
+    // 🔧 单选时不需要中心锚点，整个选区框都是可拖拽区域
     this.anchorPoints = anchors.filter(anchor => !anchor.isCenter);
-    this.centerAnchorPoint = anchors.find(anchor => anchor.isCenter) || null;
+    
+    // 🔄 添加旋转锚点（位于顶部中心上方）
+    // ⚪ 圆形不需要旋转锚点，因为旋转对圆形没有意义
+    if (action.type !== 'circle') {
+      const halfSize = this.anchorSize / 2;
+      const rotateAnchorOffset = 25;
+      this.anchorPoints.push({
+        x: effectiveBounds.x + effectiveBounds.width / 2 - halfSize,
+        y: effectiveBounds.y - rotateAnchorOffset - halfSize,
+        type: 'rotate' as const,
+        cursor: 'grab',
+        shapeType: action.type
+      });
+    }
   }
 
   /**
    * 更新移动区域
+   * 🔧 整个选区框都是可拖拽区域，不再缩小
    */
   private updateMoveArea(bounds: { x: number; y: number; width: number; height: number }): void {
-    const padding = this.anchorSize / 2;
+    // 移动区域等于整个选区框
     this.moveArea = {
-      x: bounds.x + padding,
-      y: bounds.y + padding,
-      width: Math.max(0, bounds.width - padding * 2),
-      height: Math.max(0, bounds.height - padding * 2)
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height
     };
   }
 
@@ -845,7 +1128,7 @@ export class SelectTool extends DrawTool {
       actionIds: cacheKey.split('_')[0].split(','),
       bounds: { ...bounds },
       anchors: [...this.anchorPoints],
-      centerAnchor: this.centerAnchorPoint ? { ...this.centerAnchorPoint } : null,
+      centerAnchor: null, // 不再使用中心点
       moveArea: this.moveArea ? { ...this.moveArea } : null,
       timestamp
     };
@@ -868,12 +1151,30 @@ export class SelectTool extends DrawTool {
 
   /**
    * 生成多选场景的锚点（统一边界框，无中心点）
+   * 包含：8个缩放锚点 + 1个旋转锚点（grouped 模式）
    */
   private generateMultiSelectionAnchors(bounds: Bounds): void {
+    // 🔒 individual 模式多选时禁用锚点（不能缩放、变形）
+    if (this.virtualLayerMode === 'individual') {
+      this.anchorPoints = [];
+      this.moveArea = { 
+        x: bounds.x, 
+        y: bounds.y, 
+        width: bounds.width, 
+        height: bounds.height 
+      };
+      logger.debug('SelectTool.generateMultiSelectionAnchors: individual 模式多选，禁用锚点');
+      return;
+    }
+    
+    // grouped 模式：生成标准锚点
     const { x, y, width, height } = bounds;
     const halfSize = this.anchorSize / 2;
+    
+    // 旋转锚点配置
+    const rotateAnchorOffset = 25;
 
-    // 生成8个标准锚点（无中心点）
+    // 生成8个标准锚点 + 1个旋转锚点
     this.anchorPoints = [
       // 四个角点
       { x: x - halfSize, y: y - halfSize, type: 'top-left', cursor: 'nw-resize', shapeType: 'multi' },
@@ -885,18 +1186,29 @@ export class SelectTool extends DrawTool {
       { x: x + width / 2 - halfSize, y: y - halfSize, type: 'top', cursor: 'n-resize', shapeType: 'multi' },
       { x: x + width - halfSize, y: y + height / 2 - halfSize, type: 'right', cursor: 'e-resize', shapeType: 'multi' },
       { x: x + width / 2 - halfSize, y: y + height - halfSize, type: 'bottom', cursor: 's-resize', shapeType: 'multi' },
-      { x: x - halfSize, y: y + height / 2 - halfSize, type: 'left', cursor: 'w-resize', shapeType: 'multi' }
+      { x: x - halfSize, y: y + height / 2 - halfSize, type: 'left', cursor: 'w-resize', shapeType: 'multi' },
+      
+      // 🔄 旋转锚点（位于顶部中心上方）
+      { 
+        x: x + width / 2 - halfSize, 
+        y: y - rotateAnchorOffset - halfSize, 
+        type: 'rotate', 
+        cursor: 'grab', 
+        shapeType: 'multi' 
+      }
     ];
-    
-    this.centerAnchorPoint = null; // 多选时不显示中心点
   }
 
   /**
    * 生成默认锚点（用于未实现处理器的图形类型）
+   * 包含：8个缩放锚点 + 1个旋转锚点
    */
   private generateDefaultAnchors(bounds: Bounds): void {
     const { x, y, width, height } = bounds;
     const halfSize = this.anchorSize / 2;
+    
+    // 旋转锚点配置
+    const rotateAnchorOffset = 25; // 距离顶部边界 25px
 
     this.anchorPoints = [
       // 四个角点
@@ -909,7 +1221,16 @@ export class SelectTool extends DrawTool {
       { x: x + width / 2 - halfSize, y: y - halfSize, type: 'top', cursor: 'n-resize', shapeType: 'default' },
       { x: x + width - halfSize, y: y + height / 2 - halfSize, type: 'right', cursor: 'e-resize', shapeType: 'default' },
       { x: x + width / 2 - halfSize, y: y + height - halfSize, type: 'bottom', cursor: 's-resize', shapeType: 'default' },
-      { x: x - halfSize, y: y + height / 2 - halfSize, type: 'left', cursor: 'w-resize', shapeType: 'default' }
+      { x: x - halfSize, y: y + height / 2 - halfSize, type: 'left', cursor: 'w-resize', shapeType: 'default' },
+      
+      // 🔄 旋转锚点（位于顶部中心上方）
+      { 
+        x: x + width / 2 - halfSize, 
+        y: y - rotateAnchorOffset - halfSize, 
+        type: 'rotate', 
+        cursor: 'grab', 
+        shapeType: 'default' 
+      }
     ];
   }
 
@@ -922,46 +1243,33 @@ export class SelectTool extends DrawTool {
   }
 
   /**
-   * 绘制锚点（包括边锚点和中心点）
+   * 绘制锚点（边锚点 + 旋转锚点，不含中心点）
+   * 🔧 单选时整个选区框都是可拖拽区域，不再需要中心点
    * 委托给 SelectionRenderer
    */
-  private drawResizeAnchorPoints(ctx: CanvasRenderingContext2D): void {
+  private drawResizeAnchorPoints(ctx: CanvasRenderingContext2D, bounds?: Bounds | null): void {
     this.selectionRenderer.drawResizeAnchorPoints(
       ctx,
       this.anchorPoints,
-      this.centerAnchorPoint,
+      null, // 🔧 不再绘制中心点
       this.selectedActions.length,
       this.hoverAnchorInfo,
       this.draggedAnchorIndex,
-      this.isDraggingCenter
+      false, // 🔧 不再有中心点拖拽状态
+      bounds // 传递边界框用于绘制旋转锚点连接线
     );
   }
 
   /**
    * 获取指定点位置的锚点（改进：使用距离计算，提高准确性）
+   * 🔧 不再检测中心点，整个选区框都是可拖拽区域
+   * 🔄 旋转锚点使用更大的容差，因为它在视觉上更大
    * 返回：{ index: number, anchor: AnchorPoint, isCenter: boolean } | null
    */
   private getAnchorPointAt(point: Point): { index: number; anchor: AnchorPoint; isCenter: boolean } | null {
-    // 先检查中心点（优先级最高）
-    if (this.centerAnchorPoint && this.selectedActions.length === 1) {
-      const centerX = this.centerAnchorPoint.x + this.anchorSize / 2;
-      const centerY = this.centerAnchorPoint.y + this.anchorSize / 2;
-      const distance = Math.sqrt(
-        Math.pow(point.x - centerX, 2) + Math.pow(point.y - centerY, 2)
-      );
-      
-      if (distance <= this.anchorSize / 2 + this.anchorTolerance) {
-        return {
-          index: -1, // 中心点使用特殊索引
-          anchor: this.centerAnchorPoint,
-          isCenter: true
-        };
-      }
-    }
-    
     // 检查边锚点（改进：使用距离计算而不是矩形区域，提高准确性）
     let closestAnchor: { index: number; anchor: AnchorPoint; distance: number } | null = null;
-    const maxDistance = this.anchorSize / 2 + this.anchorTolerance;
+    const baseMaxDistance = this.anchorSize / 2 + this.anchorTolerance;
     
     for (let i = 0; i < this.anchorPoints.length; i++) {
       const anchor = this.anchorPoints[i];
@@ -970,6 +1278,11 @@ export class SelectTool extends DrawTool {
       const distance = Math.sqrt(
         Math.pow(point.x - anchorCenterX, 2) + Math.pow(point.y - anchorCenterY, 2)
       );
+      
+      // 🔄 旋转锚点使用更大的容差（因为视觉上更大）
+      const maxDistance = anchor.type === 'rotate' 
+        ? baseMaxDistance + 6  // 旋转锚点额外增加 6px 容差
+        : baseMaxDistance;
       
       if (distance <= maxDistance) {
         // 找到更近的锚点
@@ -1051,19 +1364,25 @@ export class SelectTool extends DrawTool {
    */
   private handleResizeAnchorDrag(point: Point): DrawAction | DrawAction[] | null {
     if (this.draggedAnchorIndex === -1 || !this.dragStartPoint) return null;
-    if (this.isDraggingCenter) return null;
 
     const anchor = this.anchorPoints[this.draggedAnchorIndex];
     if (!anchor) return null;
-
+    
     // 确保拖拽处理器已开始
     if (!this.anchorDragHandler.isDragging()) {
-    const bounds = this.getSelectedActionsBounds();
-    if (!bounds) return null;
+      const bounds = this.getSelectedActionsBounds();
+      if (!bounds) return null;
+      
+      // 保存原始 actions 用于旋转等变换操作
+      const startActions = this.selectedActions.length > 1 
+        ? this.selectedActions.map(deepCloneAction)
+        : null;
+      
       this.anchorDragHandler.startDrag(
-      this.dragStartPoint,
-      bounds,
-        this.selectedActions.length === 1 ? this.dragStartAction : null
+        this.dragStartPoint,
+        bounds,
+        this.selectedActions.length === 1 ? this.dragStartAction : null,
+        startActions
       );
     }
 
@@ -1078,6 +1397,8 @@ export class SelectTool extends DrawTool {
         canvasBounds
       );
       if (result.success && result.actions) {
+        // 🔧 实时更新 selectedActions，确保锚点位置正确
+        this.selectedActions = result.actions;
         return result.actions;
       }
       return null;
@@ -1097,6 +1418,10 @@ export class SelectTool extends DrawTool {
     if (result.success && result.action) {
       this.selectedActionForTransform = result.action;
       this.transformTool.setSelectedAction(result.action);
+      
+      // 🔧 实时更新 selectedActions，确保锚点位置正确
+      this.selectedActions = [result.action];
+      
       return result.action;
     }
 
@@ -1135,30 +1460,90 @@ export class SelectTool extends DrawTool {
 
   /**
    * 绘制选中 actions 的 UI（边界框和锚点）
+   * 🔧 拖拽过程中隐藏锚点，仅显示选区边界框
    */
   private drawSelectedActionsUI(ctx: CanvasRenderingContext2D): void {
-    // 生成锚点
+    // 🔧 判断是否正在拖拽（移动或变形）
+    const isDragging = this.isDraggingMove || this.isDraggingResizeAnchor;
+    
+    // 只有在非拖拽状态下才生成和绘制锚点
+    if (!isDragging && this.showAnchorsAndRotation) {
+      // 生成锚点
       this.generateResizeAnchorPoints();
       
-    // 如果锚点生成失败，强制重新生成
-      if (this.anchorPoints.length === 0 && !this.centerAnchorPoint && this.selectedActions.length > 0) {
-      logger.warn('SelectTool: 锚点生成失败，强制重新生成');
+      // 🔒 individual 模式多选时不需要锚点，跳过警告检查
+      const isIndividualMultiSelect = this.virtualLayerMode === 'individual' && this.selectedActions.length > 1;
+      
+      // 如果锚点生成失败（非 individual 多选情况），强制重新生成
+      if (!isIndividualMultiSelect && 
+          this.anchorPoints.length === 0 && 
+          this.selectedActions.length > 0) {
+        logger.warn('SelectTool: 锚点生成失败，强制重新生成');
         this.clearAnchorCache();
-      this.lastAnchorUpdateTime = 0;
+        this.lastAnchorUpdateTime = 0;
         this.generateResizeAnchorPoints();
       }
-      
-      // 绘制边界框
-      const bounds = this.isDraggingResizeAnchor && this.selectedActionForTransform
-        ? this.getActionBoundingBox(this.selectedActionForTransform)
-        : this.getSelectedActionsBounds();
-    
-      if (bounds) {
-      this.drawSelectionBounds(ctx, bounds);
     }
     
-    // 绘制锚点
-    this.drawResizeAnchorPoints(ctx);
+    // 🔧 选区边界框始终渲染，跟随变形实时变更
+    // 🔧 拖拽过程中清除缓存，使用最新的 selectedActions 计算边界框
+    if (isDragging) {
+      this.clearBoundsCache();
+    }
+    
+    // 使用 selectedActions 计算边界框（拖拽过程中 selectedActions 已实时更新）
+    const bounds = this.getSelectedActionsBounds();
+    
+    if (bounds) {
+      this.drawSelectionBounds(ctx, bounds);
+      
+      // 🔧 管理浮动工具栏显示/隐藏
+      this.updateSelectionToolbar(bounds, isDragging);
+    } else {
+      // 没有选区时隐藏工具栏
+      this.hideSelectionToolbar();
+    }
+    
+    // 🔧 仅在非拖拽状态下绘制锚点（且锚点显示开启）
+    if (!isDragging && this.showAnchorsAndRotation) {
+      // 绘制锚点（individual 多选时 anchorPoints 为空，不会绘制）
+      // 传入 bounds 用于绘制旋转锚点的连接线
+      this.drawResizeAnchorPoints(ctx, bounds);
+    }
+  }
+  
+  /**
+   * 更新选区浮动工具栏
+   */
+  private updateSelectionToolbar(
+    bounds: { x: number; y: number; width: number; height: number },
+    isDragging: boolean
+  ): void {
+    if (!this.selectionToolbar) return;
+    
+    if (isDragging) {
+      // 拖拽时隐藏工具栏
+      this.selectionToolbar.hide();
+    } else if (this.selectedActions.length > 0) {
+      // 非拖拽且有选中时显示工具栏
+      if (!this.selectionToolbar.getIsVisible()) {
+        this.selectionToolbar.show(bounds);
+        this.selectionToolbar.updateState(this.selectedActions);
+      } else {
+        this.selectionToolbar.updatePosition(bounds);
+      }
+    } else {
+      this.selectionToolbar.hide();
+    }
+  }
+  
+  /**
+   * 隐藏选区浮动工具栏
+   */
+  private hideSelectionToolbar(): void {
+    if (this.selectionToolbar && this.selectionToolbar.getIsVisible()) {
+      this.selectionToolbar.hide();
+    }
   }
 
   /**
@@ -1365,7 +1750,6 @@ export class SelectTool extends DrawTool {
     this.isDragging = false;
     this.isDraggingResizeAnchor = false;
     this.isDraggingMove = false;
-    this.isDraggingCenter = false;
     this.dragStartPoint = null;
     
     // 🔧 重置框选状态（防止偶现多选问题）
@@ -1375,42 +1759,67 @@ export class SelectTool extends DrawTool {
     
     // 如果有选中的actions，检查交互区域
     if (this.selectedActions.length > 0) {
+      // 🔒 锁定检查：锁定的图形不允许变形和移动
+      const isLocked = this.isSelectionLocked();
+      
       // 1. 优先检查是否点击了边锚点（变形锚点优先级最高）
-      const anchorInfo = this.getAnchorPointAt(point);
-      if (anchorInfo && !anchorInfo.isCenter) {
-        // 边锚点：缩放/变形
-        this.isDraggingResizeAnchor = true;
-        this.draggedAnchorIndex = anchorInfo.index;
-        this.dragStartPoint = point;
-        this.dragStartBounds = null;
-        this.dragStartAction = this.selectedActions.length === 1 ? 
-          { ...this.selectedActions[0] } : null;
-        this.saveDragStartState();
-        return 'resize';
+      // 🔒 锁定状态下不响应锚点操作
+      if (!isLocked) {
+        const anchorInfo = this.getAnchorPointAt(point);
+        if (anchorInfo && !anchorInfo.isCenter) {
+          // 边锚点：缩放/变形/旋转
+          this.isDraggingResizeAnchor = true;
+          this.draggedAnchorIndex = anchorInfo.index;
+          this.dragStartPoint = point;
+          this.dragStartBounds = null;
+          // 🔧 深拷贝 action，确保旋转时使用原始数据
+          this.dragStartAction = this.selectedActions.length === 1 
+            ? deepCloneAction(this.selectedActions[0]) 
+            : null;
+          this.saveDragStartState();
+          return 'resize';
+        }
       }
       
-      // 2. 检查是否点击了中心点（移动操作）
-      if (anchorInfo && anchorInfo.isCenter) {
-        // 中心点：移动整个图形
-        logger.debug('点击了中心点，开始移动', { anchorType: anchorInfo.anchor.type });
-        this.isDraggingCenter = true;
-        this.isDraggingMove = true;
-        this.dragStartPoint = point;
-        this.dragStartAction = this.selectedActions.length === 1 ? 
-          { ...this.selectedActions[0] } : null;
-        this.saveDragStartState();
-        return 'move';
-      }
-      
-      // 3. 检查是否点击了移动区域（用于移动整个选区）
+      // 2. 检查是否点击了移动区域（整个选区框都是可拖拽区域）
+      // 🔒 锁定状态下不允许移动
       if (this.isPointInMoveArea(point)) {
+        if (isLocked) {
+          logger.debug('图形已锁定，无法移动');
+          return 'select'; // 锁定时仅保持选中状态
+        }
         logger.debug('点击了移动区域，开始移动选区');
         this.isDraggingMove = true;
         this.dragStartPoint = point;
-        this.dragStartAction = this.selectedActions.length === 1 ? 
-          { ...this.selectedActions[0] } : null;
+        // 🔧 深拷贝 action
+        this.dragStartAction = this.selectedActions.length === 1 
+          ? deepCloneAction(this.selectedActions[0]) 
+          : null;
         this.saveDragStartState();
         return 'move';
+      }
+      
+      // 🔒 individual 模式多选时：点击选中的 action 也应该启动移动
+      // 防止多选变单选的问题
+      if (this.virtualLayerMode === 'individual' && this.selectedActions.length > 1) {
+        // 检查是否点击了任何一个已选中的 action
+        const clickedSelectedAction = this.selectedActions.find(action => 
+          this.isPointInAction(point, action, 8)
+        );
+        if (clickedSelectedAction) {
+          // 🔒 锁定状态下不允许移动
+          if (isLocked) {
+            logger.debug('图形已锁定，无法移动');
+            return 'select';
+          }
+          logger.debug('individual 模式多选：点击了已选中的 action，启动移动', {
+            actionId: clickedSelectedAction.id
+          });
+          this.isDraggingMove = true;
+          this.dragStartPoint = point;
+          this.saveDragStartState();
+          return 'move';
+        }
       }
     }
 
@@ -1429,9 +1838,19 @@ export class SelectTool extends DrawTool {
       if (!this.isPointInSelectionArea(point)) {
         this.clearSelection();
         // 检查是否点击了其他action
+        // 🔧 一次点击拖拽：选中并立即启动移动
         const clickedAction = this.selectActionAtPoint(point);
         if (clickedAction) {
-          return 'transform';
+          // 🔒 检查新选中的 action 是否锁定
+          if (this.isActionLocked(clickedAction)) {
+            logger.debug('新选中的图形已锁定，无法移动');
+            return 'select';
+          }
+          this.isDraggingMove = true;
+          this.dragStartPoint = point;
+          this.dragStartAction = { ...clickedAction };
+          this.saveDragStartState();
+          return 'move';
         }
         
         // 开始新的框选
@@ -1444,11 +1863,22 @@ export class SelectTool extends DrawTool {
     }
 
     // 4. 普通选择模式：检查是否点击了action
+    // 🔧 一次点击拖拽：选中并立即启动移动
     logger.debug('普通选择模式，检查是否点击了action');
     const clickedAction = this.selectActionAtPoint(point);
     if (clickedAction) {
-      logger.debug('点击了action，进入变换模式', { actionId: clickedAction.id, actionType: clickedAction.type });
-      return 'transform';
+      logger.debug('点击了action，选中并启动移动', { actionId: clickedAction.id, actionType: clickedAction.type });
+      // 🔒 检查新选中的 action 是否锁定
+      if (this.isActionLocked(clickedAction)) {
+        logger.debug('新选中的图形已锁定，无法移动');
+        return 'select';
+      }
+      // 🔧 立即启动拖拽移动，实现一次点击拖拽
+      this.isDraggingMove = true;
+      this.dragStartPoint = point;
+      this.dragStartAction = { ...clickedAction };
+      this.saveDragStartState();
+      return 'move';
     }
     
     // 5. 如果点击了选区外，清空选择
@@ -1509,28 +1939,19 @@ export class SelectTool extends DrawTool {
         return null; // 移动距离太小，忽略
       }
       
-      // 中心点拖拽：使用图形特定的处理器
-      if (this.isDraggingCenter && this.selectedActions.length === 1) {
-        const action = this.selectedActions[0];
-        const handler = this.shapeHandlers.get(action.type);
-        if (handler) {
-          const canvasBounds = this.getCanvasBounds();
-          const updatedAction = handler.handleMove(action, deltaX, deltaY, canvasBounds || undefined);
-          if (updatedAction) {
-            // 更新selectedActionForTransform
-            this.selectedActionForTransform = updatedAction;
-            this.transformTool.setSelectedAction(updatedAction);
-            return updatedAction;
-          }
-        }
+      // 移动选中的图形（整个选区框都是可拖拽区域，不再区分中心点）
+      let result: DrawAction | DrawAction[] | null = null;
+      if (this.selectedActions.length > 1) {
+        result = this.moveSelectedActions(deltaX, deltaY);
+      } else {
+        result = this.moveSelectedAction(deltaX, deltaY);
       }
       
-      // 普通移动：使用通用移动逻辑
-      if (this.selectedActions.length > 1) {
-        return this.moveSelectedActions(deltaX, deltaY);
-      } else {
-        return this.moveSelectedAction(deltaX, deltaY);
+      // 🔧 关键修复：更新 dragStartPoint 为当前点，避免 delta 累积
+      if (result) {
+        this.dragStartPoint = point;
       }
+      return result;
     }
 
     // 3. 处理框选
@@ -1567,7 +1988,7 @@ export class SelectTool extends DrawTool {
    * 返回：是否hover状态发生变化（用于触发重绘）
    */
   public updateHoverAnchor(point: Point): boolean {
-    if (this.isDraggingResizeAnchor || this.isDraggingCenter) {
+    if (this.isDraggingResizeAnchor) {
       // 正在拖拽时，不更新悬停状态
       return false;
     }
@@ -1600,7 +2021,7 @@ export class SelectTool extends DrawTool {
    */
   public getHoverAnchorCursor(point: Point): string | null {
     const anchorInfo = this.getAnchorPointAt(point);
-    if (anchorInfo && !this.isDraggingResizeAnchor && !this.isDraggingCenter) {
+    if (anchorInfo && !this.isDraggingResizeAnchor) {
       return anchorInfo.anchor.cursor || null;
     }
     return null;
@@ -1696,24 +2117,48 @@ export class SelectTool extends DrawTool {
 
   /**
    * 完成框选操作
+   * 
+   * 【重要】individual 模式下的多选行为：
+   * - 允许多选
+   * - 但多选时禁用锚点功能（不能缩放、变形）
+   * - 保留删除功能
    */
   private finishBoxSelection(): DrawAction | DrawAction[] | null {
     const selectedActions = this.selectActionsInBox(this.currentSelectionBounds!);
-      this.isSelecting = false;
-      this.selectionStartPoint = null;
-      this.currentSelectionBounds = null;
-      
-      this.setSelectedActions(selectedActions);
-      
-      if (selectedActions.length === 1) {
-        this.enterTransformMode(selectedActions[0]);
-        return selectedActions[0];
-      } else if (selectedActions.length > 1) {
-        return selectedActions;
+    this.isSelecting = false;
+    this.selectionStartPoint = null;
+    this.currentSelectionBounds = null;
+    
+    this.setSelectedActions(selectedActions);
+    
+    if (selectedActions.length === 1) {
+      // 单选：启用变形模式（有锚点）
+      this.enterTransformMode(selectedActions[0]);
+      return selectedActions[0];
+    } else if (selectedActions.length > 1) {
+      // 🔒 多选：individual 模式下禁用锚点/变形，只保留删除功能
+      if (this.virtualLayerMode === 'individual') {
+        logger.info('SelectTool.finishBoxSelection: individual 模式多选，禁用锚点功能', {
+          selectedCount: selectedActions.length
+        });
+        // 不进入变形模式，清除锚点
+        this.exitTransformMode();
+        this.clearAnchorPointsState();
+        
+        // 🔔 通知 UI 层：多选时无法使用变形功能
+        if (this.onSelectionLimited) {
+          this.onSelectionLimited({
+            reason: 'individual-mode-no-transform',
+            message: `独立图层模式下多选时不支持缩放/变形操作，可删除`,
+            selectedCount: selectedActions.length
+          });
+        }
       }
-      
-      return null;
+      return selectedActions;
     }
+    
+    return null;
+  }
 
   /**
    * 完成锚点拖拽操作
@@ -1736,7 +2181,6 @@ export class SelectTool extends DrawTool {
    */
   private finishMoveDrag(): DrawAction | DrawAction[] | null {
       this.isDraggingMove = false;
-      this.isDraggingCenter = false;
       this.dragStartPoint = null;
       this.dragStartAction = null;
       this.clearDragState();
@@ -1787,13 +2231,8 @@ export class SelectTool extends DrawTool {
       }
     }
     
-    // 如果正在拖拽中心点，返回move光标
-    if (this.isDraggingCenter) {
-      return 'move';
-    }
-    
     // 如果鼠标悬停在锚点上（但未拖拽），返回对应的鼠标样式
-    if (this.hoverAnchorInfo && !this.isDraggingResizeAnchor && !this.isDraggingCenter) {
+    if (this.hoverAnchorInfo && !this.isDraggingResizeAnchor) {
       return this.hoverAnchorInfo.anchor.cursor || 'default';
     }
     
@@ -1857,7 +2296,8 @@ export class SelectTool extends DrawTool {
   }
 
   /**
-   * 使用键盘移动选中的图形
+   * 移动单个选中的图形
+   * 使用 TransformOperations 模块，保持形状完整性（不会因边界约束而变形）
    */
   public moveSelectedAction(deltaX: number, deltaY: number): DrawAction | null {
     if (!this.isTransformMode || !this.selectedActionForTransform) {
@@ -1870,9 +2310,24 @@ export class SelectTool extends DrawTool {
       return null;
     }
 
-    const transformFn = (point: Point) => this.clampPointToCanvas(this.createMoveTransform(deltaX, deltaY)(point));
-    const updatedAction = this.applyTransformToAction(this.selectedActionForTransform, transformFn);
+    // 🔧 使用 TransformOperations.moveAction，智能边界约束不会导致变形
+    const canvasBounds = this.getCanvasBounds() || undefined;
+    const result = TransformOperations.moveAction(
+      this.selectedActionForTransform,
+      deltaX,
+      deltaY,
+      canvasBounds
+    );
     
+    if (!result.success || !result.action) {
+      logger.warn('SelectTool: 移动失败', { error: result.error });
+      return null;
+    }
+    
+    const updatedAction = result.action;
+    
+    // 🔧 实时更新 selectedActions 和 selectedActionForTransform
+    this.selectedActions = [updatedAction];
     this.selectedActionForTransform = updatedAction;
     this.transformTool.setSelectedAction(updatedAction);
 
@@ -2003,14 +2458,17 @@ export class SelectTool extends DrawTool {
     
     // 【修复】生成缓存key（基于action IDs和内容指纹，确保内容变化时缓存失效）
     // 注意：如果正在拖拽，不使用缓存，确保实时更新
-    // 之前只用 actionIds，导致变形/位移后缓存未失效
+    // 使用所有点坐标的累加值作为指纹，确保任意点变化时缓存失效
     const actionIds = actionsToUse.map(a => a.id).sort();
     const contentFingerprint = actionsToUse.map(a => {
       if (a.points.length === 0) return `${a.id}:empty`;
-      const first = a.points[0];
-      const last = a.points[a.points.length - 1];
-      // 使用四舍五入减少浮点精度问题
-      return `${a.id}:${Math.round(first.x)},${Math.round(first.y)},${Math.round(last.x)},${Math.round(last.y)},${a.points.length}`;
+      // 计算所有点坐标的累加值，任意点变化都会导致指纹变化
+      let sumX = 0, sumY = 0;
+      for (const p of a.points) {
+        sumX += p.x;
+        sumY += p.y;
+      }
+      return `${a.id}:${Math.round(sumX)},${Math.round(sumY)},${a.points.length}`;
     }).join('|');
     const cacheKey = `${actionIds.join(',')}_${contentFingerprint}`;
     
@@ -2197,7 +2655,7 @@ export class SelectTool extends DrawTool {
       isSelecting: this.isSelecting,
       isDraggingAnchor: this.isDraggingResizeAnchor,
       isDraggingMove: this.isDraggingMove,
-      anchorPointsCount: this.anchorPoints.length + (this.centerAnchorPoint ? 1 : 0),
+      anchorPointsCount: this.anchorPoints.length,
       boundsCacheSize: this.boundsCacheManager.size()
     };
   }
@@ -2394,12 +2852,8 @@ export class SelectTool extends DrawTool {
    * 获取锚点信息
    */
   public getAnchorPoints(): Array<{ x: number; y: number; type: string; cursor: string }> {
-    // 返回所有锚点（包括中心点）
-    const allAnchors = [...this.anchorPoints];
-    if (this.centerAnchorPoint) {
-      allAnchors.push(this.centerAnchorPoint);
-    }
-    return allAnchors.map(anchor => ({
+    // 返回所有边锚点
+    return this.anchorPoints.map(anchor => ({
       x: anchor.x,
       y: anchor.y,
       type: anchor.type,

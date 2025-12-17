@@ -26,6 +26,12 @@ export class CircleTool extends DrawTool {
 
     ctx.beginPath();
     ctx.arc(start.x, start.y, radius, 0, 2 * Math.PI);
+    
+    // 先填充（如果有填充色且不是透明）
+    if (action.context.fillStyle && action.context.fillStyle !== 'transparent') {
+      ctx.fill();
+    }
+    // 再描边
     ctx.stroke();
 
     this.restoreContext(ctx, originalContext);

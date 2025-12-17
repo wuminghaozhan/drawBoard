@@ -52,6 +52,11 @@
    - `Logger.ts` - 日志工具
    - `Constants.ts` - 配置常量 ⭐ 新增
 
+5. **Eraser 模块** - 橡皮擦 ⭐ v4.1 新增
+   - `EraserTool.ts` - 橡皮擦工具（只对 pen 类型起作用）
+   - `eraser/PathSplitter.ts` - 路径分割器（可配置精度）
+   - `eraser/SpatialIndex.ts` - 四叉树空间索引
+
 ---
 
 ## 1. 单元测试

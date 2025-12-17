@@ -47,6 +47,15 @@ export class SelectToolCoordinator {
   // ✅ 变形操作状态（用于支持 undo/redo）
   private transformStartActions: DrawAction[] = [];
   private isTransforming: boolean = false;
+  
+  // 🔧 拖拽渲染优化（使用 requestAnimationFrame）
+  private pendingRedrawFrame: number | null = null;
+  private draggingActions: Map<string, DrawAction> = new Map(); // 拖拽中的临时数据
+  
+  // 🔧 syncLayerDataToSelectTool 防抖优化
+  private syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingSyncPreserveSelection: boolean = false;
+  private readonly SYNC_DEBOUNCE_MS = 16; // 约 60fps
 
   constructor(
     canvasEngine: CanvasEngine,
@@ -114,8 +123,8 @@ export class SelectToolCoordinator {
       return;
     }
 
-    // 同步图层数据（不保留选择，因为可能点击了新位置）
-    this.syncLayerDataToSelectTool(false);
+    // 同步图层数据（不保留选择，因为可能点击了新位置）- 立即执行
+    this.syncLayerDataToSelectToolImmediate(false);
 
     // ✅ 保存变形开始前的 actions 状态（用于 undo/redo）
     const selectedActions = currentTool.getSelectedActions?.() || [];
@@ -135,9 +144,10 @@ export class SelectToolCoordinator {
     // 处理鼠标按下
     currentTool.handleMouseDown(event.point);
 
-    // 触发重绘
+    // 触发重绘 - 立即执行以响应用户点击
+    // forceSelectUI: true 确保选择 UI 立即显示（锚点和工具栏）
     try {
-      await this.drawingHandler.forceRedraw();
+      await this.drawingHandler.forceRedrawImmediate(true);
     } catch (error) {
       logger.error('SelectTool 重绘失败', error);
     }
@@ -178,63 +188,94 @@ export class SelectToolCoordinator {
     }
 
     // 以下是按下状态时的拖拽逻辑
-    
-    // 获取选中的动作用于脏矩形优化
-    const selectedActions = currentTool.getSelectedActions?.() || [];
-
-    // 在处理前标记旧位置为脏
-    if (selectedActions.length > 0) {
-      this.drawingHandler.markActionsDirty(selectedActions);
-    }
-
     const updatedActions = currentTool.handleMouseMove(event.point);
 
-    // 在处理后标记新位置为脏
+    // 🔧 存储拖拽中的临时数据（不更新历史，只用于渲染）
+    // 脏矩形标记由 redrawWithOverrides 统一处理
     if (updatedActions) {
       const actionsToMark = Array.isArray(updatedActions) ? updatedActions : [updatedActions];
-      this.drawingHandler.markActionsDirty(actionsToMark);
+      
+      for (const action of actionsToMark) {
+        this.draggingActions.set(action.id, action);
+      }
     }
 
-    // 节流重绘
-    const now = Date.now();
-    if (now - this.lastRedrawTime >= this.redrawThrottleMs) {
-      if (updatedActions || hoverChanged) {
-        this.performOptimizedRedraw().catch(error => {
-          logger.error('优化重绘失败', error);
-        });
-      } else {
-        // 框选过程中也需要重绘
-        this.drawingHandler.forceRedraw().catch(error => {
-          logger.error('重绘失败', error);
-        });
-      }
-      this.lastRedrawTime = now;
+    // 🔧 使用 requestAnimationFrame 优化渲染性能
+    if (updatedActions || hoverChanged) {
+      this.scheduleRedraw();
+    } else if (!this.pendingRedrawFrame) {
+      // 框选过程中也需要重绘
+      this.scheduleRedraw();
     }
 
     return { needsCursorUpdate: true };
+  }
+  
+  /**
+   * 调度下一帧重绘（使用 requestAnimationFrame）
+   */
+  private scheduleRedraw(): void {
+    // 如果已经有待处理的重绘请求，跳过
+    if (this.pendingRedrawFrame !== null) {
+      return;
+    }
+    
+    this.pendingRedrawFrame = requestAnimationFrame(() => {
+      this.pendingRedrawFrame = null;
+      this.performDragRedraw();
+    });
+  }
+  
+  /**
+   * 执行拖拽过程中的重绘
+   * 使用临时数据覆盖历史数据进行渲染
+   */
+  private performDragRedraw(): void {
+    // 将临时数据传递给 DrawingHandler 进行渲染
+    this.drawingHandler.redrawWithOverrides(this.draggingActions).catch(error => {
+      logger.error('拖拽重绘失败', error);
+    });
   }
 
   /**
    * 处理 SelectTool 的绘制结束事件
    */
   public async handleDrawEnd(): Promise<DrawAction | DrawAction[] | null> {
+    // 🔧 取消待处理的 requestAnimationFrame
+    if (this.pendingRedrawFrame !== null) {
+      cancelAnimationFrame(this.pendingRedrawFrame);
+      this.pendingRedrawFrame = null;
+    }
+    
     const currentTool = this.toolManager.getCurrentToolInstance();
     
     if (!currentTool || !ToolTypeGuards.isSelectTool(currentTool)) {
+      // 清理拖拽状态
+      this.draggingActions.clear();
+      this.drawingHandler.clearActionOverrides();
       return null;
     }
 
     const updatedActions = currentTool.handleMouseUp();
+
+    // 🔧 清理拖拽覆盖数据
+    this.draggingActions.clear();
+    this.drawingHandler.clearActionOverrides();
 
     // 如果返回了更新后的 actions，需要更新历史记录
     if (updatedActions) {
       await this.handleUpdatedActions(updatedActions);
     }
 
-    // 同步图层数据（保留选择）
+    // 同步图层数据（保留选择）- 立即执行，不使用防抖
     const mode = this.virtualLayerManager?.getMode();
     const preserveSelection = mode === 'individual';
-    this.syncLayerDataToSelectTool(preserveSelection);
+    this.syncLayerDataToSelectToolImmediate(preserveSelection);
+    
+    // 🔧 执行一次完整重绘 - 立即执行，不使用 RAF 节流
+    // 选择操作完成后需要立即显示锚点和工具栏
+    // forceSelectUI: true 确保跳过 drawSelectToolUI 的节流机制
+    await this.drawingHandler.forceRedrawImmediate(true);
 
     return updatedActions;
   }
@@ -343,8 +384,7 @@ export class SelectToolCoordinator {
         const usedDirtyRect = await this.drawingHandler.redrawDirtyRects();
         
         if (usedDirtyRect) {
-          // 脏矩形重绘成功，还需要重绘选择工具 UI
-          await this.drawingHandler.drawSelectToolUI();
+          // 🔧 脏矩形重绘成功，redrawDirtyRects 内部已调用 drawSelectToolUI
           return;
         }
       }
@@ -358,11 +398,49 @@ export class SelectToolCoordinator {
   }
 
   /**
-   * 同步图层数据到选择工具
+   * 同步图层数据到选择工具（带防抖）
+   * 
+   * 优化策略：
+   * 1. 短时间内的多次调用会被合并
+   * 2. preserveSelection 使用"或"逻辑合并（任一次调用要求保留则保留）
    * 
    * @param preserveSelection 是否保留当前选择
    */
   public syncLayerDataToSelectTool(preserveSelection: boolean = false): void {
+    // 更新待处理的 preserveSelection（使用"或"逻辑）
+    this.pendingSyncPreserveSelection = this.pendingSyncPreserveSelection || preserveSelection;
+    
+    // 如果已有定时器，复用它
+    if (this.syncDebounceTimer !== null) {
+      return;
+    }
+    
+    // 设置防抖定时器
+    this.syncDebounceTimer = setTimeout(() => {
+      this.syncDebounceTimer = null;
+      const shouldPreserve = this.pendingSyncPreserveSelection;
+      this.pendingSyncPreserveSelection = false;
+      this.executeSyncLayerDataToSelectTool(shouldPreserve);
+    }, this.SYNC_DEBOUNCE_MS);
+  }
+
+  /**
+   * 立即同步图层数据（跳过防抖，用于需要同步执行的场景）
+   */
+  public syncLayerDataToSelectToolImmediate(preserveSelection: boolean = false): void {
+    // 取消待执行的防抖调用
+    if (this.syncDebounceTimer !== null) {
+      clearTimeout(this.syncDebounceTimer);
+      this.syncDebounceTimer = null;
+    }
+    this.pendingSyncPreserveSelection = false;
+    this.executeSyncLayerDataToSelectTool(preserveSelection);
+  }
+
+  /**
+   * 执行实际的图层数据同步
+   */
+  private executeSyncLayerDataToSelectTool(preserveSelection: boolean): void {
     // 防重复调用
     if (this.isSyncingLayerData) {
       logger.debug('syncLayerDataToSelectTool: 正在同步中，跳过重复调用');
@@ -418,6 +496,76 @@ export class SelectToolCoordinator {
 
       // 设置图层 actions
       currentTool.setLayerActions(layerActions, shouldClearSelection);
+      
+      // 🔧 同步虚拟图层模式到 SelectTool
+      // individual 模式下限制为单选（每个 action 是独立图层）
+      if (this.virtualLayerManager) {
+        const mode = this.virtualLayerManager.getMode();
+        currentTool.setVirtualLayerMode(mode);
+        
+        // 设置选择限制事件回调，通过 EventBus 通知 UI 层
+        if (currentTool.setOnSelectionLimited) {
+          currentTool.setOnSelectionLimited((info) => {
+            this.eventBus?.emit('selection:limited', info);
+          });
+        }
+      }
+      
+      // 🔧 设置选区浮动工具栏回调（通过 EventBus 转发操作）
+      if (currentTool.setToolbarCallbacks) {
+        currentTool.setToolbarCallbacks({
+          onDelete: () => {
+            this.eventBus?.emit('toolbar:delete', undefined);
+          },
+          onDuplicate: () => {
+            this.eventBus?.emit('toolbar:duplicate', undefined);
+          },
+          onMoveToTop: () => {
+            this.eventBus?.emit('toolbar:move-to-top', undefined);
+          },
+          onMoveToBottom: () => {
+            this.eventBus?.emit('toolbar:move-to-bottom', undefined);
+          },
+          onToggleLock: (locked: boolean) => {
+            this.eventBus?.emit('toolbar:toggle-lock', { locked });
+          },
+          onStrokeColorChange: (color: string) => {
+            this.eventBus?.emit('toolbar:stroke-color', { color });
+          },
+          onFillColorChange: (color: string) => {
+            this.eventBus?.emit('toolbar:fill-color', { color });
+          },
+          onLineWidthChange: (width: number) => {
+            this.eventBus?.emit('toolbar:line-width', { width });
+          },
+          onTextColorChange: (color: string) => {
+            this.eventBus?.emit('toolbar:text-color', { color });
+          },
+          onFontSizeChange: (size: number) => {
+            this.eventBus?.emit('toolbar:font-size', { size });
+          },
+          onFontWeightChange: (weight: string) => {
+            this.eventBus?.emit('toolbar:font-weight', { weight });
+          },
+          onToggleAnchors: (visible: boolean) => {
+            this.eventBus?.emit('toolbar:toggle-anchors', { visible });
+          }
+        });
+      }
+      
+      // 🔧 设置样式更新回调（立即同步到 HistoryManager 并触发重绘）
+      if (currentTool.setOnStyleUpdated) {
+        currentTool.setOnStyleUpdated((updatedActions) => {
+          // 立即同步到 HistoryManager
+          for (const action of updatedActions) {
+            this.historyManager.updateAction(action);
+          }
+          // 使缓存失效并触发重绘
+          this.drawingHandler.invalidateOffscreenCache(true);
+          this.drawingHandler.forceRedraw();
+          logger.debug('样式更新已同步到 HistoryManager', { count: updatedActions.length });
+        });
+      }
 
       // 如果清空了选择，重置工具状态
       if (shouldClearSelection && currentTool.reset) {
@@ -604,10 +752,10 @@ export class SelectToolCoordinator {
   }
 
   /**
-   * 强制同步 SelectTool 数据
+   * 强制同步 SelectTool 数据（立即执行，不使用防抖）
    */
   public forceSyncSelectToolData(): void {
-    this.syncLayerDataToSelectTool(true);
+    this.syncLayerDataToSelectToolImmediate(true);
   }
 
   /**

@@ -49,6 +49,25 @@ export interface DrawBoardEvents {
   'selection:cleared': { previousIds: string[] };
   'selection:started': { point: { x: number; y: number } };
   'selection:ended': { bounds: { x: number; y: number; width: number; height: number } | null };
+  'selection:limited': { 
+    reason: 'individual-mode-no-transform'; 
+    message: string; 
+    selectedCount: number;
+  };
+  
+  // 选区工具栏事件
+  'toolbar:delete': undefined;
+  'toolbar:duplicate': undefined;
+  'toolbar:move-to-top': undefined;
+  'toolbar:move-to-bottom': undefined;
+  'toolbar:toggle-lock': { locked: boolean };
+  'toolbar:stroke-color': { color: string };
+  'toolbar:fill-color': { color: string };
+  'toolbar:line-width': { width: number };
+  'toolbar:text-color': { color: string };
+  'toolbar:font-size': { size: number };
+  'toolbar:font-weight': { weight: string };
+  'toolbar:toggle-anchors': { visible: boolean };
   
   // 绘制事件
   'draw:started': { actionId: string; toolType: string };
