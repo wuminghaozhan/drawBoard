@@ -23,6 +23,7 @@ import { ErrorHandler, DrawBoardError, DrawBoardErrorCode, type DrawBoardErrorCo
 import { LightweightResourceManager } from './utils/LightweightResourceManager';
 import { logger } from './infrastructure/logging/Logger';
 import { EventBus } from './infrastructure/events/EventBus';
+import type { TextAction } from './types/TextTypes';
 
 // API 模块
 import { DrawBoardVirtualLayerAPI } from './api/DrawBoardVirtualLayerAPI';
@@ -878,26 +879,45 @@ export class DrawBoard {
   
   /**
    * 检测点是否在文本边界内
+   * 📝 统一使用 points[0] + width/height 规范
    */
   private isPointInTextBounds(point: { x: number; y: number }, action: DrawAction, tolerance: number): boolean {
     if (!action.points || action.points.length === 0) return false;
     
-    const textAction = action as { text?: string; fontSize?: number; fontFamily?: string; points: Array<{ x: number; y: number }> };
-    const startPoint = textAction.points[0];
+    const textAction = action as TextAction;
+    const textPoint = action.points[0];
+    
+    if (!textPoint || !isFinite(textPoint.x) || !isFinite(textPoint.y)) {
+      return false;
+    }
+    
     const text = textAction.text || '';
     const fontSize = textAction.fontSize || 16;
+    const lineHeight = fontSize * (textAction.lineHeight ?? 1.2);
     
-    if (!text) return false;
+    // 📝 统一使用 width/height 属性，如果不存在则估算
+    let width: number;
+    let height: number;
     
-    // 估算文本边界框
-    const estimatedWidth = text.length * fontSize * 0.6; // 粗略估算
-    const estimatedHeight = fontSize * 1.2;
+    if (textAction.width && textAction.width > 0) {
+      width = textAction.width;
+      // 如果 height 存在，使用它；否则估算多行文本高度
+      if (textAction.height && textAction.height > 0) {
+        height = textAction.height;
+      } else {
+        height = this.estimateMultilineTextHeight(text, fontSize, lineHeight, width);
+      }
+    } else {
+      // 估算单行文本
+      width = this.estimateTextWidth(text, fontSize);
+      height = lineHeight;
+    }
     
     const bounds = {
-      x: startPoint.x - tolerance,
-      y: startPoint.y - tolerance,
-      width: estimatedWidth + tolerance * 2,
-      height: estimatedHeight + tolerance * 2
+      x: textPoint.x - tolerance,
+      y: textPoint.y - tolerance,
+      width: width + tolerance * 2,
+      height: height + tolerance * 2
     };
     
     return (
@@ -906,6 +926,46 @@ export class DrawBoard {
       point.y >= bounds.y &&
       point.y <= bounds.y + bounds.height
     );
+  }
+  
+  /**
+   * 估算文本宽度（单行）
+   */
+  private estimateTextWidth(text: string, fontSize: number): number {
+    let estimatedWidth = 0;
+    for (const char of text) {
+      if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
+        estimatedWidth += fontSize;
+      } else {
+        estimatedWidth += fontSize * 0.6;
+      }
+    }
+    return Math.max(estimatedWidth, fontSize);
+  }
+  
+  /**
+   * 估算多行文本的高度
+   */
+  private estimateMultilineTextHeight(text: string, fontSize: number, lineHeight: number, maxWidth: number): number {
+    if (!text || maxWidth <= 0) {
+      return lineHeight;
+    }
+    
+    const paragraphs = text.split('\n');
+    let totalLines = 0;
+    const avgCharWidth = fontSize * 0.8;
+    const charsPerLine = Math.max(1, Math.floor(maxWidth / avgCharWidth));
+    
+    for (const paragraph of paragraphs) {
+      if (paragraph.length === 0) {
+        totalLines += 1;
+      } else {
+        const paragraphLines = Math.ceil(paragraph.length / charsPerLine);
+        totalLines += Math.max(1, paragraphLines);
+      }
+    }
+    
+    return Math.max(lineHeight, totalLines * lineHeight);
   }
   
   /**

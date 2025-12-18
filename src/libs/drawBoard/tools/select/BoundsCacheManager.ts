@@ -50,8 +50,18 @@ export class BoundsCacheManager {
 
   /**
    * 生成缓存键
+   * 📝 文本类型需要包含 width 和 height，因为宽度变化会影响边界框
    */
   public generateCacheKey(action: DrawAction): string {
+    // 📝 文本类型：包含 width 和 height
+    if (action.type === 'text') {
+      const textAction = action as DrawAction & { width?: number; height?: number };
+      const width = textAction.width ?? 'undefined';
+      const height = textAction.height ?? 'undefined';
+      return `${action.id}_${action.points.length}_w${width}_h${height}`;
+    }
+    
+    // 📝 其他类型：只使用 id 和 points.length
     return `${action.id}_${action.points.length}`;
   }
 

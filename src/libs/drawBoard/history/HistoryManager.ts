@@ -767,9 +767,40 @@ export class HistoryManager {
       this.transformHistory.shift();
     }
     
+    // 📝 调试日志：检查文本宽度是否正确传递到 recordTransform
+    for (const action of afterActions) {
+      if (action.type === 'text') {
+        const textAction = action as DrawAction & { width?: number; height?: number };
+        logger.info('HistoryManager.recordTransform: 准备更新文本action', {
+          actionId: action.id,
+          width: textAction.width,
+          height: textAction.height,
+          points: action.points[0]
+        });
+      }
+    }
+    
     // 应用变形（更新历史记录中的 actions）
     for (const action of afterActions) {
-      this.updateAction(action);
+      const updated = this.updateAction(action);
+      if (!updated) {
+        logger.warn('HistoryManager.recordTransform: 更新action失败', {
+          actionId: action.id,
+          actionType: action.type
+        });
+      } else if (action.type === 'text') {
+        // 📝 验证更新后的数据
+        const updatedAction = this.getActionById(action.id);
+        if (updatedAction && updatedAction.type === 'text') {
+          const textAction = updatedAction as DrawAction & { width?: number; height?: number };
+          logger.info('HistoryManager.recordTransform: 文本action已更新', {
+            actionId: action.id,
+            width: textAction.width,
+            height: textAction.height,
+            points: updatedAction.points[0]
+          });
+        }
+      }
     }
     
     logger.info('变形操作已记录', {

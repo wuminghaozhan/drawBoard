@@ -12,38 +12,51 @@ export class TextAnchorHandler extends BaseAnchorHandler {
   
   /**
    * 生成文字锚点
+   * 📝 文本只支持左右边中点锚点用于调整宽度，不支持角点变形和旋转
    */
   public generateAnchors(_action: DrawAction, bounds: Bounds): AnchorPoint[] {
     const anchors: AnchorPoint[] = [];
+    const halfSize = this.anchorSize / 2;
+    const { x, y, width, height } = bounds;
     
-    // 生成中心点
+    // 生成中心点（用于移动）
     anchors.push(this.generateCenterAnchor(bounds, 'text'));
     
-    // 生成8个标准锚点
-    anchors.push(...this.generateStandardAnchors(bounds, 'text'));
+    // 📝 只生成左右边中点锚点（用于调整宽度）
+    // 左边中点
+    anchors.push({
+      x: x - halfSize,
+      y: y + height / 2 - halfSize,
+      type: 'left',
+      cursor: 'ew-resize',
+      shapeType: 'text'
+    });
+    
+    // 右边中点
+    anchors.push({
+      x: x + width - halfSize,
+      y: y + height / 2 - halfSize,
+      type: 'right',
+      cursor: 'ew-resize',
+      shapeType: 'text'
+    });
     
     return anchors;
   }
   
   /**
    * 处理文字锚点拖拽
-   * 中心点：移动文字位置
-   * 边缘锚点：改变字体大小，位置固定
+   * 📝 文本只支持 left/right 锚点用于调整宽度，由 AnchorDragHandler.handleTextWidthDrag 处理
+   * 中心点拖拽：移动文字位置
    */
   public handleAnchorDrag(
     action: DrawAction,
     anchorType: AnchorType,
     startPoint: Point,
     currentPoint: Point,
-    dragStartBounds: Bounds,
+    _dragStartBounds: Bounds,
     _dragStartAction?: DrawAction
   ): DrawAction | null {
-    const textAction = action as DrawAction & { 
-      text?: string; 
-      fontSize?: number;
-      fontFamily?: string;
-    };
-    
     // 中心点拖拽：移动文字位置
     if (anchorType === 'center') {
       const deltaX = currentPoint.x - startPoint.x;
@@ -51,37 +64,9 @@ export class TextAnchorHandler extends BaseAnchorHandler {
       return this.handleMove(action, deltaX, deltaY);
     }
     
-    // 边缘锚点拖拽：改变字体大小
-    const originalFontSize = textAction.fontSize || 16;
-    
-    // 计算鼠标移动距离
-    const mouseDeltaX = currentPoint.x - startPoint.x;
-    const mouseDeltaY = currentPoint.y - startPoint.y;
-    
-    // 根据锚点类型计算新的边界框（使用公共方法）
-    const newBounds = this.calculateNewBounds(dragStartBounds, anchorType, mouseDeltaX, mouseDeltaY);
-    if (!newBounds) {
-      return null;
-    }
-    
-    // 计算缩放比例（使用等比例缩放，保持文字比例）
-    const scaleX = newBounds.width / dragStartBounds.width;
-    const scaleY = newBounds.height / dragStartBounds.height;
-    const uniformScale = Math.min(scaleX, scaleY); // 使用较小的缩放比例
-    
-    // 计算新的字体大小
-    let newFontSize = originalFontSize * uniformScale;
-    
-    // 限制字体大小范围
-    const MIN_FONT_SIZE = 8;
-    const MAX_FONT_SIZE = 72;
-    newFontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, newFontSize));
-    
-    // 文字位置保持不变（只更新字体大小）
-    return {
-      ...action,
-      fontSize: newFontSize
-    } as DrawAction;
+    // 📝 left/right 锚点由 AnchorDragHandler.handleTextWidthDrag 专门处理
+    // 这里不需要额外处理
+    return null;
   }
   
   /**

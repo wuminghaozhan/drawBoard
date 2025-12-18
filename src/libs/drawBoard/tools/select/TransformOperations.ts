@@ -27,6 +27,8 @@ export interface BatchTransformResult {
  * 这些操作是纯函数，不依赖于 SelectTool 的状态。
  */
 export class TransformOperations {
+  /** 文本默认宽度（像素） */
+  public static readonly DEFAULT_TEXT_WIDTH = 100;
   /**
    * 缩放单个 Action
    */
@@ -83,16 +85,29 @@ export class TransformOperations {
     // 构建更新后的 action
     let updatedAction: DrawAction;
     if (action.type === 'text') {
-      const textAction = action as DrawAction & { fontSize?: number };
+      const textAction = action as DrawAction & { fontSize?: number; width?: number; height?: number };
       const originalFontSize = textAction.fontSize || 16;
       const uniformScale = Math.min(scaleX, scaleY);
       const newFontSize = Math.max(8, Math.min(72, originalFontSize * uniformScale));
       
-      updatedAction = {
+      // 📝 缩放文本时，如果 width/height 存在，按比例缩放；否则清除让系统重新计算
+      const updatedTextAction: DrawAction & { width?: number; height?: number } = {
         ...action,
         points: newPoints,
         fontSize: newFontSize
       } as DrawAction;
+      
+      if (textAction.width && textAction.height) {
+        // 如果存在 width/height，按比例缩放
+        updatedTextAction.width = textAction.width * uniformScale;
+        updatedTextAction.height = textAction.height * uniformScale;
+      } else {
+        // 否则清除，让边界计算器根据新的 fontSize 重新计算
+        updatedTextAction.width = undefined;
+        updatedTextAction.height = undefined;
+      }
+      
+      updatedAction = updatedTextAction as DrawAction;
     } else {
       updatedAction = {
         ...action,
@@ -141,12 +156,22 @@ export class TransformOperations {
 
   /**
    * 调整文本框宽度（用于边中点拖拽）
-   * 只调整宽度，不改变字号
+   * 📝 左右锚点拖拽都能实时改变文本宽度
+   * - 拖拽右边：保持左边不动，只改变宽度
+   * - 拖拽左边：保持右边不动，改变宽度和起始位置
+   * 
+   * 宽度变化会导致文本换行改变，高度会自动重新计算
+   * 
+   * @param action 文本 action
+   * @param newWidth 新的宽度
+   * @param anchorType 锚点类型（'left' 或 'right'）
+   * @param newStartX 新的起始 X 坐标（拖拽左边时必须提供，拖拽右边时忽略）
    */
   static resizeTextWidth(
     action: DrawAction,
     newWidth: number,
-    anchorType: 'left' | 'right'
+    anchorType: 'left' | 'right',
+    newStartX?: number
   ): TransformResult {
     if (action.type !== 'text') {
       return { success: false, error: '只有文本类型支持宽度调整' };
@@ -156,21 +181,39 @@ export class TransformOperations {
     const minWidth = 20; // 最小宽度
     const clampedWidth = Math.max(minWidth, newWidth);
 
-    // 如果拖拽左边锚点，需要调整位置
+    // 📝 根据锚点类型调整位置和宽度
     let newPoints = [...(action.points || [])];
-    if (anchorType === 'left' && newPoints.length > 0) {
-      const currentWidth = textAction.width || 100;
-      const deltaWidth = clampedWidth - currentWidth;
-      newPoints[0] = {
-        x: newPoints[0].x - deltaWidth,
-        y: newPoints[0].y
-      };
+    if (newPoints.length > 0) {
+      if (anchorType === 'left') {
+        // 📝 拖拽左边锚点：保持右边不动，左边跟随鼠标
+        // 必须提供 newStartX（鼠标位置）
+        if (newStartX !== undefined) {
+          newPoints[0] = {
+            x: newStartX,
+            y: newPoints[0].y
+          };
+        } else {
+          // 如果没有提供 newStartX，根据宽度变化计算（向后兼容）
+          const currentWidth = textAction.width ?? TransformOperations.DEFAULT_TEXT_WIDTH;
+          const deltaWidth = clampedWidth - currentWidth;
+          newPoints[0] = {
+            x: newPoints[0].x - deltaWidth,
+            y: newPoints[0].y
+          };
+        }
+      } else {
+        // 📝 拖拽右边锚点：保持左边不动，只改变宽度
+        // newPoints[0] 保持不变，只更新 width
+      }
     }
 
+    // 📝 清除 height，让边界计算器根据新的 width 重新计算高度
+    // 因为宽度变化会导致文本换行改变，高度也会变化
     const updatedAction: DrawAction = {
       ...action,
       points: newPoints,
-      width: clampedWidth
+      width: clampedWidth,
+      height: undefined // 清除旧的高度，强制重新计算
     } as DrawAction;
 
     logger.debug('TransformOperations: 调整文本宽度', {

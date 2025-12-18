@@ -54,66 +54,29 @@ export class HitTestManager {
 
   /**
    * 检查点是否在文字 action 内
+   * 📝 统一使用 points[0] + width/height 规范
    */
   public isPointInTextAction(point: Point, action: DrawAction, tolerance: number): boolean {
     if (action.points.length === 0) return false;
     
+    const textAction = action as TextAction;
     const textPoint = action.points[0];
-    const textAction = action as DrawAction & { 
-      text?: string; 
-      fontSize?: number;
-      fontFamily?: string;
-      textAlign?: CanvasTextAlign;
-      textBaseline?: CanvasTextBaseline;
-    };
-    const text = textAction.text || '文字';
-    const fontSize = textAction.fontSize || 16;
-    const fontFamily = textAction.fontFamily || 'Arial';
     
-    // 尝试使用 Canvas 精确测量文字宽度
-    let width: number;
-    let height: number;
-    
-    try {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.font = `${fontSize}px ${fontFamily}`;
-        const metrics = ctx.measureText(text);
-        width = metrics.width;
-        height = (metrics.actualBoundingBoxAscent || fontSize * 0.8) + 
-                 (metrics.actualBoundingBoxDescent || fontSize * 0.2);
-      } else {
-        width = text.length * fontSize * 0.6;
-        height = fontSize;
-      }
-    } catch {
-      width = text.length * fontSize * 0.6;
-      height = fontSize;
+    if (!textPoint || !isFinite(textPoint.x) || !isFinite(textPoint.y)) {
+      return false;
     }
     
-    // 考虑文字对齐方式
-    let x = textPoint.x;
-    const textAlign = textAction.textAlign || 'left';
-    if (textAlign === 'center') {
-      x = textPoint.x - width / 2;
-    } else if (textAlign === 'right') {
-      x = textPoint.x - width;
+    // 📝 统一使用 getActionBoundingBox 获取文本边界框
+    const bounds = this.getActionBoundingBox(action);
+    if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+      return false;
     }
     
-    // 考虑文字基线
-    let y = textPoint.y;
-    const textBaseline = textAction.textBaseline || 'top';
-    if (textBaseline === 'middle') {
-      y = textPoint.y - height / 2;
-    } else if (textBaseline === 'bottom') {
-      y = textPoint.y - height;
-    }
-    
-    return point.x >= x - tolerance &&
-           point.x <= x + width + tolerance &&
-           point.y >= y - tolerance &&
-           point.y <= y + height + tolerance;
+    // 检查点是否在边界框内（考虑容差）
+    return point.x >= bounds.x - tolerance &&
+           point.x <= bounds.x + bounds.width + tolerance &&
+           point.y >= bounds.y - tolerance &&
+           point.y <= bounds.y + bounds.height + tolerance;
   }
 
   /**
@@ -474,7 +437,14 @@ export class HitTestManager {
         return { x: 0, y: 0, width: 0, height: 0 };
       }
       
-      // 如果 TextAction 已经存储了宽高，直接使用
+      const text = textAction.text || '';
+      const fontSize = textAction.fontSize || 16;
+      const lineHeight = fontSize * (textAction.lineHeight ?? 1.2);
+      
+      // 📝 如果 width 存在，使用它（可能是调整后的宽度）
+      const width = textAction.width || this.estimateTextWidth(text, fontSize);
+      
+      // 📝 如果 height 存在且 width 也存在，直接使用（两者都有效）
       if (textAction.width && textAction.height && textAction.width > 0 && textAction.height > 0) {
         return {
           x: point.x,
@@ -484,30 +454,25 @@ export class HitTestManager {
         };
       }
       
-      // 否则根据文本内容和字体大小估算
-      const text = textAction.text || '';
-      const fontSize = textAction.fontSize || 16;
-      
-      // 估算文本宽度：中文字符约等于 fontSize，英文字符约等于 fontSize * 0.6
-      // 这是一个粗略估计，实际宽度需要 canvas context 来测量
-      let estimatedWidth = 0;
-      for (const char of text) {
-        // 判断是否是中文字符（或其他宽字符）
-        if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
-          estimatedWidth += fontSize;
-        } else {
-          estimatedWidth += fontSize * 0.6;
-        }
+      // 📝 如果 width 存在但 height 不存在，需要估算多行文本的高度
+      if (textAction.width && textAction.width > 0) {
+        const height = this.estimateMultilineTextHeight(text, fontSize, lineHeight, textAction.width);
+        return {
+          x: point.x,
+          y: point.y,
+          width: textAction.width,
+          height
+        };
       }
       
-      // 最小宽度为一个字符宽度
-      const width = Math.max(estimatedWidth, fontSize);
-      const height = fontSize * 1.2; // 行高约为字体大小的 1.2 倍
+      // 📝 否则根据文本内容和字体大小估算单行文本
+      const estimatedWidth = this.estimateTextWidth(text, fontSize);
+      const height = lineHeight;
       
       return {
         x: point.x,
         y: point.y,
-        width,
+        width: Math.max(estimatedWidth, fontSize),
         height
       };
     }
@@ -536,6 +501,52 @@ export class HitTestManager {
       width: Math.max(maxX - minX, 1),
       height: Math.max(maxY - minY, 1)
     };
+  }
+  
+  /**
+   * 估算文本宽度（单行）
+   */
+  private estimateTextWidth(text: string, fontSize: number): number {
+    let estimatedWidth = 0;
+    for (const char of text) {
+      // 判断是否是中文字符（或其他宽字符）
+      if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
+        estimatedWidth += fontSize;
+      } else {
+        estimatedWidth += fontSize * 0.6;
+      }
+    }
+    return Math.max(estimatedWidth, fontSize);
+  }
+  
+  /**
+   * 估算多行文本的高度
+   * 根据文本宽度和内容估算行数
+   */
+  private estimateMultilineTextHeight(text: string, fontSize: number, lineHeight: number, maxWidth: number): number {
+    if (!text || maxWidth <= 0) {
+      return lineHeight;
+    }
+    
+    // 按换行符分割段落
+    const paragraphs = text.split('\n');
+    let totalLines = 0;
+    
+    // 估算每行的字符数（中文字符宽度 = fontSize，英文字符宽度 = fontSize * 0.6）
+    const avgCharWidth = fontSize * 0.8; // 平均字符宽度
+    const charsPerLine = Math.max(1, Math.floor(maxWidth / avgCharWidth));
+    
+    for (const paragraph of paragraphs) {
+      if (paragraph.length === 0) {
+        totalLines += 1; // 空行
+      } else {
+        // 估算这个段落需要多少行
+        const paragraphLines = Math.ceil(paragraph.length / charsPerLine);
+        totalLines += Math.max(1, paragraphLines);
+      }
+    }
+    
+    return Math.max(lineHeight, totalLines * lineHeight);
   }
 }
 

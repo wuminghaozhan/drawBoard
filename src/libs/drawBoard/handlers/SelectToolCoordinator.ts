@@ -8,6 +8,8 @@ import type { DrawEvent } from '../infrastructure/events/EventManager';
 import { ToolTypeGuards, type SelectToolInterface } from '../tools/ToolInterfaces';
 import { logger } from '../infrastructure/logging/Logger';
 import { EventBus, type DrawBoardEvents } from '../infrastructure/events/EventBus';
+import type { TextAction } from '../types/TextTypes';
+import { boundsCalculator } from '../tools/select/BoundsCalculator';
 
 /**
  * SelectTool 协调器配置
@@ -287,6 +289,19 @@ export class SelectToolCoordinator {
   public handleUpdatedActions(updatedActions: DrawAction | DrawAction[]): void {
     const actionsArray = Array.isArray(updatedActions) ? updatedActions : [updatedActions];
     
+    // 📝 调试日志：检查文本宽度是否正确传递
+    for (const action of actionsArray) {
+      if (action.type === 'text') {
+        const textAction = action as DrawAction & { width?: number; height?: number };
+        logger.debug('handleUpdatedActions: 准备更新文本action', {
+          actionId: action.id,
+          width: textAction.width,
+          height: textAction.height,
+          points: action.points[0]
+        });
+      }
+    }
+    
     // 发出选择变更事件
     this.emitSelectionChanged(actionsArray.map(a => a.id));
     
@@ -296,15 +311,60 @@ export class SelectToolCoordinator {
       const hasChanges = this.hasActionChanges(this.transformStartActions, actionsArray);
       
       if (hasChanges) {
+        // 📝 深拷贝确保数据完整性
+        const afterActions = actionsArray.map(a => JSON.parse(JSON.stringify(a)));
+        
+        // 📝 调试日志：检查文本宽度是否正确传递
+        for (const action of afterActions) {
+          if (action.type === 'text') {
+            const textAction = action as DrawAction & { width?: number; height?: number };
+            logger.info('handleUpdatedActions: 准备记录文本变形', {
+              actionId: action.id,
+              width: textAction.width,
+              height: textAction.height,
+              points: action.points[0]
+            });
+          }
+        }
+        
         // 记录变形操作（支持 undo/redo）
         const transformId = this.historyManager.recordTransform(
           this.transformStartActions,
-          actionsArray
+          afterActions
         );
+        // 📝 调试日志：检查文本宽度是否正确记录
+        const textActionsInfo = actionsArray.filter(a => a.type === 'text').map(a => {
+          const textAction = a as DrawAction & { width?: number; height?: number };
+          return { 
+            id: a.id, 
+            width: textAction.width, 
+            height: textAction.height,
+            points: a.points[0]
+          };
+        });
+        
         logger.info('变形操作已记录', { 
           transformId, 
-          actionsCount: actionsArray.length 
+          actionsCount: actionsArray.length,
+          textActions: textActionsInfo
         });
+        
+        // 📝 额外日志：检查 afterActions 中的数据
+        const afterTextActions = afterActions.filter(a => a.type === 'text').map(a => {
+          const textAction = a as DrawAction & { width?: number; height?: number };
+          return { 
+            id: a.id, 
+            width: textAction.width, 
+            height: textAction.height,
+            points: a.points[0]
+          };
+        });
+        
+        if (afterTextActions.length > 0) {
+          logger.info('handleUpdatedActions: afterActions中的文本数据', {
+            afterTextActions
+          });
+        }
       } else {
         logger.debug('变形操作无变化，跳过记录');
       }
@@ -314,14 +374,27 @@ export class SelectToolCoordinator {
       this.isTransforming = false;
     } else {
       // 非变形操作，直接更新（如新建选择等）
+      // 📝 深拷贝确保数据完整性
       for (const action of actionsArray) {
-        this.historyManager.updateAction(action);
+        const actionCopy = JSON.parse(JSON.stringify(action));
+        this.historyManager.updateAction(actionCopy);
       }
     }
     
     // 发出 action 更新事件
     for (const action of actionsArray) {
-      this.emitActionUpdated(action.id, { points: action.points });
+      // 📝 文本类型需要包含 width 和 height 的更新
+      const updateData: Record<string, unknown> = { points: action.points };
+      if (action.type === 'text') {
+        const textAction = action as DrawAction & { width?: number; height?: number };
+        if (textAction.width !== undefined) {
+          updateData.width = textAction.width;
+        }
+        if (textAction.height !== undefined) {
+          updateData.height = textAction.height;
+        }
+      }
+      this.emitActionUpdated(action.id, updateData);
       
       // 标记虚拟图层缓存过期
       if (action.virtualLayerId && this.virtualLayerManager) {
@@ -340,12 +413,14 @@ export class SelectToolCoordinator {
 
   /**
    * 检查 actions 是否有变化
-   * 比较点位置来判断是否真的发生了变形
+   * 比较点位置和其他关键属性来判断是否真的发生了变形
    */
   private hasActionChanges(beforeActions: DrawAction[], afterActions: DrawAction[]): boolean {
     if (beforeActions.length !== afterActions.length) {
       return true;
     }
+    
+    const tolerance = 0.01;
     
     for (let i = 0; i < beforeActions.length; i++) {
       const before = beforeActions[i];
@@ -361,11 +436,30 @@ export class SelectToolCoordinator {
       }
       
       // 比较每个点的位置（允许微小误差）
-      const tolerance = 0.01;
       for (let j = 0; j < before.points.length; j++) {
         const dx = Math.abs(before.points[j].x - after.points[j].x);
         const dy = Math.abs(before.points[j].y - after.points[j].y);
         if (dx > tolerance || dy > tolerance) {
+          return true;
+        }
+      }
+      
+      // 📝 文本类型：检查关键属性变化（width, fontSize, fontWeight）
+      if (before.type === 'text' && after.type === 'text') {
+        const beforeText = before as TextAction;
+        const afterText = after as TextAction;
+        
+        // 检查 width 属性变化
+        const beforeWidth = beforeText.width ?? 0;
+        const afterWidth = afterText.width ?? 0;
+        if (Math.abs(beforeWidth - afterWidth) > tolerance) {
+          return true;
+        }
+        
+        // 检查 fontSize 属性变化（虽然通常通过缩放改变，但也要检查）
+        const beforeFontSize = beforeText.fontSize ?? 16;
+        const afterFontSize = afterText.fontSize ?? 16;
+        if (Math.abs(beforeFontSize - afterFontSize) > tolerance) {
           return true;
         }
       }
@@ -458,6 +552,92 @@ export class SelectToolCoordinator {
 
       // 获取所有 actions
       const allActions = this.historyManager.getAllActions();
+      
+      // 📝 检查并修正文本高度（如果文本有 width 但 height 不正确）
+      // 📝 这是因为文本创建时可能只设置了单行高度，但实际文本可能有折行
+      // 📝 或者文本宽度被调整后，高度没有正确更新
+      for (const action of allActions) {
+        if (action.type === 'text') {
+          const textAction = action as DrawAction & { width?: number; height?: number; text?: string; fontSize?: number };
+          if (textAction.width && textAction.width > 0) {
+            // 📝 临时清除 height，强制重新计算
+            const originalHeight = textAction.height;
+            const text = textAction.text || '';
+            const fontSize = textAction.fontSize || 16;
+            
+            logger.info('syncLayerDataToSelectTool: 检查文本高度', {
+              actionId: action.id,
+              width: textAction.width,
+              originalHeight,
+              textLength: text.length,
+              fontSize,
+              textPreview: text.substring(0, 30) // 预览前30个字符
+            });
+            
+            textAction.height = undefined;
+            // 重新计算边界框（会使用 estimateMultilineTextHeight）
+            const bounds = boundsCalculator.calculate(action);
+            // 📝 恢复原始 height（如果计算失败）
+            if (!bounds || bounds.height <= 0) {
+              textAction.height = originalHeight;
+              logger.warn('syncLayerDataToSelectTool: 文本高度计算失败', {
+                actionId: action.id,
+                bounds
+              });
+              continue;
+            }
+            
+            logger.info('syncLayerDataToSelectTool: 文本高度计算结果', {
+              actionId: action.id,
+              originalHeight,
+              calculatedHeight: bounds.height,
+              difference: originalHeight !== undefined ? Math.abs(originalHeight - bounds.height) : 'undefined',
+              willUpdate: originalHeight === undefined || Math.abs(originalHeight - bounds.height) > 0.01
+            });
+            
+            // 📝 如果计算出的高度与当前高度不一致，更新高度并同步到历史记录
+            if (originalHeight === undefined || Math.abs(originalHeight - bounds.height) > 0.01) {
+              textAction.height = bounds.height;
+              // 同步到历史记录
+              this.historyManager.updateActionWithoutHistory(action);
+              logger.info('syncLayerDataToSelectTool: 文本高度已修正', {
+                actionId: action.id,
+                width: textAction.width,
+                oldHeight: originalHeight,
+                newHeight: bounds.height,
+                text: text.substring(0, 30) // 只记录前30个字符
+              });
+            } else {
+              // 📝 恢复原始 height（如果高度正确）
+              textAction.height = originalHeight;
+              logger.info('syncLayerDataToSelectTool: 文本高度正确，无需修正', {
+                actionId: action.id,
+                height: originalHeight,
+                calculatedHeight: bounds.height
+              });
+            }
+          }
+        }
+      }
+      
+      // 📝 调试日志：检查文本宽度是否正确从历史记录获取
+      const textActions = allActions.filter(a => a.type === 'text');
+      if (textActions.length > 0) {
+        const textActionsInfo = textActions.map(a => {
+          const textAction = a as DrawAction & { width?: number; height?: number };
+          return { 
+            id: a.id, 
+            width: textAction.width, 
+            height: textAction.height,
+            points: a.points[0]
+          };
+        });
+        logger.info('syncLayerDataToSelectTool: 从历史记录获取文本actions', {
+          textActions: textActionsInfo,
+          totalActions: allActions.length
+        });
+      }
+      
       let layerActions = allActions;
 
       // 根据虚拟图层模式过滤 actions

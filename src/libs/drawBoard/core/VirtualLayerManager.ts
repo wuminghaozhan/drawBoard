@@ -1784,21 +1784,6 @@ export class VirtualLayerManager {
     logger.debug('更新图层的动态图层:', layer.name, 'oldZIndex:', oldZIndex, 'newZIndex:', layer.zIndex);
   }
 
-  /**
-   * 将图层移到最上层
-   */
-  public moveLayerToTop(layerId: string): boolean {
-    const allLayers = this.getAllVirtualLayers();
-    const maxIndex = allLayers.length - 1;
-    return this.reorderLayer(layerId, maxIndex);
-  }
-
-  /**
-   * 将图层移到最下层
-   */
-  public moveLayerToBottom(layerId: string): boolean {
-    return this.reorderLayer(layerId, 0);
-  }
 
   /**
    * 将图层上移一层

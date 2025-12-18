@@ -202,6 +202,13 @@ export class AnchorDragHandler {
    * 处理文本宽度拖拽（文本框模式）
    * 拖拽左右边中点调整文本框宽度，文字自动换行
    */
+  /**
+   * 处理文本宽度拖拽（文本框模式）
+   * 📝 左右锚点拖拽都能实时改变文本宽度
+   * - 拖拽右边：保持左边不动，宽度 = 鼠标位置 - 起始位置
+   * - 拖拽左边：保持右边不动，宽度 = 原始右边位置 - 鼠标位置，起始位置 = 鼠标位置
+   * 宽度变化会导致文本换行改变，高度也会自动重新计算
+   */
   private handleTextWidthDrag(
     action: DrawAction,
     anchor: AnchorPoint,
@@ -211,33 +218,53 @@ export class AnchorDragHandler {
       return { success: false, error: '未开始拖拽' };
     }
 
-    const { startBounds, startPoint } = this.state;
-    const deltaX = currentPoint.x - startPoint.x;
+    const { startBounds, startAction } = this.state;
+    
+    // 📝 获取拖拽开始时的原始状态
+    const originalAction = startAction || action;
+    const originalTextAction = originalAction as DrawAction & { width?: number };
+    
+    // 原始文本的起始位置（points[0].x）
+    const originalStartX = originalAction.points[0]?.x ?? startBounds.x;
+    
+    // 原始文本的宽度
+    const originalWidth = originalTextAction.width ?? startBounds.width ?? TransformOperations.DEFAULT_TEXT_WIDTH;
+    
+    // 原始文本的右边界位置（用于拖拽左边时保持右边不动）
+    const originalRightX = originalStartX + originalWidth;
     
     // 根据锚点类型确定是左边还是右边
     const isLeftAnchor = ['left', 'resize-w'].includes(anchor.type);
     const isRightAnchor = ['right', 'resize-e'].includes(anchor.type);
     
     let newWidth: number;
+    let newStartX: number;
     let anchorSide: 'left' | 'right';
     
     if (isRightAnchor) {
-      // 拖拽右边：宽度 = 起始宽度 + deltaX
-      newWidth = startBounds.width + deltaX;
+      // 📝 拖拽右边锚点：保持左边不动，右边跟随鼠标
+      // 新的宽度 = 鼠标位置 - 起始位置
+      newStartX = originalStartX; // 保持左边不动
+      newWidth = currentPoint.x - originalStartX;
       anchorSide = 'right';
     } else if (isLeftAnchor) {
-      // 拖拽左边：宽度 = 起始宽度 - deltaX（同时位置要左移）
-      newWidth = startBounds.width - deltaX;
+      // 📝 拖拽左边锚点：保持右边不动，左边跟随鼠标
+      // 新的宽度 = 原始右边位置 - 鼠标位置
+      // 新的起始位置 = 鼠标位置
+      newStartX = currentPoint.x; // 左边跟随鼠标
+      newWidth = originalRightX - currentPoint.x;
       anchorSide = 'left';
     } else {
       return { success: false, error: '非水平边锚点' };
     }
 
-    // 调用 TransformOperations 调整宽度
+    // 📝 调用 TransformOperations 调整宽度和位置
+    // 宽度变化会自动清除 height，让边界计算器根据新的 width 重新计算高度
     const result = TransformOperations.resizeTextWidth(
-      this.state.startAction || action,
+      originalAction,
       newWidth,
-      anchorSide
+      anchorSide,
+      newStartX
     );
 
     if (result.success && result.action) {
@@ -247,9 +274,10 @@ export class AnchorDragHandler {
       
       logger.debug('文本宽度拖拽', { 
         anchorSide, 
-        oldWidth: startBounds.width, 
-        newWidth,
-        deltaX
+        oldWidth: originalWidth, 
+        newWidth: result.action.width,
+        originalStartX,
+        newStartX: result.action.points[0]?.x
       });
       
       return { success: true, action: result.action };

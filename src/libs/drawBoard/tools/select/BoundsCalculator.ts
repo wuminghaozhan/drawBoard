@@ -282,7 +282,14 @@ export class BoundsCalculator {
       return { x: 0, y: 0, width: 0, height: 0 };
     }
     
-    // 如果 TextAction 已经存储了宽高，直接使用
+    const text = textAction.text || '';
+    const fontSize = textAction.fontSize || 16;
+    const lineHeight = fontSize * (textAction.lineHeight ?? 1.2);
+    
+    // 📝 如果 width 存在，使用它（可能是调整后的宽度）
+    const width = textAction.width || this.estimateTextWidth(text, fontSize);
+    
+    // 📝 如果 height 存在且 width 也存在，直接使用（两者都有效）
     if (textAction.width && textAction.height && textAction.width > 0 && textAction.height > 0) {
       return {
         x: point.x,
@@ -292,11 +299,33 @@ export class BoundsCalculator {
       };
     }
     
-    // 否则根据文本内容和字体大小估算
-    const text = textAction.text || '';
-    const fontSize = textAction.fontSize || 16;
+    // 📝 如果 width 存在但 height 不存在，需要估算多行文本的高度
+    if (textAction.width && textAction.width > 0) {
+      const height = this.estimateMultilineTextHeight(text, fontSize, lineHeight, textAction.width);
+      return {
+        x: point.x,
+        y: point.y,
+        width: textAction.width,
+        height
+      };
+    }
     
-    // 估算文本宽度：中文字符约等于 fontSize，英文字符约等于 fontSize * 0.6
+    // 📝 否则根据文本内容和字体大小估算单行文本
+    const estimatedWidth = this.estimateTextWidth(text, fontSize);
+    const height = lineHeight;
+    
+    return {
+      x: point.x,
+      y: point.y,
+      width: Math.max(estimatedWidth, fontSize),
+      height
+    };
+  }
+  
+  /**
+   * 估算文本宽度（单行）
+   */
+  private estimateTextWidth(text: string, fontSize: number): number {
     let estimatedWidth = 0;
     for (const char of text) {
       // 判断是否是中文字符（或其他宽字符）
@@ -306,17 +335,110 @@ export class BoundsCalculator {
         estimatedWidth += fontSize * 0.6;
       }
     }
+    return Math.max(estimatedWidth, fontSize);
+  }
+  
+  /**
+   * 估算多行文本的高度
+   * 根据文本宽度和内容估算行数
+   * 📝 改进：使用更准确的字符宽度计算，避免低估折行
+   * 📝 性能优化：短文本逐字符计算（准确），长文本批量计算（快速）
+   */
+  private estimateMultilineTextHeight(text: string, fontSize: number, lineHeight: number, maxWidth: number): number {
+    if (!text || maxWidth <= 0) {
+      return lineHeight;
+    }
     
-    // 最小宽度为一个字符宽度
-    const width = Math.max(estimatedWidth, fontSize);
-    const height = fontSize * 1.2; // 行高约为字体大小的 1.2 倍
+    // 按换行符分割段落
+    const paragraphs = text.split('\n');
+    let totalLines = 0;
     
-    return {
-      x: point.x,
-      y: point.y,
-      width,
-      height
-    };
+    // 📝 性能优化：对于短文本使用逐字符计算（更准确），长文本使用批量计算（更快速）
+    const PERFORMANCE_THRESHOLD = 100; // 字符数阈值
+    
+    for (const paragraph of paragraphs) {
+      if (paragraph.length === 0) {
+        totalLines += 1; // 空行
+      } else if (paragraph.length < PERFORMANCE_THRESHOLD) {
+        // 📝 短文本：逐字符计算（准确）
+        totalLines += this.calculateLinesByChar(paragraph, fontSize, maxWidth);
+      } else {
+        // 📝 长文本：批量计算（快速）
+        totalLines += this.calculateLinesByBatch(paragraph, fontSize, maxWidth);
+      }
+    }
+    
+    return Math.max(lineHeight, totalLines * lineHeight);
+  }
+
+  /**
+   * 逐字符计算行数（准确但较慢）
+   * 适用于短文本（< 100字符）
+   */
+  private calculateLinesByChar(paragraph: string, fontSize: number, maxWidth: number): number {
+    let currentLineWidth = 0;
+    let paragraphLines = 1; // 至少一行
+    
+    for (const char of paragraph) {
+      // 判断字符类型，使用对应的宽度
+      let charWidth: number;
+      if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
+        // 中文字符：宽度 = fontSize
+        charWidth = fontSize;
+      } else {
+        // 英文字符：宽度 = fontSize * 0.6
+        charWidth = fontSize * 0.6;
+      }
+      
+      // 如果当前行加上这个字符会超出宽度，换行
+      if (currentLineWidth + charWidth > maxWidth && currentLineWidth > 0) {
+        paragraphLines++;
+        currentLineWidth = charWidth; // 新行的第一个字符
+      } else {
+        currentLineWidth += charWidth;
+      }
+    }
+    
+    return paragraphLines;
+  }
+
+  /**
+   * 批量计算行数（快速但可能不够准确）
+   * 适用于长文本（>= 100字符）
+   * 📝 优化：先统计中文字符和英文字符的数量，然后估算
+   */
+  private calculateLinesByBatch(paragraph: string, fontSize: number, maxWidth: number): number {
+    // 统计中文字符和英文字符的数量
+    let chineseCharCount = 0;
+    let englishCharCount = 0;
+    
+    for (const char of paragraph) {
+      if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
+        chineseCharCount++;
+      } else {
+        englishCharCount++;
+      }
+    }
+    
+    // 计算总宽度
+    const totalWidth = chineseCharCount * fontSize + englishCharCount * fontSize * 0.6;
+    
+    // 如果总宽度小于等于maxWidth，只需要一行
+    if (totalWidth <= maxWidth) {
+      return 1;
+    }
+    
+    // 📝 使用更保守的估算：假设每行平均字符数
+    // 中文字符宽度 = fontSize，英文字符宽度 = fontSize * 0.6
+    // 平均字符宽度 = (chineseCharCount * fontSize + englishCharCount * fontSize * 0.6) / totalChars
+    const totalChars = paragraph.length;
+    const avgCharWidth = totalWidth / totalChars;
+    const charsPerLine = Math.max(1, Math.floor(maxWidth / avgCharWidth));
+    
+    // 估算行数（保守估算，向上取整）
+    const estimatedLines = Math.ceil(totalChars / charsPerLine);
+    
+    return Math.max(1, estimatedLines);
   }
 
   /**

@@ -597,21 +597,46 @@ export class DrawBoardSelectionAPI {
         textAction.fontWeight = style.fontWeight;
       }
       
-      // 重新计算文本边界（fontSize 或 fontWeight 改变会影响尺寸）
+      // 📝 重新计算文本边界（fontSize 或 fontWeight 改变会影响尺寸）
+      // 如果文本有 width（多行模式），保持 width，只重新计算 height
+      // 如果文本没有 width（单行模式），重新计算 width 和 height
       if (style.fontSize !== undefined || style.fontWeight !== undefined) {
-        const text = (textAction as import('../types/TextTypes').TextAction).text || '';
+        const textActionTyped = textAction as import('../types/TextTypes').TextAction;
+        const text = textActionTyped.text || '';
         const fontSize = textAction.fontSize || 16;
-        // 重新估算文本宽高
-        let estimatedWidth = 0;
-        for (const char of text) {
-          if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
-            estimatedWidth += fontSize;
-          } else {
-            estimatedWidth += fontSize * 0.6;
+        const lineHeight = fontSize * 1.2;
+        
+        if (textActionTyped.width && textActionTyped.width > 0) {
+          // 📝 多行模式：保持 width，重新计算 height
+          // 估算多行文本高度
+          const avgCharWidth = fontSize * 0.8;
+          const charsPerLine = Math.max(1, Math.floor(textActionTyped.width / avgCharWidth));
+          const paragraphs = text.split('\n');
+          let totalLines = 0;
+          
+          for (const paragraph of paragraphs) {
+            if (paragraph.length === 0) {
+              totalLines += 1;
+            } else {
+              const paragraphLines = Math.ceil(paragraph.length / charsPerLine);
+              totalLines += Math.max(1, paragraphLines);
+            }
           }
+          
+          textActionTyped.height = Math.max(lineHeight, totalLines * lineHeight);
+        } else {
+          // 📝 单行模式：重新计算 width 和 height
+          let estimatedWidth = 0;
+          for (const char of text) {
+            if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
+              estimatedWidth += fontSize;
+            } else {
+              estimatedWidth += fontSize * 0.6;
+            }
+          }
+          textActionTyped.width = Math.max(estimatedWidth, fontSize);
+          textActionTyped.height = lineHeight;
         }
-        (textAction as import('../types/TextTypes').TextAction).width = Math.max(estimatedWidth, fontSize);
-        (textAction as import('../types/TextTypes').TextAction).height = fontSize * 1.2;
       }
 
       // 同步到 HistoryManager

@@ -455,20 +455,45 @@ export class SelectTool extends DrawTool {
         textAction.fontWeight = style.fontWeight;
       }
       
-      // 重新计算文本边界
+      // 📝 重新计算文本边界
+      // 如果文本有 width（多行模式），保持 width，只重新计算 height
+      // 如果文本没有 width（单行模式），重新计算 width 和 height
       if (style.fontSize !== undefined || style.fontWeight !== undefined) {
         const text = textAction.text || '';
         const fontSize = textAction.fontSize || 16;
-        let estimatedWidth = 0;
-        for (const char of text) {
-          if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
-            estimatedWidth += fontSize;
-          } else {
-            estimatedWidth += fontSize * 0.6;
+        const lineHeight = fontSize * 1.2;
+        
+        if (textAction.width && textAction.width > 0) {
+          // 📝 多行模式：保持 width，重新计算 height
+          // 估算多行文本高度
+          const avgCharWidth = fontSize * 0.8;
+          const charsPerLine = Math.max(1, Math.floor(textAction.width / avgCharWidth));
+          const paragraphs = text.split('\n');
+          let totalLines = 0;
+          
+          for (const paragraph of paragraphs) {
+            if (paragraph.length === 0) {
+              totalLines += 1;
+            } else {
+              const paragraphLines = Math.ceil(paragraph.length / charsPerLine);
+              totalLines += Math.max(1, paragraphLines);
+            }
           }
+          
+          textAction.height = Math.max(lineHeight, totalLines * lineHeight);
+        } else {
+          // 📝 单行模式：重新计算 width 和 height
+          let estimatedWidth = 0;
+          for (const char of text) {
+            if (/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(char)) {
+              estimatedWidth += fontSize;
+            } else {
+              estimatedWidth += fontSize * 0.6;
+            }
+          }
+          textAction.width = Math.max(estimatedWidth, fontSize);
+          textAction.height = lineHeight;
         }
-        textAction.width = Math.max(estimatedWidth, fontSize);
-        textAction.height = fontSize * 1.2;
       }
     });
     
@@ -560,18 +585,39 @@ export class SelectTool extends DrawTool {
       const newActionIdSet = new Set(actions.map(a => a.id));
       const prevActionIdSet = new Set(previousAllActions.map(a => a.id));
       
-      // 过滤选中的actions，只保留有效的actions
-      const filteredActions = this.selectedActions.filter(selectedAction => {
+      // 📝 过滤选中的actions，并使用新的actions数据替换旧的选中actions
+      // 这样可以确保拖拽后的更新不会被历史记录中的旧数据覆盖
+      const filteredActions = this.selectedActions.map(selectedAction => {
         // 首先检查新的actions中是否有这个action（O(1) 查找）
         if (newActionIdSet.has(selectedAction.id)) {
-          return true;
+          // 📝 使用新的action数据替换旧的选中action，确保数据是最新的
+          const newAction = actions.find(a => a.id === selectedAction.id);
+          if (newAction) {
+            // 📝 调试日志：检查文本宽度是否正确同步
+            if (newAction.type === 'text') {
+              const oldTextAction = selectedAction as DrawAction & { width?: number; height?: number };
+              const newTextAction = newAction as DrawAction & { width?: number; height?: number };
+              logger.info('setLayerActions: 同步文本action', {
+                actionId: newAction.id,
+                oldWidth: oldTextAction.width,
+                newWidth: newTextAction.width,
+                oldHeight: oldTextAction.height,
+                newHeight: newTextAction.height,
+                oldPoints: selectedAction.points[0],
+                newPoints: newAction.points[0]
+              });
+            }
+            // 📝 深拷贝确保数据完整性
+            return JSON.parse(JSON.stringify(newAction));
+          }
+          return selectedAction;
         }
         
         // 如果没找到，检查之前的allActions中是否有这个action（O(1) 查找）
         // 【注意】这是为了处理 individual 模式下图层切换的过渡期
         // 在 individual 模式下，每个 action 有自己的图层，setLayerActions 可能传入所有 actions
         if (prevActionIdSet.has(selectedAction.id)) {
-          return true;
+          return selectedAction;
         }
         
         // 【安全检查】只有在 individual 模式下且有 virtualLayerId 时才保留
@@ -584,21 +630,61 @@ export class SelectTool extends DrawTool {
             virtualLayerId: selectedAction.virtualLayerId
           });
           // 保守起见仍然保留，但记录警告便于排查
-          return true;
+          return selectedAction;
         }
         
-        return false;
-      });
+        return null;
+      }).filter((action): action is DrawAction => action !== null);
       
       this.selectedActions = filteredActions;
       
-      // 如果选中的 actions 发生变化，更新变换模式
-      this.clearAnchorCache(); // 统一清除锚点缓存
+      // 📝 如果选中的 actions 发生变化，更新变换模式
+      // 📝 重要：同步 selectedActionForTransform，确保数据一致性
       if (this.selectedActions.length === 1) {
+        // 📝 对于文本类型，如果 width 存在但 height 不存在或不正确，重新计算高度
+        // 📝 这是因为文本创建时可能只设置了单行高度，但实际文本可能有折行
+        if (this.selectedActions[0].type === 'text') {
+          const textAction = this.selectedActions[0] as DrawAction & { width?: number; height?: number };
+          if (textAction.width && textAction.width > 0) {
+            // 清除缓存，确保重新计算
+            this.boundsCacheManager.deleteForAction(textAction.id);
+            // 重新计算边界框
+            const bounds = this.boundsCalculator.calculate(textAction);
+            // 📝 保存旧高度用于日志
+            const oldHeight = textAction.height;
+            // 📝 如果计算出的高度与当前高度不一致，更新高度
+            if (textAction.height === undefined || Math.abs(textAction.height - bounds.height) > 0.01) {
+              textAction.height = bounds.height;
+              logger.debug('setLayerActions: 文本高度已重新计算', {
+                actionId: textAction.id,
+                width: textAction.width,
+                oldHeight,
+                newHeight: bounds.height
+              });
+            }
+          }
+        }
+        
+        // 📝 深拷贝确保数据完整性
+        this.selectedActionForTransform = JSON.parse(JSON.stringify(this.selectedActions[0]));
         this.enterTransformMode(this.selectedActions[0]);
       } else {
+        this.selectedActionForTransform = null;
         this.exitTransformMode();
       }
+      
+      // 📝 调试日志：检查文本宽度是否正确同步
+      if (this.selectedActions.length === 1 && this.selectedActions[0].type === 'text') {
+        const textAction = this.selectedActions[0] as DrawAction & { width?: number; height?: number };
+        logger.debug('setLayerActions: 文本action同步完成', {
+          actionId: this.selectedActions[0].id,
+          width: textAction.width,
+          height: textAction.height,
+          hasSelectedActionForTransform: !!this.selectedActionForTransform
+        });
+      }
+      
+      this.clearAnchorCache(); // 统一清除锚点缓存
     }
     
     this.clearBoundsCache();
@@ -791,12 +877,43 @@ export class SelectTool extends DrawTool {
   /**
    * 获取action的边界框
    * 委托给 BoundsCalculator 处理，使用 BoundsCacheManager 缓存
+   * 📝 文本类型需要特殊处理：width 和 height 变化时需要清除缓存
    */
   private getActionBoundingBox(action: DrawAction): { x: number; y: number; width: number; height: number } {
-    // 检查缓存
-    const cachedBounds = this.boundsCacheManager.getForAction(action);
-    if (cachedBounds) {
-      return cachedBounds;
+    // 📝 文本类型：检查 width 和 height 是否变化，如果变化则清除缓存
+    if (action.type === 'text') {
+      const textAction = action as DrawAction & { width?: number; height?: number };
+      const cachedBounds = this.boundsCacheManager.getForAction(action);
+      
+      // 📝 如果缓存存在，检查 width 和 height 是否匹配
+      if (cachedBounds) {
+        const cachedWidth = cachedBounds.width;
+        const cachedHeight = cachedBounds.height;
+        const currentWidth = textAction.width;
+        const currentHeight = textAction.height;
+        
+        // 📝 如果 width 或 height 不匹配，清除缓存
+        if ((currentWidth !== undefined && Math.abs(cachedWidth - currentWidth) > 0.01) ||
+            (currentHeight !== undefined && Math.abs(cachedHeight - currentHeight) > 0.01)) {
+          this.boundsCacheManager.deleteForAction(action.id);
+          logger.debug('getActionBoundingBox: 文本width/height变化，清除缓存', {
+            actionId: action.id,
+            cachedWidth,
+            currentWidth,
+            cachedHeight,
+            currentHeight
+          });
+        } else {
+          // 📝 缓存仍然有效
+          return cachedBounds;
+        }
+      }
+    } else {
+      // 📝 非文本类型：正常使用缓存
+      const cachedBounds = this.boundsCacheManager.getForAction(action);
+      if (cachedBounds) {
+        return cachedBounds;
+      }
     }
 
     // 使用 BoundsCalculator 计算
@@ -1087,7 +1204,8 @@ export class SelectTool extends DrawTool {
     
     // 🔄 添加旋转锚点（位于顶部中心上方）
     // ⚪ 圆形不需要旋转锚点，因为旋转对圆形没有意义
-    if (action.type !== 'circle') {
+    // 📝 文本不需要旋转锚点，文本旋转无实际意义
+    if (action.type !== 'circle' && action.type !== 'text') {
       const halfSize = this.anchorSize / 2;
       const rotateAnchorOffset = 25;
       this.anchorPoints.push({
@@ -2203,20 +2321,61 @@ export class SelectTool extends DrawTool {
    * 拖拽结束后同步状态并刷新缓存
    */
   private syncAndRefreshAfterDrag(): DrawAction | DrawAction[] | null {
-    // 同步变形后的 action
+    // 📝 同步变形后的 action
     if (this.selectedActions.length === 1 && this.selectedActionForTransform) {
-      this.selectedActions[0] = this.selectedActionForTransform;
+      // 📝 深拷贝确保数据完整性，避免引用问题
+      // 📝 重要：必须完整复制所有属性，包括 width 和 height
+      this.selectedActions[0] = JSON.parse(JSON.stringify(this.selectedActionForTransform));
+      
+      // 📝 对于文本类型，如果 height 是 undefined，需要重新计算并保存
+      // 📝 这是因为文本宽度变化时，height 被清除，需要根据新的 width 重新计算
+      if (this.selectedActionForTransform.type === 'text') {
+        const textAction = this.selectedActionForTransform as DrawAction & { width?: number; height?: number };
+        const syncedAction = this.selectedActions[0] as DrawAction & { width?: number; height?: number };
+        
+        // 📝 如果 width 存在但 height 不存在，重新计算高度
+        if (textAction.width && textAction.width > 0 && textAction.height === undefined) {
+          // 清除缓存，确保重新计算
+          this.boundsCacheManager.deleteForAction(textAction.id);
+          // 重新计算边界框
+          const bounds = this.boundsCalculator.calculate(textAction);
+          // 📝 保存计算出的高度（textAction 就是 selectedActionForTransform 的引用）
+          textAction.height = bounds.height;
+          syncedAction.height = bounds.height;
+          
+          logger.debug('syncAndRefreshAfterDrag: 文本高度已重新计算', {
+            actionId: textAction.id,
+            width: textAction.width,
+            height: textAction.height
+          });
+        }
+        
+        logger.debug('syncAndRefreshAfterDrag: 文本宽度拖拽完成', {
+          actionId: this.selectedActionForTransform.id,
+          originalWidth: textAction.width,
+          originalHeight: textAction.height,
+          syncedWidth: syncedAction.width,
+          syncedHeight: syncedAction.height,
+          points: this.selectedActionForTransform.points[0]
+        });
+      }
     }
     
-    // 清除并重新生成缓存
+    // 📝 清除缓存，确保使用最新的数据重新计算
+    // 📝 注意：不要在这里调用 generateResizeAnchorPoints 和 getSelectedActionsBounds
+    // 📝 因为这些会在 syncLayerDataToSelectToolImmediate 之后被调用
     this.clearBoundsCache();
     this.clearAnchorCache();
-    this.generateResizeAnchorPoints();
-    this.getSelectedActionsBounds();
     
-    return this.selectedActions.length > 1 
-      ? this.selectedActions 
-      : this.selectedActionForTransform;
+    // 📝 返回深拷贝，确保数据完整性
+    // 📝 返回的数据会被用于更新历史记录
+    if (this.selectedActions.length > 1) {
+      return this.selectedActions.map(a => JSON.parse(JSON.stringify(a)));
+    } else if (this.selectedActionForTransform) {
+      return JSON.parse(JSON.stringify(this.selectedActionForTransform));
+    }
+    
+    return null;
   }
 
   /**
@@ -2459,6 +2618,7 @@ export class SelectTool extends DrawTool {
     // 【修复】生成缓存key（基于action IDs和内容指纹，确保内容变化时缓存失效）
     // 注意：如果正在拖拽，不使用缓存，确保实时更新
     // 使用所有点坐标的累加值作为指纹，确保任意点变化时缓存失效
+    // 📝 对于文本类型，还需要包含width和height，确保文本尺寸变化时缓存失效
     const actionIds = actionsToUse.map(a => a.id).sort();
     const contentFingerprint = actionsToUse.map(a => {
       if (a.points.length === 0) return `${a.id}:empty`;
@@ -2468,7 +2628,17 @@ export class SelectTool extends DrawTool {
         sumX += p.x;
         sumY += p.y;
       }
-      return `${a.id}:${Math.round(sumX)},${Math.round(sumY)},${a.points.length}`;
+      let fingerprint = `${a.id}:${Math.round(sumX)},${Math.round(sumY)},${a.points.length}`;
+      
+      // 📝 文本类型：包含width和height，确保文本尺寸变化时缓存失效
+      if (a.type === 'text') {
+        const textAction = a as DrawAction & { width?: number; height?: number };
+        const width = textAction.width !== undefined ? Math.round(textAction.width * 100) / 100 : 'undefined';
+        const height = textAction.height !== undefined ? Math.round(textAction.height * 100) / 100 : 'undefined';
+        fingerprint += `:w${width}:h${height}`;
+      }
+      
+      return fingerprint;
     }).join('|');
     const cacheKey = `${actionIds.join(',')}_${contentFingerprint}`;
     
