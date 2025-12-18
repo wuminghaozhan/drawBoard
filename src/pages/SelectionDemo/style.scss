@@ -311,6 +311,57 @@
         }
       }
 
+      .image-controls {
+        margin-top: 15px;
+        padding: 16px;
+        background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+        border-radius: 8px;
+        border: 1px solid #ff9800;
+
+        h4 {
+          margin: 0 0 15px 0;
+          font-size: 16px;
+          color: #e65100;
+          font-weight: 600;
+        }
+
+        .demo-button.image-button {
+          display: block;
+          width: 100%;
+          padding: 10px 16px;
+          margin-bottom: 8px;
+          border: 1px solid #ff9800;
+          border-radius: 6px;
+          background: linear-gradient(135deg, #ffffff 0%, #fff8e1 100%);
+          color: #e65100;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          font-size: 14px;
+          font-weight: 500;
+
+          &:last-of-type {
+            margin-bottom: 0;
+          }
+
+          &:hover {
+            background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+            border-color: #f57c00;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 6px rgba(255, 152, 0, 0.3);
+          }
+        }
+
+        .image-tip {
+          margin: 12px 0 0 0;
+          padding: 8px 12px;
+          background: rgba(255, 255, 255, 0.7);
+          border-radius: 4px;
+          font-size: 12px;
+          color: #666;
+          line-height: 1.4;
+        }
+      }
+
       .data-controls {
         margin-top: 15px;
         padding: 16px;
@@ -459,7 +510,9 @@
         .feature-section,
         .status-section,
         .usage-tips,
-        .demo-actions {
+        .demo-actions,
+        .demo-controls,
+        .image-controls {
           margin-bottom: 15px;
           padding: 12px;
 
@@ -469,7 +522,8 @@
 
           ul li,
           .tip-item p,
-          .demo-button {
+          .demo-button,
+          .image-tip {
             font-size: 12px;
           }
         }

@@ -11,9 +11,11 @@ import { VirtualLayerManager } from './VirtualLayerManager';
 import { DrawingHandler } from '../handlers/DrawingHandler';
 import { CursorHandler } from '../handlers/CursorHandler';
 import { StateHandler } from '../handlers/StateHandler';
+import { SelectToolCoordinator } from '../handlers/SelectToolCoordinator';
 import { LightweightResourceManager } from '../utils/LightweightResourceManager';
 import type { DrawBoardConfig } from '../DrawBoard';
 import { logger } from '../infrastructure/logging/Logger';
+import type { EventBus } from '../infrastructure/events/EventBus';
 
 /**
  * 核心组件接口
@@ -39,6 +41,7 @@ export interface Handlers {
   drawingHandler: DrawingHandler;
   cursorHandler: CursorHandler;
   stateHandler: StateHandler;
+  selectToolCoordinator: SelectToolCoordinator;
 }
 
 /**
@@ -71,9 +74,17 @@ export class InitializationManager {
     // 复杂度管理器
     const complexityManager = new ComplexityManager();
     
+    // 合并虚拟图层配置和优化配置
+    const virtualLayerConfig = {
+      ...config.virtualLayerConfig,
+      // 将优化配置传递给 VirtualLayerManager
+      enableDynamicLayerSplit: config.optimizationConfig?.enableDynamicLayerSplit ?? false,
+      dynamicSplitThreshold: config.optimizationConfig?.dynamicSplitThreshold ?? 100
+    };
+    
     // 虚拟图层管理器
     const virtualLayerManager = new VirtualLayerManager(
-      config.virtualLayerConfig,
+      virtualLayerConfig,
       canvasEngine
     );
     
@@ -82,13 +93,46 @@ export class InitializationManager {
     
     // 事件管理器 - 绑定到交互层
     const interactionCanvas = canvasEngine.getLayer('interaction')?.canvas;
-    const eventManager = interactionCanvas
-      ? new EventManager(interactionCanvas)
-      : new EventManager(
-          container instanceof HTMLCanvasElement
-            ? container
-            : document.createElement('canvas')
-        );
+    
+    let eventManager: EventManager;
+    if (!interactionCanvas) {
+      logger.error('交互层canvas未找到');
+      eventManager = new EventManager(
+        container instanceof HTMLCanvasElement
+          ? container
+          : document.createElement('canvas')
+      );
+    } else {
+      logger.info('EventManager 绑定到 interaction canvas', {
+        canvas: interactionCanvas,
+        width: interactionCanvas.width,
+        height: interactionCanvas.height,
+        offsetWidth: interactionCanvas.offsetWidth,
+        offsetHeight: interactionCanvas.offsetHeight,
+        pointerEvents: getComputedStyle(interactionCanvas).pointerEvents,
+        zIndex: getComputedStyle(interactionCanvas).zIndex,
+        display: getComputedStyle(interactionCanvas).display,
+        visibility: getComputedStyle(interactionCanvas).visibility,
+        opacity: getComputedStyle(interactionCanvas).opacity
+      });
+      
+      // 验证interaction canvas是否可见且可交互
+      const computedStyle = getComputedStyle(interactionCanvas);
+      if (computedStyle.pointerEvents !== 'auto') {
+        logger.warn('⚠️ Interaction canvas的pointer-events不是auto，可能无法接收事件！', {
+          pointerEvents: computedStyle.pointerEvents
+        });
+      }
+      if (computedStyle.display === 'none') {
+        logger.warn('⚠️ Interaction canvas的display是none，可能无法接收事件！');
+      }
+      if (computedStyle.visibility === 'hidden') {
+        logger.warn('⚠️ Interaction canvas的visibility是hidden，可能无法接收事件！');
+      }
+      
+      eventManager = new EventManager(interactionCanvas);
+      logger.info('✅ EventManager 已创建并绑定到 interaction canvas');
+    }
     
     // 快捷键管理器
     const shortcutManager = new ShortcutManager();
@@ -126,7 +170,8 @@ export class InitializationManager {
    */
   static initializeHandlers(
     coreComponents: CoreComponents,
-    onStateChange: () => void
+    onStateChange: () => void,
+    eventBus?: EventBus
   ): Handlers {
     // 状态处理器（不依赖其他处理器）
     const stateHandler = new StateHandler(
@@ -145,8 +190,23 @@ export class InitializationManager {
       coreComponents.virtualLayerManager
     );
     
+    // 设置 EventBus 到 DrawingHandler
+    if (eventBus) {
+      drawingHandler.setEventBus(eventBus);
+    }
+    
     // 设置drawingHandler到stateHandler
     stateHandler.setDrawingHandler(drawingHandler);
+    
+    // 初始化 SelectTool 协调器
+    const selectToolCoordinator = new SelectToolCoordinator(
+      coreComponents.canvasEngine,
+      coreComponents.toolManager,
+      coreComponents.historyManager,
+      drawingHandler,
+      coreComponents.virtualLayerManager,
+      { redrawThrottleMs: 16, eventBus }
+    );
     
     // 鼠标样式处理器
     const interactionCanvas = coreComponents.canvasEngine.getLayer('interaction')?.canvas;
@@ -160,7 +220,8 @@ export class InitializationManager {
     return {
       drawingHandler,
       cursorHandler,
-      stateHandler
+      stateHandler,
+      selectToolCoordinator
     };
   }
   
@@ -176,13 +237,16 @@ export class InitializationManager {
     coreComponents.performanceManager.setDrawBoard(drawBoardInstance);
     
     // 设置ComplexityManager的依赖关系
+    // 🔧 改进类型安全：使用类型断言，但更明确
+    const performanceManagerForComplexity = coreComponents.performanceManager as PerformanceManager & {
+      getMemoryStats(): { cacheHitRate: number; underMemoryPressure: boolean };
+      updateConfig(config: { complexityThreshold: number }): void;
+      stats: { totalDrawCalls: number };
+    };
+    
     coreComponents.complexityManager.setDependencies(
       coreComponents.historyManager,
-      coreComponents.performanceManager as unknown as {
-        getMemoryStats(): { cacheHitRate: number; underMemoryPressure: boolean };
-        updateConfig(config: { complexityThreshold: number }): void;
-        stats: { totalDrawCalls: number };
-      }
+      performanceManagerForComplexity
     );
     
     logger.debug('依赖关系设置完成');

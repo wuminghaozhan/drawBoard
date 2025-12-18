@@ -74,6 +74,9 @@ export interface SelectToolInterface {
   /** 设置样式更新回调（当选中图形的样式被修改时立即调用，用于同步到数据源） */
   setOnStyleUpdated?(callback: (actions: DrawAction[]) => void): void;
   
+  /** 设置锁定状态查询回调（锁定状态归属于虚拟图层，通过回调查询） */
+  setLockQueryCallback?(callback: ((action: DrawAction) => boolean) | null): void;
+  
   /** 设置Canvas引擎和选中图层zIndex */
   setCanvasEngine?(canvasEngine: CanvasEngine, selectedLayerZIndex?: number | null): void;
   

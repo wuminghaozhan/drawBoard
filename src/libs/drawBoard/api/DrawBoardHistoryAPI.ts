@@ -4,6 +4,7 @@ import type { DrawingHandler } from '../handlers/DrawingHandler';
 import type { ToolManager } from '../tools/ToolManager';
 import { ToolTypeGuards } from '../tools/ToolInterfaces';
 import { logger } from '../infrastructure/logging/Logger';
+import type { HistoryAPIConfig } from './APIConfig';
 
 /**
  * DrawBoard 历史记录 API
@@ -19,18 +20,18 @@ export class DrawBoardHistoryAPI {
   private historyManager: HistoryManager;
   private drawingHandler: DrawingHandler;
   private toolManager: ToolManager;
-  private syncLayerDataToSelectTool: () => void;
+  private config: HistoryAPIConfig;
 
   constructor(
     historyManager: HistoryManager,
     drawingHandler: DrawingHandler,
     toolManager: ToolManager,
-    syncLayerDataToSelectTool: () => void
+    config: HistoryAPIConfig
   ) {
     this.historyManager = historyManager;
     this.drawingHandler = drawingHandler;
     this.toolManager = toolManager;
-    this.syncLayerDataToSelectTool = syncLayerDataToSelectTool;
+    this.config = config;
   }
 
   /**
@@ -75,7 +76,7 @@ export class DrawBoardHistoryAPI {
           }
           
           this.drawingHandler.invalidateOffscreenCache(true);
-          this.syncLayerDataToSelectTool();
+          this.config.syncLayerDataToSelectTool();
           await this.drawingHandler.forceRedraw();
           logger.debug('批量操作撤销成功', { 
             batchId: lastBatch!.id, 
@@ -92,7 +93,7 @@ export class DrawBoardHistoryAPI {
         const success = this.historyManager.undoTransform();
         if (success) {
           this.drawingHandler.invalidateOffscreenCache(true);
-          this.syncLayerDataToSelectTool();
+          this.config.syncLayerDataToSelectTool();
           await this.drawingHandler.forceRedraw();
           logger.debug('变形撤销成功');
           return true;
@@ -109,7 +110,7 @@ export class DrawBoardHistoryAPI {
       
       if (action) {
         this.drawingHandler.invalidateOffscreenCache(true);
-        this.syncLayerDataToSelectTool();
+        this.config.syncLayerDataToSelectTool();
         await this.drawingHandler.forceRedraw();
         logger.debug('撤销成功', { actionId: action.id, actionType: action.type });
         return true;
@@ -126,8 +127,7 @@ export class DrawBoardHistoryAPI {
   /**
    * 重做操作
    * 
-   * 支持：批量操作重做、普通操作重做
-   * 注意：变形操作目前不支持重做
+   * 支持：批量操作重做、变形操作重做、普通操作重做
    */
   public async redo(): Promise<boolean> {
     // 检查是否可以重做
@@ -140,10 +140,16 @@ export class DrawBoardHistoryAPI {
       // ✅ 执行 redo 前：清理当前状态
       this.prepareForHistoryOperation();
       
-      // 优先重做批量操作（按时间戳，最近撤销的先重做）
+      // 获取各类操作的时间戳
       const lastUndoneBatch = this.historyManager.getLastUndoneBatchOperation();
-      if (lastUndoneBatch) {
-        const result = this.historyManager.redoBatchOperation(lastUndoneBatch.id);
+      const batchTime = lastUndoneBatch?.timestamp ?? 0;
+      const transformTime = this.historyManager.getLastUndoneTransformTimestamp();
+      const canRedoNormal = this.historyManager.canRedo();
+      
+      // ✅ 重做时间戳最大的操作
+      if (batchTime > 0 && batchTime >= transformTime) {
+        // 重做批量操作
+        const result = this.historyManager.redoBatchOperation(lastUndoneBatch!.id);
         if (result.success) {
           // 同步到 VirtualLayerManager
           for (const actionId of result.removedActionIds) {
@@ -154,22 +160,39 @@ export class DrawBoardHistoryAPI {
           }
           
           this.drawingHandler.invalidateOffscreenCache(true);
-          this.syncLayerDataToSelectTool();
+          this.config.syncLayerDataToSelectTool();
           await this.drawingHandler.forceRedraw();
           logger.debug('批量操作重做成功', { 
-            batchId: lastUndoneBatch.id, 
-            type: lastUndoneBatch.type 
+            batchId: lastUndoneBatch!.id, 
+            type: lastUndoneBatch!.type 
           });
           return true;
         }
       }
       
+      // 🔧 重做变形操作
+      if (transformTime > 0 && transformTime > batchTime) {
+        const success = this.historyManager.redoTransform();
+        if (success) {
+          this.drawingHandler.invalidateOffscreenCache(true);
+          this.config.syncLayerDataToSelectTool();
+          await this.drawingHandler.forceRedraw();
+          logger.debug('变形重做成功');
+          return true;
+        }
+      }
+      
       // 重做普通操作
+      if (!canRedoNormal) {
+        logger.debug('无法重做：没有可重做的普通操作');
+        return false;
+      }
+      
       const action = this.historyManager.redo();
       
       if (action) {
         this.drawingHandler.invalidateOffscreenCache(true);
-        this.syncLayerDataToSelectTool();
+        this.config.syncLayerDataToSelectTool();
         await this.drawingHandler.forceRedraw();
         logger.debug('重做成功', { actionId: action.id, actionType: action.type });
         return true;
@@ -222,12 +245,13 @@ export class DrawBoardHistoryAPI {
   }
 
   /**
-   * 是否可以重做（包括批量操作和普通操作）
+   * 是否可以重做（包括批量操作、变形操作和普通操作）
    */
   public canRedo(): boolean {
     const hasBatchRedo = this.historyManager.getLastUndoneBatchOperation() !== null;
+    const hasTransformRedo = this.historyManager.canRedoTransform?.() ?? false;
     const hasNormalRedo = this.historyManager.canRedo();
-    return hasBatchRedo || hasNormalRedo;
+    return hasBatchRedo || hasTransformRedo || hasNormalRedo;
   }
 
   /**

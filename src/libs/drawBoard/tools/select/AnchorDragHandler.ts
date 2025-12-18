@@ -299,11 +299,24 @@ export class AnchorDragHandler {
       return { success: false, error: '未开始拖拽' };
     }
 
-    const { startBounds, startPoint } = this.state;
+    const { startBounds, startPoint, startAction } = this.state;
     
-    // 计算旋转中心（选区中心）
-    const centerX = startBounds.x + startBounds.width / 2;
-    const centerY = startBounds.y + startBounds.height / 2;
+    // 🔧 计算旋转中心
+    // 对于图片，使用图片本身的中心（更准确）
+    // 对于其他类型，使用边界框中心
+    let centerX: number;
+    let centerY: number;
+    
+    if (action.type === 'image') {
+      const imageAction = action as import('../../types/ImageTypes').ImageAction;
+      const point = imageAction.points[0];
+      centerX = point.x + imageAction.imageWidth / 2;
+      centerY = point.y + imageAction.imageHeight / 2;
+    } else {
+      // 使用边界框中心
+      centerX = startBounds.x + startBounds.width / 2;
+      centerY = startBounds.y + startBounds.height / 2;
+    }
     
     // 计算旋转角度
     const angle = TransformOperations.calculateRotationAngle(

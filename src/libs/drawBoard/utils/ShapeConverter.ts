@@ -44,6 +44,10 @@ export class ShapeConverter {
         return this.toTextShape(action);
       case 'polygon':
         return this.toPolygonShape(action);
+      case 'image':
+        // 图片类型暂不支持转换为 Shape（需要扩展 Shape 类型）
+        logger.debug('图片类型暂不支持转换为 Shape', { type: action.type });
+        return null;
       default:
         logger.warn('不支持的 action 类型', { type: action.type });
         return null;

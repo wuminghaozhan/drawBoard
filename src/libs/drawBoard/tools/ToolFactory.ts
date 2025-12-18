@@ -189,7 +189,7 @@ export class ToolFactory {
   private async fallbackToBasicTool(type: ToolType): Promise<DrawTool> {
     logger.warn(`重量级工具 ${type} 加载失败，降级到基础工具`);
     
-    const basicTools: Record<ToolType, () => DrawTool> = {
+      const basicTools: Record<ToolType, () => DrawTool> = {
       pen: () => new BasicPenTool(),
       brush: () => new BasicBrushTool(),
       advancedPen: () => new BasicPenTool(), // 降级为基础画笔
@@ -198,6 +198,7 @@ export class ToolFactory {
       line: () => new BasicLineTool(),
       polygon: () => new BasicPolygonTool(),
       text: () => new BasicTextTool(),
+      image: () => new BasicImageTool(), // 降级为基础图片工具
       eraser: () => new BasicEraserTool(),
       select: () => new BasicSelectTool(),
       transform: () => new BasicTransformTool()
@@ -378,6 +379,17 @@ export class ToolFactory {
         }
       }, { isHeavy: false, estimatedLoadTime: 60 });
 
+      this.register('image', async () => {
+        logger.debug('注册 image 工具工厂');
+        try {
+          const { ImageTool } = await import('./ImageTool');
+          return new ImageTool();
+        } catch (importError) {
+          logger.error('导入 ImageTool 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 40 });
+
       this.register('eraser', async () => {
         logger.debug('注册 eraser 工具工厂');
         try {
@@ -535,6 +547,31 @@ class BasicTextTool extends DrawTool {
     }
   }
   getActionType(): string { return 'text'; }
+}
+
+class BasicImageTool extends DrawTool {
+  constructor() { super('基础图片', 'image'); }
+  draw(ctx: CanvasRenderingContext2D, action: DrawAction): void {
+    // 基础图片绘制逻辑（降级版本）
+    const imageAction = action as any;
+    if (imageAction.imageUrl && action.points.length > 0) {
+      const point = action.points[0];
+      const width = imageAction.imageWidth || 200;
+      const height = imageAction.imageHeight || 200;
+      
+      // 如果有缓存的图片元素，直接绘制
+      if (imageAction.imageElement) {
+        ctx.drawImage(imageAction.imageElement, point.x, point.y, width, height);
+      } else {
+        // 绘制占位符
+        ctx.fillStyle = '#f0f0f0';
+        ctx.fillRect(point.x, point.y, width, height);
+        ctx.strokeStyle = '#cccccc';
+        ctx.strokeRect(point.x, point.y, width, height);
+      }
+    }
+  }
+  getActionType(): string { return 'image'; }
 }
 
 class BasicEraserTool extends DrawTool {

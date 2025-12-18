@@ -243,6 +243,7 @@ export class TransformOperations {
   /**
    * 旋转单个 Action
    * 矩形统一使用4顶点格式，无需特殊处理
+   * 图片旋转：只更新 rotation 属性，不更新 points（图片位置和尺寸不变）
    */
   static rotateAction(
     action: DrawAction,
@@ -255,6 +256,33 @@ export class TransformOperations {
       return { success: false, error: '无效的 action: 没有点' };
     }
 
+    // 🔧 图片旋转：只更新 rotation 属性，不更新 points
+    // 图片的位置是 points[0]（左上角），尺寸是 imageWidth 和 imageHeight
+    // 旋转是视觉上的旋转，通过 ctx.rotate() 实现，位置和尺寸不变
+    // 注意：ImageAction.rotation 是度（degrees），而 angle 是弧度（radians）
+    if (action.type === 'image') {
+      const imageAction = action as import('../../types/ImageTypes').ImageAction;
+      const currentRotation = imageAction.rotation || 0; // 度
+      const angleDegrees = angle * (180 / Math.PI); // 弧度转度
+      const newRotation = currentRotation + angleDegrees;
+      
+      const updatedAction: import('../../types/ImageTypes').ImageAction = {
+        ...imageAction,
+        // points 保持不变（图片位置不变）
+        rotation: newRotation // 度
+      };
+
+      logger.debug('TransformOperations: 图片旋转完成', {
+        actionType: action.type,
+        angleDegrees,
+        currentRotation,
+        newRotation
+      });
+
+      return { success: true, action: updatedAction };
+    }
+
+    // 其他类型的 action：更新 points
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
 
@@ -272,7 +300,7 @@ export class TransformOperations {
     const updatedAction: DrawAction & { rotation?: number } = {
       ...action,
       points: newPoints,
-      // 保存累计旋转角度
+      // 保存累计旋转角度（弧度）
       rotation: ((action as DrawAction & { rotation?: number }).rotation || 0) + angle
     };
 

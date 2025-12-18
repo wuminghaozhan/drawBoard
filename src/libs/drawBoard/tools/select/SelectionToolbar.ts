@@ -6,6 +6,7 @@
  */
 
 import type { DrawAction } from '../DrawTool';
+import type { VirtualLayerMode } from '../../core/VirtualLayerManager';
 import { logger } from '../../infrastructure/logging/Logger';
 
 /**
@@ -32,6 +33,8 @@ export interface SelectionToolbarConfig {
 export interface SelectionToolbarCallbacks {
   /** 切换锚点显示 */
   onToggleAnchors?: (visible: boolean) => void;
+  /** 查询锁定状态（锁定状态归属于虚拟图层） */
+  onQueryLockState?: (action: DrawAction) => boolean;
   /** 描边颜色变更 */
   onStrokeColorChange?: (color: string) => void;
   /** 填充颜色变更 */
@@ -97,10 +100,17 @@ export class SelectionToolbar {
   private isVisible: boolean = false;
   private currentBounds: { x: number; y: number; width: number; height: number } | null = null;
   
+  // 📝 虚拟图层模式（用于控制锁定按钮的显示）
+  private virtualLayerMode: VirtualLayerMode = 'individual';
+  
   // 图形样式输入引用
   private strokeColorInput: HTMLInputElement | null = null;
   private fillColorInput: HTMLInputElement | null = null;
   private lineWidthInput: HTMLInputElement | null = null;
+  
+  // 样式行引用（用于控制显示/隐藏）
+  private strokeColorRow: HTMLDivElement | null = null;
+  private lineWidthRow: HTMLDivElement | null = null;
   
   // 文本样式输入引用
   private textColorInput: HTMLInputElement | null = null;
@@ -111,6 +121,7 @@ export class SelectionToolbar {
   private anchorButton: HTMLButtonElement | null = null;
   private lockButton: HTMLButtonElement | null = null;
   private styleButton: HTMLButtonElement | null = null;
+  private styleButtonContainer: HTMLDivElement | null = null; // 🖼️ 样式按钮容器引用
   private layerButton: HTMLButtonElement | null = null;
   private duplicateButton: HTMLButtonElement | null = null;
   private deleteButton: HTMLButtonElement | null = null;
@@ -159,6 +170,11 @@ export class SelectionToolbar {
       fontWeight: 'normal',
       actionType: ''
     };
+    
+    // 📝 设置锁定状态查询回调
+    if (callbacks.onQueryLockState) {
+      this.lockQueryCallback = callbacks.onQueryLockState;
+    }
     
     this.createToolbar();
   }
@@ -272,14 +288,17 @@ export class SelectionToolbar {
     // 分隔线
     this.toolbar.appendChild(this.createSeparator());
     
-    // 3. 锁定（不加入禁用列表，始终可用）
-    this.lockButton = this.createButton(
-      'lock',
-      this.getLockIcon(false),
-      '锁定/解锁',
-      () => this.toggleLock()
-    );
-    this.toolbar.appendChild(this.lockButton);
+    // 3. 锁定（仅在 individual 模式下显示）
+    // 📝 grouped 模式下，选中一个 action 不能代表整个图层，因此禁用锁定功能
+    if (this.virtualLayerMode === 'individual') {
+      this.lockButton = this.createButton(
+        'lock',
+        this.getLockIcon(false),
+        '锁定/解锁',
+        () => this.toggleLock()
+      );
+      this.toolbar.appendChild(this.lockButton);
+    }
     
     // 4. 图层管理
     const layerGroup = this.createLayerButtons();
@@ -320,6 +339,9 @@ export class SelectionToolbar {
     container.style.cssText = `
       position: relative;
     `;
+    
+    // 🖼️ 保存容器引用，用于控制显示/隐藏
+    this.styleButtonContainer = container;
     
     // 样式按钮（显示当前颜色预览）
     const button = document.createElement('button');
@@ -419,9 +441,9 @@ export class SelectionToolbar {
     `;
     
     // 描边颜色
-    const strokeRow = this.createStyleRow('描边颜色', 'stroke');
-    this.shapeStyleContainer.appendChild(strokeRow);
-    this.strokeColorInput = strokeRow.querySelector('input[type="color"]') as HTMLInputElement;
+    this.strokeColorRow = this.createStyleRow('描边颜色', 'stroke');
+    this.shapeStyleContainer.appendChild(this.strokeColorRow);
+    this.strokeColorInput = this.strokeColorRow.querySelector('input[type="color"]') as HTMLInputElement;
     
     // 填充颜色（只对闭合图形显示）
     this.fillColorRow = this.createStyleRow('填充颜色', 'fill');
@@ -438,8 +460,8 @@ export class SelectionToolbar {
     this.shapeStyleContainer.appendChild(shapeSeparator);
     
     // 线宽
-    const lineWidthRow = this.createLineWidthRow();
-    this.shapeStyleContainer.appendChild(lineWidthRow);
+    this.lineWidthRow = this.createLineWidthRow();
+    this.shapeStyleContainer.appendChild(this.lineWidthRow);
     
     panel.appendChild(this.shapeStyleContainer);
     
@@ -1528,6 +1550,16 @@ export class SelectionToolbar {
     // 记录当前 action 类型
     this.state.actionType = firstAction.type;
     
+    // 🖼️ 图片类型：完全隐藏样式按钮容器和样式面板
+    const isImageAction = firstAction.type === 'image';
+    if (this.styleButtonContainer) {
+      this.styleButtonContainer.style.display = isImageAction ? 'none' : 'block';
+    }
+    // 如果样式面板已打开，图片类型时关闭它
+    if (isImageAction && this.stylePanelVisible) {
+      this.hideStylePanel();
+    }
+    
     // 根据 action 类型切换样式面板
     if (this.shapeStyleContainer && this.textStyleContainer) {
       if (isTextAction) {
@@ -1583,6 +1615,15 @@ export class SelectionToolbar {
     } else {
       // ========== 图形样式更新 ==========
       
+      // 🖼️ 图片类型：隐藏描边颜色和线宽（虽然样式按钮已隐藏，但保留此逻辑以防万一）
+      const isImageAction = firstAction.type === 'image';
+      if (this.strokeColorRow) {
+        this.strokeColorRow.style.display = isImageAction ? 'none' : 'flex';
+      }
+      if (this.lineWidthRow) {
+        this.lineWidthRow.style.display = isImageAction ? 'none' : 'flex';
+      }
+      
       // 根据图形类型显示/隐藏填充色选项
       const supportsFill = this.isFillSupported(firstAction.type);
       if (this.fillColorRow) {
@@ -1590,8 +1631,8 @@ export class SelectionToolbar {
       }
     
     if (firstAction.context) {
-      // 更新描边颜色
-      if (firstAction.context.strokeStyle && this.strokeColorInput) {
+      // 更新描边颜色（图片类型跳过）
+      if (!isImageAction && firstAction.context.strokeStyle && this.strokeColorInput) {
         const color = firstAction.context.strokeStyle as string;
         this.state.strokeColor = color;
         this.strokeColorInput.value = color;
@@ -1619,8 +1660,8 @@ export class SelectionToolbar {
           }
         }
         
-        // 更新线宽
-        if (firstAction.context.lineWidth !== undefined && this.lineWidthInput) {
+        // 更新线宽（图片类型跳过）
+        if (!isImageAction && firstAction.context.lineWidth !== undefined && this.lineWidthInput) {
           const width = firstAction.context.lineWidth as number;
           this.state.lineWidth = width;
           this.lineWidthInput.value = String(width);
@@ -1633,15 +1674,41 @@ export class SelectionToolbar {
       }
     }
     
-    // 更新锁定状态（检查 action.locked 和 layerLocked）
-    const isLocked = (firstAction as DrawAction & { locked?: boolean }).locked === true || 
-                     firstAction.layerLocked === true;
-    this.state.isLocked = isLocked;
-    if (this.lockButton) {
-      this.lockButton.innerHTML = this.getLockIcon(isLocked);
+    // 📝 更新锁定状态（仅在 individual 模式下查询）
+    // grouped 模式下，锁定功能不可用
+    if (this.virtualLayerMode === 'individual') {
+      // 📝 通过回调查询锁定状态（锁定状态归属于虚拟图层）
+      const isLocked = this.lockQueryCallback 
+        ? this.lockQueryCallback(firstAction)
+        : false;
+      this.state.isLocked = isLocked;
+      if (this.lockButton) {
+        this.lockButton.innerHTML = this.getLockIcon(isLocked);
+      }
+    } else {
+      // grouped 模式下，锁定状态始终为 false
+      this.state.isLocked = false;
     }
     // 更新按钮禁用状态
     this.updateButtonsDisabledState();
+  }
+  
+  /**
+   * 设置虚拟图层模式
+   * 📝 用于控制锁定按钮的显示（仅在 individual 模式下显示）
+   */
+  public setVirtualLayerMode(mode: VirtualLayerMode): void {
+    this.virtualLayerMode = mode;
+    
+    // 📝 如果切换到 grouped 模式，隐藏锁定按钮
+    // 如果切换到 individual 模式，显示锁定按钮（如果工具栏已创建）
+    if (this.toolbar && this.lockButton) {
+      if (mode === 'grouped') {
+        this.lockButton.style.display = 'none';
+      } else {
+        this.lockButton.style.display = '';
+      }
+    }
   }
 
   /**
@@ -1649,6 +1716,10 @@ export class SelectionToolbar {
    */
   public setCallbacks(callbacks: Partial<SelectionToolbarCallbacks>): void {
     this.callbacks = { ...this.callbacks, ...callbacks };
+    // 📝 同步锁定状态查询回调
+    if (callbacks.onQueryLockState) {
+      this.lockQueryCallback = callbacks.onQueryLockState;
+    }
   }
 
   /**
@@ -1684,8 +1755,12 @@ export class SelectionToolbar {
     this.strokeColorInput = null;
     this.fillColorInput = null;
     this.lineWidthInput = null;
+    this.strokeColorRow = null;
+    this.lineWidthRow = null;
     this.anchorButton = null;
     this.lockButton = null;
+    this.styleButton = null;
+    this.styleButtonContainer = null;
     this.stylePanel = null;
     this.stylePanelVisible = false;
     this.fillColorRow = null;

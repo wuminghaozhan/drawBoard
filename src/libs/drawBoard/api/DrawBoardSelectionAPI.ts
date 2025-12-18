@@ -337,33 +337,36 @@ export class DrawBoardSelectionAPI {
   
   /**
    * 切换选中图形的锁定状态
+   * 📝 锁定功能仅在 individual 模式下可用
+   * - individual 模式：每个 action 对应一个图层，锁定 action = 锁定图层 ✅
+   * - grouped 模式：多个 action 共享图层，锁定功能禁用（选中一个 action 不能代表整个图层）⚠️
    * @param locked 是否锁定
    */
   public async toggleSelectionLock(locked: boolean): Promise<void> {
-    const layerIds = this.getSelectedLayerIds();
-    if (!layerIds || !this.virtualLayerManager) {
-      logger.debug('toggleSelectionLock: 没有选中的图形或无图层管理器');
+    // 📝 检查当前模式：仅在 individual 模式下支持锁定功能
+    if (!this.virtualLayerManager) {
+      logger.debug('toggleSelectionLock: 无图层管理器');
       return;
     }
     
-    // 设置所有选中图层的锁定状态
+    const mode = this.virtualLayerManager.getMode();
+    if (mode !== 'individual') {
+      logger.debug('toggleSelectionLock: 锁定功能仅在 individual 模式下可用', { currentMode: mode });
+      return;
+    }
+    
+    const layerIds = this.getSelectedLayerIds();
+    if (!layerIds) {
+      logger.debug('toggleSelectionLock: 没有选中的图形');
+      return;
+    }
+    
+    // 📝 设置所有选中图层的锁定状态（individual 模式下，每个 action 对应一个图层）
     for (const layerId of layerIds) {
       this.virtualLayerManager.setVirtualLayerLocked(layerId, locked);
     }
     
-    // 同步更新 HistoryManager 中对应 action 的锁定状态
-    const currentTool = this.toolManager.getCurrentToolInstance();
-    if (currentTool && ToolTypeGuards.isSelectTool(currentTool)) {
-      const selectedActions = currentTool.getSelectedActions();
-      for (const action of selectedActions) {
-        action.layerLocked = locked;
-        (action as DrawAction & { locked?: boolean }).locked = locked;
-        // 同步到 HistoryManager
-        this.historyManager.updateAction(action.id, action);
-      }
-    }
-    
-    logger.debug('toggleSelectionLock: 锁定状态已切换', { locked, layerCount: layerIds.size });
+    logger.debug('toggleSelectionLock: 锁定状态已切换', { locked, layerCount: layerIds.size, mode });
     
     // 强制重绘（锁定状态影响锚点显示）
     this.drawingHandler.invalidateOffscreenCache(true);
@@ -522,7 +525,11 @@ export class DrawBoardSelectionAPI {
     // 更新每个选中 action 的样式
     for (const action of selectedActions) {
       if (!action.context) {
-        action.context = {};
+        action.context = {
+          strokeStyle: '#000000',
+          lineWidth: 1,
+          fillStyle: 'transparent'
+        };
       }
       if (style.strokeStyle !== undefined) {
         action.context.strokeStyle = style.strokeStyle;
@@ -581,7 +588,11 @@ export class DrawBoardSelectionAPI {
       // 更新文本颜色（使用 fillStyle）
       if (style.color !== undefined) {
         if (!action.context) {
-          action.context = {};
+          action.context = {
+            strokeStyle: '#000000',
+            lineWidth: 1,
+            fillStyle: 'transparent'
+          };
         }
         action.context.fillStyle = style.color;
         action.context.strokeStyle = style.color;

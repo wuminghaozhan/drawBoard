@@ -38,6 +38,8 @@ export class HitTestManager {
           return this.isPointInPolygonAction(point, action, tolerance);
         case 'line':
           return this.isPointInLineAction(point, action, tolerance);
+        case 'image':
+          return this.isPointInImageAction(point, action, tolerance);
         case 'pen':
         case 'brush':
           return this.isPointInPathAction(point, action, tolerance);
@@ -77,6 +79,30 @@ export class HitTestManager {
            point.x <= bounds.x + bounds.width + tolerance &&
            point.y >= bounds.y - tolerance &&
            point.y <= bounds.y + bounds.height + tolerance;
+  }
+
+  /**
+   * 检查点是否在图片 action 内
+   * 📝 图片类似于矩形，使用边界框检测
+   */
+  public isPointInImageAction(point: Point, action: DrawAction, tolerance: number): boolean {
+    if (action.points.length === 0) return false;
+    
+    const imageAction = action as any;
+    const imagePoint = action.points[0];
+    
+    if (!imagePoint || !isFinite(imagePoint.x) || !isFinite(imagePoint.y)) {
+      return false;
+    }
+    
+    const width = imageAction.imageWidth || 200;
+    const height = imageAction.imageHeight || 200;
+    
+    // 检查点是否在图片边界框内（考虑容差）
+    return point.x >= imagePoint.x - tolerance &&
+           point.x <= imagePoint.x + width + tolerance &&
+           point.y >= imagePoint.y - tolerance &&
+           point.y <= imagePoint.y + height + tolerance;
   }
 
   /**

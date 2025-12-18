@@ -7,9 +7,8 @@
  * - 文件操作
  */
 
-import type { DrawAction } from '../tools/DrawTool';
 import type { HistoryManager } from '../history/HistoryManager';
-import type { VirtualLayerManager, VirtualLayer } from '../core/VirtualLayerManager';
+import type { VirtualLayerManager } from '../core/VirtualLayerManager';
 import type { CanvasEngine } from '../core/CanvasEngine';
 import { 
   DataExporter, 
@@ -23,18 +22,7 @@ import {
   type ImportResult 
 } from '../utils/DataImporter';
 import { logger } from '../infrastructure/logging/Logger';
-
-/**
- * 加载数据后的回调
- */
-export interface DataLoadCallback {
-  /** 应用导入的 actions */
-  applyActions: (actions: DrawAction[]) => void;
-  /** 重建图层 */
-  rebuildLayers: (layers: ImportResult['layers']) => void;
-  /** 重新渲染 */
-  redraw: () => Promise<void>;
-}
+import type { DataAPIConfig } from './APIConfig';
 
 /**
  * DrawBoard 数据 API
@@ -43,7 +31,7 @@ export class DrawBoardDataAPI {
   private historyManager: HistoryManager;
   private virtualLayerManager: VirtualLayerManager;
   private canvasEngine: CanvasEngine;
-  private dataLoadCallback?: DataLoadCallback;
+  private dataLoadCallback?: DataAPIConfig;
 
   constructor(
     historyManager: HistoryManager,
@@ -58,7 +46,7 @@ export class DrawBoardDataAPI {
   /**
    * 设置数据加载回调
    */
-  public setDataLoadCallback(callback: DataLoadCallback): void {
+  public setDataLoadCallback(callback: DataAPIConfig): void {
     this.dataLoadCallback = callback;
   }
 

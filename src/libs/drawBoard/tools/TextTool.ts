@@ -1,12 +1,11 @@
 import { DrawTool } from './DrawTool';
-import type { DrawAction } from './DrawTool';
 import { logger } from '../infrastructure/logging/Logger';
 import { TextEditingManager, type TextCommitEvent, type TextChangeEvent } from './text/TextEditingManager';
 import type { Point } from '../core/CanvasEngine';
 
 // 类型从独立文件导入，避免循环依赖
 export type { TextAction, TextToolEventType, TextToolEventHandler } from '../types/TextTypes';
-import type { TextAction, TextToolEventHandler } from '../types/TextTypes';
+import type { TextAction, TextToolEventType, TextToolEventHandler } from '../types/TextTypes';
 
 export class TextTool extends DrawTool {
   // 默认配置
@@ -742,7 +741,7 @@ export class TextTool extends DrawTool {
   /**
    * 发出事件
    */
-  private emit(event: { type: TextToolEventType; action?: TextAction }): void {
+  private emit(event: { type: TextToolEventType; action?: TextAction; actionId?: string | null }): void {
     this.eventHandlers.forEach(handler => {
       try {
         handler(event);

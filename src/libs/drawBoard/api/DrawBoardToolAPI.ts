@@ -6,6 +6,7 @@ import type { CanvasEngine } from '../core/CanvasEngine';
 import type { ComplexityManager } from '../core/ComplexityManager';
 import { logger } from '../infrastructure/logging/Logger';
 import { ToolTypeGuards } from '../tools/ToolInterfaces';
+import type { ToolAPIConfig } from './APIConfig';
 
 /**
  * DrawBoard 工具管理 API
@@ -21,29 +22,17 @@ import { ToolTypeGuards } from '../tools/ToolInterfaces';
 export class DrawBoardToolAPI {
   private toolManager: ToolManager;
   private canvasEngine: CanvasEngine;
-  private syncLayerDataToSelectTool: () => void;
-  private checkComplexityRecalculation: () => Promise<void>;
-  private updateCursor: () => void;
-  private forceRedraw: () => Promise<void>;
-  private markNeedsClearSelectionUI?: () => void; // 标记需要清除选择UI
+  private config: ToolAPIConfig;
 
   constructor(
     toolManager: ToolManager,
     canvasEngine: CanvasEngine,
     _complexityManager: ComplexityManager, // 保留参数用于将来扩展
-    syncLayerDataToSelectTool: () => void,
-    checkComplexityRecalculation: () => Promise<void>,
-    updateCursor: () => void,
-    forceRedraw: () => Promise<void>,
-    markNeedsClearSelectionUI?: () => void
+    config: ToolAPIConfig
   ) {
     this.toolManager = toolManager;
     this.canvasEngine = canvasEngine;
-    this.syncLayerDataToSelectTool = syncLayerDataToSelectTool;
-    this.checkComplexityRecalculation = checkComplexityRecalculation;
-    this.updateCursor = updateCursor;
-    this.forceRedraw = forceRedraw;
-    this.markNeedsClearSelectionUI = markNeedsClearSelectionUI;
+    this.config = config;
   }
 
   /**
@@ -98,10 +87,10 @@ export class DrawBoardToolAPI {
     if (currentTool === 'select' && toolType !== 'select') {
       // 【修复】直接触发重绘来清除选区UI，而不是只标记
       // 否则选区会一直保留直到下次完整重绘
-      if (this.markNeedsClearSelectionUI) {
-        this.markNeedsClearSelectionUI();
+      if (this.config.markNeedsClearSelectionUI) {
+        this.config.markNeedsClearSelectionUI();
       }
-      await this.forceRedraw();
+      await this.config.forceRedraw();
       logger.debug('DrawBoardToolAPI.setTool: 已触发重绘以清除选择UI', {
         previousTool: currentTool,
         newTool: toolType
@@ -111,7 +100,7 @@ export class DrawBoardToolAPI {
     // 切换到选择工具时，同步图层数据
     if (toolType === 'select') {
       logger.info('DrawBoardToolAPI.setTool: 切换到选择工具，同步图层数据');
-      this.syncLayerDataToSelectTool();
+      this.config.syncLayerDataToSelectTool();
       
       // 验证interaction层是否可访问
       const interactionLayer = this.canvasEngine.getLayer('interaction');
@@ -180,10 +169,10 @@ export class DrawBoardToolAPI {
     
     // 切换到复杂工具时检查复杂度
     if (['brush', 'pen'].includes(toolType)) {
-      await this.checkComplexityRecalculation();
+      await this.config.checkComplexityRecalculation();
     }
     
-    this.updateCursor();
+    this.config.updateCursor();
     logger.debug('DrawBoardToolAPI.setTool: 工具切换完成', { toolType });
   }
 
@@ -288,7 +277,7 @@ export class DrawBoardToolAPI {
     }
     
     this.canvasEngine.setContext({ lineWidth: clampedWidth });
-    this.updateCursor();
+    this.config.updateCursor();
     // 线宽改变不需要重绘，只影响后续绘制
   }
 

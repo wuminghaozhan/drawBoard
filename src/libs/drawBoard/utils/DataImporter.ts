@@ -212,6 +212,31 @@ export class DataImporter {
     if (exportedAny.fontFamily !== undefined) actionAny.fontFamily = exportedAny.fontFamily;
     if (exportedAny.textAlign !== undefined) actionAny.textAlign = exportedAny.textAlign;
 
+    // 图片属性
+    if (exported.type === 'image') {
+      if (exportedAny.imageUrl !== undefined) actionAny.imageUrl = exportedAny.imageUrl;
+      if (exportedAny.imageWidth !== undefined) actionAny.imageWidth = exportedAny.imageWidth;
+      if (exportedAny.imageHeight !== undefined) actionAny.imageHeight = exportedAny.imageHeight;
+      if (exportedAny.originalWidth !== undefined) actionAny.originalWidth = exportedAny.originalWidth;
+      if (exportedAny.originalHeight !== undefined) actionAny.originalHeight = exportedAny.originalHeight;
+      if (exportedAny.maintainAspectRatio !== undefined) actionAny.maintainAspectRatio = exportedAny.maintainAspectRatio;
+      if (exportedAny.rotation !== undefined) actionAny.rotation = exportedAny.rotation;
+      if (exportedAny.scaleX !== undefined) actionAny.scaleX = exportedAny.scaleX;
+      if (exportedAny.scaleY !== undefined) actionAny.scaleY = exportedAny.scaleY;
+      if (exportedAny.opacity !== undefined) actionAny.opacity = exportedAny.opacity;
+      if (exportedAny.crop) {
+        actionAny.cropX = exportedAny.crop.x;
+        actionAny.cropY = exportedAny.crop.y;
+        actionAny.cropWidth = exportedAny.crop.width;
+        actionAny.cropHeight = exportedAny.crop.height;
+      }
+      if (exportedAny.fileName !== undefined) actionAny.fileName = exportedAny.fileName;
+      if (exportedAny.mimeType !== undefined) actionAny.mimeType = exportedAny.mimeType;
+      if (exportedAny.fileSize !== undefined) actionAny.fileSize = exportedAny.fileSize;
+      if (exportedAny.description !== undefined) actionAny.description = exportedAny.description;
+      if (exportedAny.tags !== undefined) actionAny.tags = exportedAny.tags;
+    }
+
     // 多边形属性
     if (exported.type === 'polygon') {
       const polygonExport = exportedAny;
@@ -322,6 +347,15 @@ export class DataImporter {
 
       case 'text': {
         // text: position
+        const position = exportedAny.position as { x: number; y: number };
+        if (position) {
+          return [{ x: position.x, y: position.y }];
+        }
+        return [];
+      }
+
+      case 'image': {
+        // image: position
         const position = exportedAny.position as { x: number; y: number };
         if (position) {
           return [{ x: position.x, y: position.y }];

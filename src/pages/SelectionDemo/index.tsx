@@ -269,6 +269,71 @@ const SelectionDemo: React.FC = () => {
     // 如果需要用户可见的反馈，可以考虑使用 toast 通知
   };
 
+  // 插入图片 - 从文件选择器
+  const handleInsertImageFromFile = async () => {
+    if (!drawBoardRef.current) return;
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      try {
+        // 将文件转换为 base64
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          const base64 = event.target?.result as string;
+          if (base64) {
+            await drawBoardRef.current?.insertImage(base64);
+            updateState();
+            console.info('✅ 图片已插入');
+          }
+        };
+        reader.readAsDataURL(file);
+      } catch (error) {
+        console.error('❌ 插入图片失败:', error);
+        alert('插入图片失败，请重试');
+      }
+    };
+    input.click();
+  };
+
+  // 插入图片 - 从 URL
+  const handleInsertImageFromURL = async () => {
+    if (!drawBoardRef.current) return;
+
+    const url = prompt('请输入图片 URL:');
+    if (!url) return;
+
+    try {
+      await drawBoardRef.current.insertImage(url);
+      updateState();
+      console.info('✅ 图片已插入');
+    } catch (error) {
+      console.error('❌ 插入图片失败:', error);
+      alert('插入图片失败，请检查 URL 是否正确');
+    }
+  };
+
+  // 插入示例图片
+  const handleInsertSampleImage = async () => {
+    if (!drawBoardRef.current) return;
+
+    // 使用一个示例图片 URL（可以替换为实际的示例图片）
+    const sampleImageUrl = 'https://via.placeholder.com/200x200/667eea/ffffff?text=Sample+Image';
+    
+    try {
+      await drawBoardRef.current.insertImage(sampleImageUrl);
+      updateState();
+      console.info('✅ 示例图片已插入');
+    } catch (error) {
+      console.error('❌ 插入示例图片失败:', error);
+      alert('插入示例图片失败，请检查网络连接');
+    }
+  };
+
   return (
     <div className="selection-demo">
       <div className="demo-header">
@@ -405,6 +470,31 @@ const SelectionDemo: React.FC = () => {
             >
               清空画板
             </button>
+          </div>
+
+          <div className="image-controls">
+            <h4>🖼️ 插入图片</h4>
+            <button 
+              onClick={handleInsertImageFromFile}
+              className="demo-button image-button"
+            >
+              📁 从文件选择图片
+            </button>
+            <button 
+              onClick={handleInsertImageFromURL}
+              className="demo-button image-button"
+            >
+              🔗 从 URL 插入图片
+            </button>
+            <button 
+              onClick={handleInsertSampleImage}
+              className="demo-button image-button"
+            >
+              🎨 插入示例图片
+            </button>
+            <p className="image-tip">
+              提示：插入的图片默认大小为 200x200，可以通过选择工具调整大小和位置
+            </p>
           </div>
 
           <div className="demo-controls">

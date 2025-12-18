@@ -48,6 +48,8 @@ export class BoundsCalculator {
         return this.calculateRectBounds(action);
       case 'line':
         return this.calculateLineBounds(action);
+      case 'image':
+        return this.calculateImageBounds(action);
       case 'polygon':
         return this.calculatePolygonBounds(action);
       case 'text':
@@ -439,6 +441,61 @@ export class BoundsCalculator {
     const estimatedLines = Math.ceil(totalChars / charsPerLine);
     
     return Math.max(1, estimatedLines);
+  }
+
+  /**
+   * 计算图片边界框
+   * 🔧 如果图片有旋转，需要计算旋转后的实际边界框
+   */
+  private calculateImageBounds(action: DrawAction): Bounds {
+    const imageAction = action as import('../../types/ImageTypes').ImageAction;
+    const point = action.points[0];
+    
+    if (!point || !isFinite(point.x) || !isFinite(point.y)) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
+
+    // 使用图片的显示尺寸
+    const width = imageAction.imageWidth || 200;
+    const height = imageAction.imageHeight || 200;
+
+    // 如果没有旋转，直接返回原始边界框
+    // 🔧 使用容差比较，避免浮点数精度问题
+    const rotation = imageAction.rotation;
+    const ROTATION_TOLERANCE = 0.01; // 度
+    if (!rotation || Math.abs(rotation) < ROTATION_TOLERANCE) {
+      return {
+        x: point.x,
+        y: point.y,
+        width,
+        height
+      };
+    }
+
+    // 🔧 计算旋转后的边界框
+    // 图片中心点
+    const centerX = point.x + width / 2;
+    const centerY = point.y + height / 2;
+    
+    // 将旋转角度转换为弧度
+    const angleRad = (rotation * Math.PI) / 180;
+    const cos = Math.abs(Math.cos(angleRad));
+    const sin = Math.abs(Math.sin(angleRad));
+    
+    // 旋转后的边界框尺寸（AABB - Axis-Aligned Bounding Box）
+    const rotatedWidth = width * cos + height * sin;
+    const rotatedHeight = width * sin + height * cos;
+    
+    // 旋转后的边界框左上角坐标
+    const rotatedX = centerX - rotatedWidth / 2;
+    const rotatedY = centerY - rotatedHeight / 2;
+
+    return {
+      x: rotatedX,
+      y: rotatedY,
+      width: rotatedWidth,
+      height: rotatedHeight
+    };
   }
 
   /**

@@ -7,8 +7,9 @@ import type { DrawAction } from '../tools/DrawTool';
 import type { DrawEvent } from '../infrastructure/events/EventManager';
 import { ToolTypeGuards, type SelectToolInterface } from '../tools/ToolInterfaces';
 import { logger } from '../infrastructure/logging/Logger';
-import { EventBus, type DrawBoardEvents } from '../infrastructure/events/EventBus';
+import { EventBus } from '../infrastructure/events/EventBus';
 import type { TextAction } from '../types/TextTypes';
+import type { ImageAction } from '../types/ImageTypes';
 import { boundsCalculator } from '../tools/select/BoundsCalculator';
 
 /**
@@ -83,6 +84,30 @@ export class SelectToolCoordinator {
    */
   public setEventBus(eventBus: EventBus): void {
     this.eventBus = eventBus;
+  }
+
+  /**
+   * 查询 action 是否被锁定（通过虚拟图层查询）
+   * 📝 锁定状态归属于虚拟图层，action 通过 virtualLayerId 查询
+   * @param action 要查询的 action
+   * @returns 如果 action 所属的虚拟图层被锁定，返回 true
+   */
+  public isActionLocked(action: DrawAction): boolean {
+    if (!this.virtualLayerManager || !action.virtualLayerId) {
+      return false; // 没有虚拟图层管理器或没有图层ID，默认不锁定
+    }
+    
+    const layer = this.virtualLayerManager.getVirtualLayer(action.virtualLayerId);
+    return layer?.locked === true;
+  }
+
+  /**
+   * 查询多个 actions 是否被锁定
+   * @param actions 要查询的 actions
+   * @returns 如果任何一个 action 被锁定，返回 true
+   */
+  public isSelectionLocked(actions: DrawAction[]): boolean {
+    return actions.some(action => this.isActionLocked(action));
   }
 
   /**
@@ -312,6 +337,7 @@ export class SelectToolCoordinator {
       
       if (hasChanges) {
         // 📝 深拷贝确保数据完整性
+        // 📝 注意：锁定状态归属于虚拟图层，不需要在这里保留
         const afterActions = actionsArray.map(a => JSON.parse(JSON.stringify(a)));
         
         // 📝 调试日志：检查文本宽度是否正确传递
@@ -384,6 +410,7 @@ export class SelectToolCoordinator {
     // 发出 action 更新事件
     for (const action of actionsArray) {
       // 📝 文本类型需要包含 width 和 height 的更新
+      // 🖼️ 图片类型需要包含 rotation 的更新
       const updateData: Record<string, unknown> = { points: action.points };
       if (action.type === 'text') {
         const textAction = action as DrawAction & { width?: number; height?: number };
@@ -392,6 +419,17 @@ export class SelectToolCoordinator {
         }
         if (textAction.height !== undefined) {
           updateData.height = textAction.height;
+        }
+      } else if (action.type === 'image') {
+        const imageAction = action as ImageAction;
+        if (imageAction.rotation !== undefined) {
+          updateData.rotation = imageAction.rotation;
+        }
+        if (imageAction.imageWidth !== undefined) {
+          updateData.imageWidth = imageAction.imageWidth;
+        }
+        if (imageAction.imageHeight !== undefined) {
+          updateData.imageHeight = imageAction.imageHeight;
         }
       }
       this.emitActionUpdated(action.id, updateData);
@@ -460,6 +498,32 @@ export class SelectToolCoordinator {
         const beforeFontSize = beforeText.fontSize ?? 16;
         const afterFontSize = afterText.fontSize ?? 16;
         if (Math.abs(beforeFontSize - afterFontSize) > tolerance) {
+          return true;
+        }
+      }
+      
+      // 🖼️ 图片类型：检查 rotation 属性变化
+      // 图片旋转时，points 不会改变，只更新 rotation 属性
+      if (before.type === 'image' && after.type === 'image') {
+        const beforeImage = before as ImageAction;
+        const afterImage = after as ImageAction;
+        
+        const beforeRotation = beforeImage.rotation ?? 0;
+        const afterRotation = afterImage.rotation ?? 0;
+        if (Math.abs(beforeRotation - afterRotation) > tolerance) {
+          return true;
+        }
+        
+        // 检查图片尺寸变化（imageWidth, imageHeight）
+        const beforeWidth = beforeImage.imageWidth ?? 200;
+        const afterWidth = afterImage.imageWidth ?? 200;
+        if (Math.abs(beforeWidth - afterWidth) > tolerance) {
+          return true;
+        }
+        
+        const beforeHeight = beforeImage.imageHeight ?? 200;
+        const afterHeight = afterImage.imageHeight ?? 200;
+        if (Math.abs(beforeHeight - afterHeight) > tolerance) {
           return true;
         }
       }
@@ -730,6 +794,13 @@ export class SelectToolCoordinator {
           onToggleAnchors: (visible: boolean) => {
             this.eventBus?.emit('toolbar:toggle-anchors', { visible });
           }
+        });
+      }
+      
+      // 📝 设置锁定状态查询回调（锁定状态归属于虚拟图层）
+      if (currentTool.setLockQueryCallback) {
+        currentTool.setLockQueryCallback((action: DrawAction) => {
+          return this.isActionLocked(action);
         });
       }
       

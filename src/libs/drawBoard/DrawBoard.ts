@@ -12,6 +12,7 @@ import { DrawingHandler } from './handlers/DrawingHandler';
 import { CursorHandler } from './handlers/CursorHandler';
 import { StateHandler, type DrawBoardState } from './handlers/StateHandler';
 import { SelectToolCoordinator } from './handlers/SelectToolCoordinator';
+import { InitializationManager } from './core/InitializationManager';
 import { PerformanceMode } from './tools/DrawTool';
 import type { ToolType } from './tools/DrawTool';
 import type { DrawAction } from './tools/DrawTool';
@@ -31,6 +32,7 @@ import { DrawBoardSelectionAPI } from './api/DrawBoardSelectionAPI';
 import { DrawBoardToolAPI } from './api/DrawBoardToolAPI';
 import { DrawBoardHistoryAPI } from './api/DrawBoardHistoryAPI';
 import { DrawBoardDataAPI } from './api/DrawBoardDataAPI';
+import type { ToolAPIConfig, HistoryAPIConfig, VirtualLayerAPIConfig, DataAPIConfig } from './api/APIConfig';
 
 // 函数式编程模块（直接从子模块导入以避免循环依赖）
 import { 
@@ -309,11 +311,53 @@ export class DrawBoard {
     this.eventBus = new EventBus();
     
     try {
-      // 初始化核心组件（使用验证后的配置）
-      this.initializeCoreComponents(container, validatedConfig);
+      // 🔧 使用 InitializationManager 统一初始化
+      const coreComponents = InitializationManager.initializeCoreComponents(container, validatedConfig);
+      
+      // 保存容器元素引用
+      this.container = container instanceof HTMLCanvasElement ? container : container;
+      
+      // 赋值核心组件
+      this.canvasEngine = coreComponents.canvasEngine;
+      this.toolManager = coreComponents.toolManager;
+      this.historyManager = coreComponents.historyManager;
+      this.selectionManager = coreComponents.selectionManager;
+      this.performanceManager = coreComponents.performanceManager;
+      this.complexityManager = coreComponents.complexityManager;
+      this.virtualLayerManager = coreComponents.virtualLayerManager;
+      this.eventManager = coreComponents.eventManager;
+      this.shortcutManager = coreComponents.shortcutManager;
+      this.exportManager = coreComponents.exportManager;
+      this.resourceManager = coreComponents.resourceManager;
       
       // 初始化处理器
-      this.initializeHandlers();
+      // 🔧 注意：onStateChange 回调需要在 stateHandler 赋值后才能使用
+      // 所以先创建一个临时变量存储 stateHandler，然后在回调中使用
+      let stateHandlerRef: StateHandler | null = null;
+      const handlers = InitializationManager.initializeHandlers(
+        coreComponents,
+        () => {
+          // 在 stateHandler 赋值后，回调才能正常工作
+          if (stateHandlerRef) {
+            stateHandlerRef.emitStateChange();
+          }
+        },
+        this.eventBus
+      );
+      
+      this.drawingHandler = handlers.drawingHandler;
+      this.cursorHandler = handlers.cursorHandler;
+      this.stateHandler = handlers.stateHandler;
+      stateHandlerRef = handlers.stateHandler; // 设置引用，使回调可以工作
+      this.selectToolCoordinator = handlers.selectToolCoordinator;
+      
+      // 设置依赖关系
+      InitializationManager.setupDependencies(coreComponents, handlers, this);
+      
+      // 配置运笔效果
+      if (validatedConfig.strokeConfig) {
+        this.setStrokeConfig(validatedConfig.strokeConfig);
+      }
       
       // 初始化 API 模块（需要在 handlers 初始化之后）
       this.initializeAPIModules();
@@ -349,162 +393,56 @@ export class DrawBoard {
 
 
   // ============================================
-  // 初始化方法
+  // 初始化方法（已迁移到 InitializationManager）
   // ============================================
-
-  private initializeCoreComponents(container: HTMLCanvasElement | HTMLDivElement, config: DrawBoardConfig): void {
-
-    this.canvasEngine = new CanvasEngine(container); // Canvas引擎
-    
-    // 直接初始化工具管理器（无需异步）
-    this.toolManager = new ToolManager(); // 工具管理器
-    
-    this.historyManager = new HistoryManager(); // 历史记录管理器
-    this.selectionManager = new CoreSelectionManager(); // 核心选择管理器
-    this.performanceManager = new PerformanceManager(config.performanceConfig); // 性能管理器
-    this.complexityManager = new ComplexityManager(); // 复杂度管理器
-    
-    // 合并虚拟图层配置和优化配置
-    const virtualLayerConfig = {
-      ...config.virtualLayerConfig,
-      // 将优化配置传递给 VirtualLayerManager
-      enableDynamicLayerSplit: config.optimizationConfig?.enableDynamicLayerSplit ?? false,
-      dynamicSplitThreshold: config.optimizationConfig?.dynamicSplitThreshold ?? 100
-    };
-    this.virtualLayerManager = new VirtualLayerManager(virtualLayerConfig, this.canvasEngine); // 虚拟图层管理器
-    
-    // 设置PerformanceManager的DrawBoard引用，用于自动触发复杂度重新计算
-    this.performanceManager.setDrawBoard(this);
-    
-    // 设置ComplexityManager的依赖关系
-    this.complexityManager.setDependencies(
-      this.historyManager, 
-      this.performanceManager as unknown as {
-        getMemoryStats(): { cacheHitRate: number; underMemoryPressure: boolean }; 
-        updateConfig(config: { complexityThreshold: number }): void; 
-        stats: { totalDrawCalls: number }
-      }
-    );
-
-    // 设置VirtualLayerManager的HistoryManager引用（用于获取动作数据）
-    this.virtualLayerManager.setHistoryManager(this.historyManager);
-    
-    // 保存容器元素引用
-    this.container = container instanceof HTMLCanvasElement ? container : container;
-    
-    // 事件管理器绑定到交互层
-    const interactionCanvas = this.canvasEngine.getLayer('interaction')?.canvas;
-    
-    if (!interactionCanvas) {
-      logger.error('交互层canvas未找到');
-      this.eventManager = new EventManager(
-        container instanceof HTMLCanvasElement ? container : document.createElement('canvas')
-      );
-    } else {
-      logger.info('EventManager 绑定到 interaction canvas', {
-        canvas: interactionCanvas,
-        width: interactionCanvas.width,
-        height: interactionCanvas.height,
-        offsetWidth: interactionCanvas.offsetWidth,
-        offsetHeight: interactionCanvas.offsetHeight,
-        pointerEvents: getComputedStyle(interactionCanvas).pointerEvents,
-        zIndex: getComputedStyle(interactionCanvas).zIndex,
-        display: getComputedStyle(interactionCanvas).display,
-        visibility: getComputedStyle(interactionCanvas).visibility,
-        opacity: getComputedStyle(interactionCanvas).opacity
-      });
-      
-      // 验证interaction canvas是否可见且可交互
-      const computedStyle = getComputedStyle(interactionCanvas);
-      if (computedStyle.pointerEvents !== 'auto') {
-        logger.warn('⚠️ Interaction canvas的pointer-events不是auto，可能无法接收事件！', {
-          pointerEvents: computedStyle.pointerEvents
-        });
-      }
-      if (computedStyle.display === 'none') {
-        logger.warn('⚠️ Interaction canvas的display是none，可能无法接收事件！');
-      }
-      if (computedStyle.visibility === 'hidden') {
-        logger.warn('⚠️ Interaction canvas的visibility是hidden，可能无法接收事件！');
-      }
-      
-      this.eventManager = new EventManager(interactionCanvas);
-      logger.info('✅ EventManager 已创建并绑定到 interaction canvas');
-    }
-    
-    this.shortcutManager = new ShortcutManager();
-    this.exportManager = new ExportManager(this.canvasEngine.getCanvas());
-
-    // 配置
-    if (config.maxHistorySize) {
-      this.historyManager.setMaxHistorySize(config.maxHistorySize);
-    }
-
-    // 配置运笔效果
-    if (config.strokeConfig) {
-      this.setStrokeConfig(config.strokeConfig);
-    }
-
-    // 注意：initializeHandlers() 和 bindEvents() 在构造函数中调用
-    // 这里不再重复调用，避免重复初始化和事件绑定
-  }
-
-  private initializeHandlers(): void {
-    // 首先初始化状态处理器（不依赖其他处理器）
-    this.stateHandler = new StateHandler(
-      this.toolManager,
-      this.historyManager,
-      this.selectionManager,
-      this.performanceManager
-    );
-
-    // 然后初始化绘制处理器（可以安全地使用stateHandler）
-    this.drawingHandler = new DrawingHandler(
-      this.canvasEngine,
-      this.toolManager,
-      this.historyManager,
-      () => this.stateHandler.emitStateChange(),
-      this.virtualLayerManager
-    );
-    
-    // 设置 EventBus 到 DrawingHandler
-    this.drawingHandler.setEventBus(this.eventBus);
-
-    // 最后将drawingHandler设置给stateHandler
-    this.stateHandler.setDrawingHandler(this.drawingHandler);
-
-    // 初始化 SelectTool 协调器
-    this.selectToolCoordinator = new SelectToolCoordinator(
-      this.canvasEngine,
-      this.toolManager,
-      this.historyManager,
-      this.drawingHandler,
-      this.virtualLayerManager,
-      { redrawThrottleMs: 16, eventBus: this.eventBus }
-    );
-
-    // 初始化鼠标样式处理器 - 使用与EventManager相同的interactionCanvas
-    const interactionCanvas = this.canvasEngine.getLayer('interaction')?.canvas;
-    if (!interactionCanvas) {
-      logger.warn('交互层canvas未找到，CursorHandler将使用容器元素');
-      this.cursorHandler = new CursorHandler(this.container);
-    } else {
-      this.cursorHandler = new CursorHandler(this.container, interactionCanvas);
-    }
-  }
 
   /**
    * 初始化 API 模块
    * 在 handlers 初始化之后调用，确保所有依赖都已就绪
    */
   private initializeAPIModules(): void {
+    // 🔧 使用配置对象替代多个回调参数
+    const toolAPIConfig: ToolAPIConfig = {
+      syncLayerDataToSelectTool: () => this.selectToolCoordinator.syncLayerDataToSelectTool(false),
+      checkComplexityRecalculation: () => this.checkComplexityRecalculation(),
+      updateCursor: () => this.updateCursor(),
+      forceRedraw: () => this.drawingHandler.forceRedraw(),
+      markNeedsClearSelectionUI: () => this.drawingHandler.markNeedsClearSelectionUI()
+    };
+    
+    const historyAPIConfig: HistoryAPIConfig = {
+      syncLayerDataToSelectTool: () => this.selectToolCoordinator.syncLayerDataToSelectTool(false)
+    };
+    
+    const virtualLayerAPIConfig: VirtualLayerAPIConfig = {
+      syncLayerDataToSelectTool: (preserveSelection?: boolean) => 
+        this.selectToolCoordinator.syncLayerDataToSelectTool(preserveSelection ?? false)
+    };
+    
+    const dataAPIConfig: DataAPIConfig = {
+      applyActions: (actions) => {
+        for (const action of actions) {
+          this.historyManager.addAction(action);
+          this.virtualLayerManager.handleNewAction(action);
+        }
+      },
+      rebuildLayers: (layers) => {
+        // 图层信息已通过 action.virtualLayerId 关联，此处可扩展
+        logger.debug('图层数据已加载', { count: layers.length });
+      },
+      redraw: async () => {
+        this.drawingHandler.invalidateOffscreenCache(true);
+        await this.drawingHandler.forceRedraw();
+      }
+    };
+    
     // 初始化虚拟图层 API
     this.virtualLayerAPI = new DrawBoardVirtualLayerAPI(
       this.virtualLayerManager,
       this.drawingHandler,
       this.toolManager,
       this.canvasEngine,
-      (preserveSelection?: boolean) => this.selectToolCoordinator.syncLayerDataToSelectTool(preserveSelection ?? false)
+      virtualLayerAPIConfig
     );
 
     // 初始化选择操作 API
@@ -522,11 +460,7 @@ export class DrawBoard {
       this.toolManager,
       this.canvasEngine,
       this.complexityManager,
-      () => this.selectToolCoordinator.syncLayerDataToSelectTool(false),
-      () => this.checkComplexityRecalculation(),
-      () => this.updateCursor(),
-      () => this.drawingHandler.forceRedraw(),
-      () => this.drawingHandler.markNeedsClearSelectionUI()
+      toolAPIConfig
     );
 
     // 初始化历史记录 API
@@ -534,7 +468,7 @@ export class DrawBoard {
       this.historyManager,
       this.drawingHandler,
       this.toolManager,
-      () => this.selectToolCoordinator.syncLayerDataToSelectTool(false)
+      historyAPIConfig
     );
 
     // 初始化数据导入导出 API
@@ -545,22 +479,7 @@ export class DrawBoard {
     );
     
     // 设置数据加载回调
-    this.dataAPI.setDataLoadCallback({
-      applyActions: (actions) => {
-        for (const action of actions) {
-          this.historyManager.addAction(action);
-          this.virtualLayerManager.handleNewAction(action);
-        }
-      },
-      rebuildLayers: (layers) => {
-        // 图层信息已通过 action.virtualLayerId 关联，此处可扩展
-        logger.debug('图层数据已加载', { count: layers.length });
-      },
-      redraw: async () => {
-        this.drawingHandler.invalidateOffscreenCache(true);
-        await this.drawingHandler.forceRedraw();
-      }
-    });
+    this.dataAPI.setDataLoadCallback(dataAPIConfig);
 
     logger.debug('API 模块初始化完成');
   }
@@ -1003,7 +922,7 @@ export class DrawBoard {
           
           if (textEvent.type === 'editingEnded') {
             // ⭐ 只处理当前编辑会话的事件
-            const eventActionId = textEvent.actionId;
+            const eventActionId = (textEvent as { actionId?: string | null }).actionId ?? null;
             if (eventActionId !== currentEditingActionId) {
               // 不是这个会话的事件，忽略（不要 unsubscribe）
               return;
@@ -1087,45 +1006,16 @@ export class DrawBoard {
     this.updateCursor();
   }
 
-  /**
-   * 记录脏矩形性能指标
-   */
-  private recordDirtyRectPerformance(elapsed: number, usedDirtyRect: boolean): void {
-    // 更新性能统计
-    if (!this.dirtyRectPerformanceStats) {
-      this.dirtyRectPerformanceStats = {
-        totalRedraws: 0,
-        dirtyRectRedraws: 0,
-        fullRedraws: 0,
-        averageDirtyRectTime: 0,
-        averageFullRedrawTime: 0,
-        savedTimeMs: 0
-      };
-    }
-    
-    this.dirtyRectPerformanceStats.totalRedraws++;
-    
-    if (usedDirtyRect) {
-      this.dirtyRectPerformanceStats.dirtyRectRedraws++;
-      // 滑动平均
-      this.dirtyRectPerformanceStats.averageDirtyRectTime = 
-        this.dirtyRectPerformanceStats.averageDirtyRectTime * 0.9 + elapsed * 0.1;
-    } else {
-      this.dirtyRectPerformanceStats.fullRedraws++;
-      this.dirtyRectPerformanceStats.averageFullRedrawTime = 
-        this.dirtyRectPerformanceStats.averageFullRedrawTime * 0.9 + elapsed * 0.1;
-    }
-    
-    // 估算节省的时间
-    if (usedDirtyRect && this.dirtyRectPerformanceStats.averageFullRedrawTime > 0) {
-      const savedTime = this.dirtyRectPerformanceStats.averageFullRedrawTime - elapsed;
-      if (savedTime > 0) {
-        this.dirtyRectPerformanceStats.savedTimeMs += savedTime;
-      }
-    }
-  }
+  // ============================================
+  // 脏矩形性能统计（预留功能）
+  // ============================================
   
-  // 脏矩形性能统计
+  /**
+   * 脏矩形性能统计
+   * 
+   * ⚠️ 预留功能：目前未使用，保留用于将来的性能监控
+   * 如果将来需要监控脏矩形性能，可以在重绘流程中记录性能指标
+   */
   private dirtyRectPerformanceStats?: {
     totalRedraws: number;
     dirtyRectRedraws: number;
@@ -1137,6 +1027,8 @@ export class DrawBoard {
   
   /**
    * 获取脏矩形性能统计
+   * 
+   * ⚠️ 预留功能：目前返回 null，因为性能统计功能尚未集成
    */
   public getDirtyRectPerformanceStats() {
     return this.dirtyRectPerformanceStats ?? null;
@@ -1144,6 +1036,8 @@ export class DrawBoard {
   
   /**
    * 重置脏矩形性能统计
+   * 
+   * ⚠️ 预留功能：目前无效果，因为性能统计功能尚未集成
    */
   public resetDirtyRectPerformanceStats(): void {
     this.dirtyRectPerformanceStats = undefined;
@@ -1285,7 +1179,7 @@ export class DrawBoard {
       
       // 如果是选择工具，检查是否双击了文字对象
       if (currentTool === 'select') {
-        await this.handleSelectToolDoubleClick(event);
+        await this.handleSelectToolDoubleClick();
         return;
       }
       
@@ -1328,7 +1222,7 @@ export class DrawBoard {
    * 选择工具的双击处理
    * 如果双击了文字对象，进入编辑模式
    */
-  private async handleSelectToolDoubleClick(_event: DrawEvent): Promise<void> {
+  private async handleSelectToolDoubleClick(): Promise<void> {
     try {
       const selectTool = this.toolManager.getCurrentToolInstance();
       if (!selectTool || !ToolTypeGuards.isSelectTool(selectTool)) {
@@ -1383,7 +1277,7 @@ export class DrawBoard {
               
               if (textEvent.type === 'editingEnded') {
                 // ⭐ 只处理当前编辑会话的事件
-                const eventActionId = textEvent.actionId;
+                const eventActionId = (textEvent as { actionId?: string | null }).actionId ?? null;
                 if (eventActionId !== currentEditingActionId) {
                   // 不是这个会话的事件，忽略（不要 unsubscribe）
                   return;
@@ -1640,7 +1534,7 @@ export class DrawBoard {
   /**
    * 导出为 JSON 对象
    */
-  public exportData(options?: import('./api/DrawBoardDataAPI').DataLoadCallback extends never ? import('./utils/DataExporter').ExportOptions : import('./utils/DataExporter').ExportOptions): import('./utils/DataExporter').DrawBoardExportData {
+  public exportData(options?: import('./utils/DataExporter').ExportOptions): import('./utils/DataExporter').DrawBoardExportData {
     return this.dataAPI.exportData(options);
   }
 
@@ -1793,6 +1687,104 @@ export class DrawBoard {
    */
   public getSelectedActions(): DrawAction[] {
     return this.selectionAPI.getSelectedActions();
+  }
+
+  /**
+   * 插入图片
+   * @param imageUrl 图片 URL 或 base64 字符串
+   * @param x 图片左上角 x 坐标（可选，默认画布中心）
+   * @param y 图片左上角 y 坐标（可选，默认画布中心）
+   * @param width 图片宽度（可选，默认 200）
+   * @param height 图片高度（可选，默认 200）
+   * @returns 创建的图片 action
+   */
+  public async insertImage(
+    imageUrl: string,
+    x?: number,
+    y?: number,
+    width: number = 200,
+    height: number = 200
+  ): Promise<DrawAction> {
+    try {
+      // 获取画布尺寸
+      const canvas = this.canvasEngine.getCanvas();
+      const canvasWidth = canvas.width;
+      const canvasHeight = canvas.height;
+      
+      // 如果没有指定位置，默认放在画布中心
+      const imageX = x ?? (canvasWidth / 2 - width / 2);
+      const imageY = y ?? (canvasHeight / 2 - height / 2);
+      
+      // 创建图片工具
+      const { ImageTool } = await import('./tools/ImageTool');
+      const imageTool = new ImageTool();
+      
+      // 🔧 性能优化：先预加载图片，避免重绘时阻塞
+      let preloadedImage: HTMLImageElement | ImageBitmap | undefined;
+      try {
+        await imageTool.preloadImage(imageUrl);
+        // 获取预加载的图片
+        preloadedImage = imageTool.getCachedImage(imageUrl);
+      } catch (error) {
+        logger.warn('图片预加载失败，将在绘制时加载', { url: imageUrl.substring(0, 50), error });
+        // 继续执行，图片会在绘制时加载
+      }
+      
+      // 创建图片 action（图片已预加载，draw() 会立即绘制）
+      const imageAction = imageTool.createImageAction({
+        imageUrl,
+        position: { x: imageX, y: imageY },
+        width,
+        height
+      });
+      
+      // 🔧 关键修复：将预加载的图片设置到 action 的 imageElement 属性上
+      // 这样重绘时就能立即使用，不依赖工具实例的缓存
+      if (preloadedImage && imageTool.isValidImage(preloadedImage)) {
+        imageAction.imageElement = preloadedImage;
+        imageAction.loadState = 'loaded';
+        
+        // 更新原始尺寸信息
+        if (!imageAction.originalWidth || !imageAction.originalHeight) {
+          if (preloadedImage instanceof HTMLImageElement) {
+            imageAction.originalWidth = preloadedImage.naturalWidth;
+            imageAction.originalHeight = preloadedImage.naturalHeight;
+          } else {
+            imageAction.originalWidth = preloadedImage.width;
+            imageAction.originalHeight = preloadedImage.height;
+          }
+        }
+        
+        logger.debug('图片已预加载并设置到 action', { 
+          actionId: imageAction.id,
+          imageWidth: imageAction.originalWidth,
+          imageHeight: imageAction.originalHeight
+        });
+      }
+      
+      // 分配虚拟图层（避免"未分配的动作"警告）
+      this.virtualLayerManager.handleNewAction(imageAction);
+      
+      // 添加到历史记录
+      this.historyManager.addAction(imageAction);
+      
+      // 触发重绘（图片已加载，会立即显示）
+      await this.drawingHandler.forceRedraw();
+      
+      logger.debug('图片已插入', { 
+        actionId: imageAction.id, 
+        url: imageUrl.substring(0, 50) + '...',
+        x: imageX,
+        y: imageY,
+        width,
+        height
+      });
+      
+      return imageAction;
+    } catch (error) {
+      logger.error('插入图片失败', error);
+      throw error;
+    }
   }
 
   /**

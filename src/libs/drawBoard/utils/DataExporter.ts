@@ -187,6 +187,56 @@ export interface ExportedTextAction {
 }
 
 /**
+ * 图片动作 - 位置 + URL + 尺寸
+ */
+export interface ExportedImageAction {
+  id: string;
+  type: 'image';
+  /** 图片位置 */
+  position: { x: number; y: number };
+  /** 图片 URL 或 base64 */
+  imageUrl: string;
+  /** 图片显示宽度 */
+  imageWidth: number;
+  /** 图片显示高度 */
+  imageHeight: number;
+  /** 图片原始宽度（可选） */
+  originalWidth?: number;
+  /** 图片原始高度（可选） */
+  originalHeight?: number;
+  /** 是否保持宽高比（可选） */
+  maintainAspectRatio?: boolean;
+  /** 旋转角度（可选） */
+  rotation?: number;
+  /** 水平缩放比例（可选） */
+  scaleX?: number;
+  /** 垂直缩放比例（可选） */
+  scaleY?: number;
+  /** 透明度（可选） */
+  opacity?: number;
+  /** 裁剪区域（可选） */
+  crop?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  /** 图片文件名（可选） */
+  fileName?: string;
+  /** 图片 MIME 类型（可选） */
+  mimeType?: string;
+  /** 图片文件大小（可选） */
+  fileSize?: number;
+  /** 图片描述（可选） */
+  description?: string;
+  /** 图片标签（可选） */
+  tags?: string[];
+  context: ExportedContext;
+  timestamp: number;
+  virtualLayerId?: string;
+}
+
+/**
  * 橡皮擦动作 - 擦除路径
  */
 export interface ExportedEraserAction {
@@ -210,6 +260,7 @@ export type ExportedAction =
   | ExportedLineAction 
   | ExportedPolygonAction 
   | ExportedTextAction
+  | ExportedImageAction
   | ExportedEraserAction;
 
 /**
@@ -398,6 +449,49 @@ export class DataExporter {
           ...(action.virtualLayerId && { virtualLayerId: action.virtualLayerId }),
           ...(rotation !== undefined && { rotation })
         };
+      }
+
+      case 'image': {
+        // 图片：位置 + URL + 尺寸 + 所有可选属性
+        const position = action.points[0] || { x: 0, y: 0 };
+        const imageAction = action as any;
+        
+        const exported: ExportedImageAction = {
+          id: action.id,
+          type: 'image',
+          position: { x: position.x, y: position.y },
+          imageUrl: imageAction.imageUrl || '',
+          imageWidth: imageAction.imageWidth || 200,
+          imageHeight: imageAction.imageHeight || 200,
+          context,
+          timestamp: action.timestamp,
+          ...(action.virtualLayerId && { virtualLayerId: action.virtualLayerId })
+        };
+        
+        // 可选属性
+        if (imageAction.originalWidth !== undefined) exported.originalWidth = imageAction.originalWidth;
+        if (imageAction.originalHeight !== undefined) exported.originalHeight = imageAction.originalHeight;
+        if (imageAction.maintainAspectRatio !== undefined) exported.maintainAspectRatio = imageAction.maintainAspectRatio;
+        if (imageAction.rotation !== undefined) exported.rotation = imageAction.rotation;
+        if (imageAction.scaleX !== undefined) exported.scaleX = imageAction.scaleX;
+        if (imageAction.scaleY !== undefined) exported.scaleY = imageAction.scaleY;
+        if (imageAction.opacity !== undefined && imageAction.opacity !== 1) exported.opacity = imageAction.opacity;
+        if (imageAction.cropX !== undefined && imageAction.cropY !== undefined && 
+            imageAction.cropWidth !== undefined && imageAction.cropHeight !== undefined) {
+          exported.crop = {
+            x: imageAction.cropX,
+            y: imageAction.cropY,
+            width: imageAction.cropWidth,
+            height: imageAction.cropHeight
+          };
+        }
+        if (imageAction.fileName) exported.fileName = imageAction.fileName;
+        if (imageAction.mimeType) exported.mimeType = imageAction.mimeType;
+        if (imageAction.fileSize !== undefined) exported.fileSize = imageAction.fileSize;
+        if (imageAction.description) exported.description = imageAction.description;
+        if (imageAction.tags && imageAction.tags.length > 0) exported.tags = imageAction.tags;
+        
+        return exported;
       }
 
       case 'eraser': {

@@ -23,6 +23,7 @@ export type ToolType =
   | 'line'
   | 'polygon'
   | 'text'
+  | 'image'  // 图片工具
   | 'eraser'
   | 'select'
   | 'transform';

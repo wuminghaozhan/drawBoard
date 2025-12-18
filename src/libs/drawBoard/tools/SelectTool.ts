@@ -10,6 +10,7 @@ import { TextAnchorHandler } from './anchor/TextAnchorHandler';
 import { LineAnchorHandler } from './anchor/LineAnchorHandler';
 import { PenAnchorHandler } from './anchor/PenAnchorHandler';
 import { PolygonAnchorHandler } from './anchor/PolygonAnchorHandler';
+import { ImageAnchorHandler } from './anchor/ImageAnchorHandler';
 import { BoundsValidator, type Bounds as BoundsType } from '../utils/BoundsValidator';
 import { ActionValidator } from '../utils/ActionValidator';
 import { SpatialIndex } from '../infrastructure/performance/SpatialIndex';
@@ -202,6 +203,9 @@ export class SelectTool extends DrawTool {
   
   // 样式更新回调（用于立即同步到数据源）
   private onStyleUpdatedCallback: ((actions: DrawAction[]) => void) | null = null;
+  
+  // 📝 锁定状态查询回调（通过虚拟图层查询，避免 SelectTool 直接依赖 VirtualLayerManager）
+  private lockQueryCallback: ((action: DrawAction) => boolean) | null = null;
 
   constructor(config?: Partial<{
     sensitivity: number;
@@ -234,6 +238,7 @@ export class SelectTool extends DrawTool {
     this.shapeHandlers.set('rect', new RectAnchorHandler());
     this.shapeHandlers.set('text', new TextAnchorHandler());
     this.shapeHandlers.set('line', new LineAnchorHandler());
+    this.shapeHandlers.set('image', new ImageAnchorHandler());
     this.shapeHandlers.set('polygon', new PolygonAnchorHandler());
     
     // 初始化锚点拖拽处理器（传入 shapeHandlers）
@@ -326,6 +331,10 @@ export class SelectTool extends DrawTool {
         // 触发重绘
         this.updateAnchorPoints();
       },
+      // 📝 锁定状态查询回调（通过虚拟图层查询）
+      onQueryLockState: (action: DrawAction) => {
+        return this.isActionLocked(action);
+      },
       onStrokeColorChange: (color) => {
         this.updateSelectedActionsStyle({ strokeStyle: color });
         this.toolbarCallbacks?.onStrokeColorChange?.(color);
@@ -370,6 +379,10 @@ export class SelectTool extends DrawTool {
     };
     
     this.selectionToolbar = new SelectionToolbar(container, callbacks);
+    // 📝 设置虚拟图层模式（用于控制锁定按钮的显示）
+    if (this.selectionToolbar.setVirtualLayerMode) {
+      this.selectionToolbar.setVirtualLayerMode(this.virtualLayerMode);
+    }
     logger.debug('SelectTool: 选区浮动工具栏已初始化');
   }
   
@@ -510,30 +523,43 @@ export class SelectTool extends DrawTool {
    * 注意：实际的持久化由 DrawBoardSelectionAPI.toggleSelectionLock 完成
    */
   private toggleSelectedActionsLock(locked: boolean): void {
-    // 仅更新本地引用的状态，用于即时的 UI 响应（如锚点隐藏）
-    // VirtualLayerManager 和 HistoryManager 的同步由 DrawBoardSelectionAPI 处理
-    this.selectedActions.forEach(action => {
-      action.layerLocked = locked;
-    });
-    logger.debug('SelectTool: 更新本地锁定状态', { locked, count: this.selectedActions.length });
+    // 📝 锁定状态归属于虚拟图层，不需要在 action 中设置
+    // 锁定状态的设置由 DrawBoardSelectionAPI.toggleSelectionLock() 统一处理
+    logger.debug('SelectTool: 锁定状态切换（由虚拟图层管理）', { locked, count: this.selectedActions.length });
   }
   
   /**
+   * 设置锁定状态查询回调
+   * 📝 锁定状态归属于虚拟图层，通过回调查询避免直接依赖 VirtualLayerManager
+   * @param callback 查询回调函数
+   */
+  public setLockQueryCallback(callback: ((action: DrawAction) => boolean) | null): void {
+    this.lockQueryCallback = callback;
+  }
+
+  /**
    * 检查选中的 actions 是否被锁定
+   * 📝 通过虚拟图层查询锁定状态
    * @returns 如果任意一个选中的 action 被锁定，返回 true
    */
   public isSelectionLocked(): boolean {
+    if (!this.lockQueryCallback) {
+      return false; // 没有查询回调，默认不锁定
+    }
     return this.selectedActions.some(action => this.isActionLocked(action));
   }
   
   /**
    * 检查单个 action 是否被锁定
+   * 📝 锁定状态归属于虚拟图层，通过回调查询
    * @param action 要检查的 action
-   * @returns 如果 action 被锁定，返回 true
+   * @returns 如果 action 所属的虚拟图层被锁定，返回 true
    */
   private isActionLocked(action: DrawAction): boolean {
-    return action.layerLocked === true || 
-           (action as DrawAction & { locked?: boolean }).locked === true;
+    if (!this.lockQueryCallback) {
+      return false; // 没有查询回调，默认不锁定
+    }
+    return this.lockQueryCallback(action);
   }
 
   /**
@@ -608,6 +634,7 @@ export class SelectTool extends DrawTool {
               });
             }
             // 📝 深拷贝确保数据完整性
+            // 📝 注意：锁定状态归属于虚拟图层，不需要在这里同步
             return JSON.parse(JSON.stringify(newAction));
           }
           return selectedAction;
@@ -685,6 +712,13 @@ export class SelectTool extends DrawTool {
       }
       
       this.clearAnchorCache(); // 统一清除锚点缓存
+      
+      // 🔧 如果有选中的 actions，立即重新生成锚点和边界框
+      // 🖼️ 这对于旋转后的图片特别重要，因为旋转后边界框会变化
+      if (this.selectedActions.length > 0) {
+        this.generateResizeAnchorPoints(); // 重新生成锚点并更新锚点缓存
+        this.getSelectedActionsBounds(); // 确保边界框缓存也被更新
+      }
     }
     
     this.clearBoundsCache();
@@ -699,6 +733,11 @@ export class SelectTool extends DrawTool {
   public setVirtualLayerMode(mode: VirtualLayerMode): void {
     this.virtualLayerMode = mode;
     logger.debug('SelectTool.setVirtualLayerMode', { mode });
+    
+    // 📝 同步更新工具栏的虚拟图层模式（用于控制锁定按钮的显示）
+    if (this.selectionToolbar && this.selectionToolbar.setVirtualLayerMode) {
+      this.selectionToolbar.setVirtualLayerMode(mode);
+    }
   }
 
   /**
@@ -1038,7 +1077,36 @@ export class SelectTool extends DrawTool {
    * 设置选中的actions
    */
   public setSelectedActions(actions: DrawAction[]): void {
-    this.selectedActions = [...actions];
+    // 📝 深拷贝 actions，确保数据完整性
+    // 📝 注意：锁定状态归属于虚拟图层，通过回调查询，不需要在这里同步
+    this.selectedActions = actions.map(action => {
+      // 📝 从 allActions 中查找对应的 action，确保包含最新的数据
+      const actionFromHistory = this.allActions.find(a => a.id === action.id);
+      if (actionFromHistory) {
+        // 📝 使用历史记录中的 action，但保留传入 action 的其他属性
+        const syncedAction = JSON.parse(JSON.stringify(actionFromHistory));
+        // 📝 保留传入 action 的其他属性（如 points 等）
+        return {
+          ...syncedAction,
+          // 📝 如果传入的 action 有更新的属性（如拖拽后的 points），使用传入的值
+          points: action.points,
+          // 📝 保留其他可能更新的属性
+          ...(action.type === 'text' && {
+            width: (action as DrawAction & { width?: number }).width,
+            height: (action as DrawAction & { height?: number }).height,
+            fontSize: (action as DrawAction & { fontSize?: number }).fontSize
+          }),
+          // 🖼️ 图片类型：保留 rotation 和尺寸属性
+          ...(action.type === 'image' && {
+            rotation: (action as import('../types/ImageTypes').ImageAction).rotation,
+            imageWidth: (action as import('../types/ImageTypes').ImageAction).imageWidth,
+            imageHeight: (action as import('../types/ImageTypes').ImageAction).imageHeight
+          })
+        };
+      }
+      // 📝 如果历史记录中找不到，使用传入的 action（深拷贝）
+      return JSON.parse(JSON.stringify(action));
+    });
     
     // 更新变换模式
     if (this.selectedActions.length === 1) {
@@ -1534,6 +1602,7 @@ export class SelectTool extends DrawTool {
     );
 
     if (result.success && result.action) {
+      // 📝 锁定状态归属于虚拟图层，不需要在这里保留
       this.selectedActionForTransform = result.action;
       this.transformTool.setSelectedAction(result.action);
       
@@ -1591,9 +1660,12 @@ export class SelectTool extends DrawTool {
       
       // 🔒 individual 模式多选时不需要锚点，跳过警告检查
       const isIndividualMultiSelect = this.virtualLayerMode === 'individual' && this.selectedActions.length > 1;
+      // 🔒 锁定状态下不生成锚点，跳过警告检查
+      const isLocked = this.isSelectionLocked();
       
-      // 如果锚点生成失败（非 individual 多选情况），强制重新生成
+      // 如果锚点生成失败（非 individual 多选且非锁定情况），强制重新生成
       if (!isIndividualMultiSelect && 
+          !isLocked &&
           this.anchorPoints.length === 0 && 
           this.selectedActions.length > 0) {
         logger.warn('SelectTool: 锚点生成失败，强制重新生成');
@@ -2041,6 +2113,21 @@ export class SelectTool extends DrawTool {
    * 改进：清晰区分移动和变形操作
    */
   public handleMouseMove(point: Point): DrawAction | DrawAction[] | null {
+    // 🔒 锁定检查：如果图形被锁定，停止所有拖拽操作
+    if (this.selectedActions.length > 0 && this.isSelectionLocked()) {
+      // 如果正在拖拽，立即停止
+      if (this.isDraggingResizeAnchor || this.isDraggingMove || this.isDragging) {
+        logger.debug('图形已锁定，停止拖拽操作');
+        this.isDraggingResizeAnchor = false;
+        this.isDraggingMove = false;
+        this.isDragging = false;
+        this.dragStartPoint = null;
+        return null;
+      }
+      // 如果未拖拽，直接返回 null
+      return null;
+    }
+    
     // 1. 处理变形锚点拖拽（缩放/变形）
     if (this.isDraggingResizeAnchor) {
       return this.handleResizeAnchorDrag(point);
@@ -2322,6 +2409,7 @@ export class SelectTool extends DrawTool {
    */
   private syncAndRefreshAfterDrag(): DrawAction | DrawAction[] | null {
     // 📝 同步变形后的 action
+    // 📝 注意：锁定状态归属于虚拟图层，不需要在这里保留
     if (this.selectedActions.length === 1 && this.selectedActionForTransform) {
       // 📝 深拷贝确保数据完整性，避免引用问题
       // 📝 重要：必须完整复制所有属性，包括 width 和 height
@@ -2359,6 +2447,8 @@ export class SelectTool extends DrawTool {
           points: this.selectedActionForTransform.points[0]
         });
       }
+    } else if (this.selectedActions.length > 1) {
+      // 📝 多选场景：锁定状态归属于虚拟图层，不需要在这里恢复
     }
     
     // 📝 清除缓存，确保使用最新的数据重新计算
@@ -2369,9 +2459,12 @@ export class SelectTool extends DrawTool {
     
     // 📝 返回深拷贝，确保数据完整性
     // 📝 返回的数据会被用于更新历史记录
+    // 📝 注意：锁定状态已经在上面恢复到了 selectedActions 和 selectedActionForTransform
     if (this.selectedActions.length > 1) {
+      // 📝 多选场景：返回所有 actions，锁定状态已经在 selectedActions 中恢复
       return this.selectedActions.map(a => JSON.parse(JSON.stringify(a)));
     } else if (this.selectedActionForTransform) {
+      // 📝 单选场景：返回 selectedActionForTransform，锁定状态已经恢复
       return JSON.parse(JSON.stringify(this.selectedActionForTransform));
     }
     
@@ -2485,6 +2578,8 @@ export class SelectTool extends DrawTool {
     
     const updatedAction = result.action;
     
+    // 📝 锁定状态归属于虚拟图层，不需要在这里保留
+    
     // 🔧 实时更新 selectedActions 和 selectedActionForTransform
     this.selectedActions = [updatedAction];
     this.selectedActionForTransform = updatedAction;
@@ -2511,6 +2606,8 @@ export class SelectTool extends DrawTool {
       logger.warn('SelectTool: 移动失败', { errors: result.errors });
     }
 
+    // 📝 锁定状态归属于虚拟图层，不需要在这里保留
+    
     this.selectedActions = result.actions;
     
     logger.debug(`SelectTool: 移动${result.actions.length}个actions，偏移量: (${deltaX}, ${deltaY})`);
@@ -2542,6 +2639,8 @@ export class SelectTool extends DrawTool {
       return null;
     }
 
+    // 📝 锁定状态归属于虚拟图层，不需要在这里保留
+    
     this.selectedActionForTransform = result.action;
     this.transformTool.setSelectedAction(result.action);
 
@@ -2726,6 +2825,8 @@ export class SelectTool extends DrawTool {
       return null;
     }
 
+    // 📝 锁定状态归属于虚拟图层，不需要在这里保留
+
     this.selectedActionForTransform = result.action;
     this.transformTool.setSelectedAction(result.action);
 
@@ -2751,6 +2852,8 @@ export class SelectTool extends DrawTool {
     if (!result.success) {
       logger.warn('SelectTool: 旋转失败', { errors: result.errors });
     }
+
+    // 📝 锁定状态归属于虚拟图层，不需要在这里保留
 
     this.selectedActions = result.actions;
     

@@ -4,6 +4,7 @@ import type { DrawingHandler } from '../handlers/DrawingHandler';
 import type { ToolManager } from '../tools/ToolManager';
 import type { CanvasEngine } from '../core/CanvasEngine';
 import { logger } from '../infrastructure/logging/Logger';
+import type { VirtualLayerAPIConfig } from './APIConfig';
 
 /**
  * DrawBoard 虚拟图层 API
@@ -21,20 +22,20 @@ export class DrawBoardVirtualLayerAPI {
   private drawingHandler: DrawingHandler;
   private toolManager: ToolManager;
   private canvasEngine: CanvasEngine;
-  private syncLayerDataToSelectTool: (preserveSelection?: boolean) => void;
+  private config: VirtualLayerAPIConfig;
 
   constructor(
     virtualLayerManager: VirtualLayerManager,
     drawingHandler: DrawingHandler,
     toolManager: ToolManager,
     canvasEngine: CanvasEngine,
-    syncLayerDataToSelectTool: (preserveSelection?: boolean) => void
+    config: VirtualLayerAPIConfig
   ) {
     this.virtualLayerManager = virtualLayerManager;
     this.drawingHandler = drawingHandler;
     this.toolManager = toolManager;
     this.canvasEngine = canvasEngine;
-    this.syncLayerDataToSelectTool = syncLayerDataToSelectTool;
+    this.config = config;
   }
 
   /**
@@ -62,7 +63,7 @@ export class DrawBoardVirtualLayerAPI {
     if (success && this.toolManager.getCurrentTool() === 'select') {
       const mode = this.virtualLayerManager.getMode();
       const preserveSelection = mode === 'individual';
-      this.syncLayerDataToSelectTool(preserveSelection);
+      this.config.syncLayerDataToSelectTool(preserveSelection);
     }
     
     return success;
@@ -139,7 +140,7 @@ export class DrawBoardVirtualLayerAPI {
     
     // 如果当前是选择工具，同步图层数据
     if (this.toolManager.getCurrentTool() === 'select') {
-      this.syncLayerDataToSelectTool();
+      this.config.syncLayerDataToSelectTool();
     }
     
     // 智能重绘图层

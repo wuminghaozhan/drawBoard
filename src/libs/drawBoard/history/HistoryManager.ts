@@ -101,6 +101,18 @@ export class HistoryManager {
    * 添加动作到历史记录（智能内存管理）
    */
   public addAction(action: DrawAction): void {
+    // 🔧 基本验证
+    if (!action || !action.id || !action.type) {
+      logger.warn('添加无效的 action', { action });
+      return;
+    }
+    
+    // 🔧 检查是否已存在相同 ID 的 action
+    if (this.getActionById(action.id)) {
+      logger.warn('Action 已存在，跳过添加', { actionId: action.id });
+      return;
+    }
+    
     logger.debug('添加动作到历史记录, ID:', action.id);
     
     // 计算动作的内存大小
@@ -389,13 +401,15 @@ export class HistoryManager {
    * 按ID移除特定动作
    */
   public removeActionById(actionId: string): boolean {
+    let removed = false;
+    
     // 从历史记录中移除
     const historyIndex = this.history.findIndex(action => action.id === actionId);
     if (historyIndex !== -1) {
       const removedAction = this.history.splice(historyIndex, 1)[0];
       this.currentMemoryBytes -= this.calculateActionMemorySize(removedAction);
       logger.debug('从历史记录中移除动作:', actionId);
-      return true;
+      removed = true;
     }
 
     // 从重做栈中移除
@@ -404,10 +418,15 @@ export class HistoryManager {
       const removedAction = this.undoneActions.splice(undoneIndex, 1)[0];
       this.currentMemoryBytes -= this.calculateActionMemorySize(removedAction);
       logger.debug('从重做栈中移除动作:', actionId);
-      return true;
+      removed = true;
     }
 
-    return false;
+    // 🔧 触发历史变更事件
+    if (removed) {
+      this.emitHistoryChanged();
+    }
+
+    return removed;
   }
   
   // ==================== 批量操作支持 ====================
@@ -514,13 +533,34 @@ export class HistoryManager {
   
   /**
    * 创建 Action 快照（用于增量存储）
+   * 📝 排除运行时属性（如 imageElement、loadState 等），避免序列化失败
    */
   private createActionSnapshot(action: DrawAction): ActionSnapshot {
+    // 深拷贝 action，排除运行时属性
+    const serializableAction = this.sanitizeActionForSerialization(action);
     return {
       id: action.id,
       type: action.type,
-      serializedData: JSON.stringify(action)
+      serializedData: JSON.stringify(serializableAction)
     };
+  }
+  
+  /**
+   * 清理 Action 中的运行时属性，使其可序列化
+   */
+  private sanitizeActionForSerialization(action: DrawAction): DrawAction {
+    const sanitized = { ...action };
+    
+    // 如果是图片 action，排除运行时属性
+    if (action.type === 'image') {
+      const imageAction = sanitized as any;
+      // 排除运行时属性
+      delete imageAction.imageElement;
+      delete imageAction.loadState;
+      delete imageAction.loadError;
+    }
+    
+    return sanitized;
   }
   
   /**
@@ -737,6 +777,13 @@ export class HistoryManager {
     afterActions: DrawAction[];
     timestamp: number;
   }> = [];
+  private undoneTransformHistory: Array<{
+    id: string;
+    type: 'transform';
+    beforeActions: DrawAction[];
+    afterActions: DrawAction[];
+    timestamp: number;
+  }> = []; // 🔧 变形操作重做栈
   private maxTransformHistory: number = 50;
   
   /**
@@ -753,12 +800,20 @@ export class HistoryManager {
   ): string {
     const transformId = `transform-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     
+    // 🔧 清理运行时属性后再深拷贝，避免序列化问题
+    const cleanedBeforeActions = beforeActions.map(a => 
+      JSON.parse(JSON.stringify(this.sanitizeActionForSerialization(a)))
+    );
+    const cleanedAfterActions = afterActions.map(a => 
+      JSON.parse(JSON.stringify(this.sanitizeActionForSerialization(a)))
+    );
+    
     // 保存变形记录
     this.transformHistory.push({
       id: transformId,
       type: 'transform',
-      beforeActions: beforeActions.map(a => JSON.parse(JSON.stringify(a))), // 深拷贝
-      afterActions: afterActions.map(a => JSON.parse(JSON.stringify(a))),   // 深拷贝
+      beforeActions: cleanedBeforeActions,
+      afterActions: cleanedAfterActions,
       timestamp: Date.now()
     });
     
@@ -781,6 +836,7 @@ export class HistoryManager {
     }
     
     // 应用变形（更新历史记录中的 actions）
+    // 📝 updateAction 会自动保留锁定状态，所以这里直接调用即可
     for (const action of afterActions) {
       const updated = this.updateAction(action);
       if (!updated) {
@@ -824,6 +880,14 @@ export class HistoryManager {
       return false;
     }
     
+    // 🔧 保存到重做栈，支持 redo
+    this.undoneTransformHistory.push(lastTransform);
+    
+    // 限制重做栈大小
+    if (this.undoneTransformHistory.length > this.maxTransformHistory) {
+      this.undoneTransformHistory.shift();
+    }
+    
     // 恢复变形前的状态
     for (const action of lastTransform.beforeActions) {
       this.updateAction(action);
@@ -836,6 +900,46 @@ export class HistoryManager {
     
     this.emitHistoryChanged();
     return true;
+  }
+  
+  /**
+   * 重做变形操作
+   * @returns 是否成功重做
+   */
+  public redoTransform(): boolean {
+    const lastUndoneTransform = this.undoneTransformHistory.pop();
+    if (!lastUndoneTransform) {
+      logger.debug('没有可重做的变形操作');
+      return false;
+    }
+    
+    // 🔧 保存到撤销栈
+    this.transformHistory.push(lastUndoneTransform);
+    
+    // 限制撤销栈大小
+    if (this.transformHistory.length > this.maxTransformHistory) {
+      this.transformHistory.shift();
+    }
+    
+    // 恢复变形后的状态
+    for (const action of lastUndoneTransform.afterActions) {
+      this.updateAction(action);
+    }
+    
+    logger.info('变形操作已重做', {
+      transformId: lastUndoneTransform.id,
+      actionsCount: lastUndoneTransform.afterActions.length
+    });
+    
+    this.emitHistoryChanged();
+    return true;
+  }
+  
+  /**
+   * 检查是否有可重做的变形操作
+   */
+  public canRedoTransform(): boolean {
+    return this.undoneTransformHistory.length > 0;
   }
   
   /**
@@ -861,10 +965,19 @@ export class HistoryManager {
   }
   
   /**
+   * 获取最后一个已撤销的变形操作的时间戳（用于重做）
+   */
+  public getLastUndoneTransformTimestamp(): number {
+    const last = this.undoneTransformHistory[this.undoneTransformHistory.length - 1];
+    return last?.timestamp ?? 0;
+  }
+  
+  /**
    * 清空变形历史
    */
   public clearTransformHistory(): void {
     this.transformHistory = [];
+    this.undoneTransformHistory = []; // 🔧 同时清空重做栈
     logger.debug('变形历史已清空');
   }
   
@@ -873,6 +986,7 @@ export class HistoryManager {
   /**
    * 更新动作（用于修改已存在的action，如拖拽锚点、变换等）
    * 注意：此方法直接更新，不记录到变形历史。如需支持 undo，请使用 recordTransform
+   * 📝 锁定状态归属于虚拟图层，不需要在这里保留
    * @param updatedAction 更新后的action（必须包含相同的id）
    * @returns 是否成功更新
    */
@@ -887,6 +1001,8 @@ export class HistoryManager {
     if (historyIndex !== -1) {
       const oldAction = this.history[historyIndex];
       const oldMemorySize = this.calculateActionMemorySize(oldAction);
+      
+      // 📝 直接使用更新后的 action（锁定状态归属于虚拟图层，不需要保留）
       const newMemorySize = this.calculateActionMemorySize(updatedAction);
       
       // 更新action
@@ -904,6 +1020,8 @@ export class HistoryManager {
     if (undoneIndex !== -1) {
       const oldAction = this.undoneActions[undoneIndex];
       const oldMemorySize = this.calculateActionMemorySize(oldAction);
+      
+      // 📝 直接使用更新后的 action（锁定状态归属于虚拟图层，不需要保留）
       const newMemorySize = this.calculateActionMemorySize(updatedAction);
       
       // 更新action
@@ -923,6 +1041,7 @@ export class HistoryManager {
   /**
    * 更新动作（不触发历史事件）
    * 用于拖拽过程中的实时更新，避免产生大量历史记录
+   * 📝 锁定状态归属于虚拟图层，不需要在这里保留
    * 
    * @param updatedAction 更新后的action
    * @returns 是否成功更新
@@ -937,10 +1056,29 @@ export class HistoryManager {
     if (historyIndex !== -1) {
       const oldAction = this.history[historyIndex];
       const oldMemorySize = this.calculateActionMemorySize(oldAction);
+      
+      // 📝 直接使用更新后的 action（锁定状态归属于虚拟图层，不需要保留）
       const newMemorySize = this.calculateActionMemorySize(updatedAction);
       
       // 更新action
       this.history[historyIndex] = updatedAction;
+      
+      // 更新内存计数
+      this.currentMemoryBytes = this.currentMemoryBytes - oldMemorySize + newMemorySize;
+      return true;
+    }
+
+    // 从重做栈中查找并更新
+    const undoneIndex = this.undoneActions.findIndex(action => action.id === updatedAction.id);
+    if (undoneIndex !== -1) {
+      const oldAction = this.undoneActions[undoneIndex];
+      const oldMemorySize = this.calculateActionMemorySize(oldAction);
+      
+      // 📝 直接使用更新后的 action（锁定状态归属于虚拟图层，不需要保留）
+      const newMemorySize = this.calculateActionMemorySize(updatedAction);
+      
+      // 更新action
+      this.undoneActions[undoneIndex] = updatedAction;
       
       // 更新内存计数
       this.currentMemoryBytes = this.currentMemoryBytes - oldMemorySize + newMemorySize;

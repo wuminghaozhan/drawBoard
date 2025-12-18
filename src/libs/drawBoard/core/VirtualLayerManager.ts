@@ -838,11 +838,11 @@ export class VirtualLayerManager {
     if (defaultLayer) {
       this.assignActionToLayer(action.id, defaultLayer.id);
       // 更新动作的图层属性
+      // 📝 注意：锁定状态归属于虚拟图层，不需要在 action 中设置
       action.virtualLayerId = defaultLayer.id;
       action.layerName = defaultLayer.name;
       action.layerVisible = defaultLayer.visible;
       action.layerOpacity = defaultLayer.opacity;
-      action.layerLocked = defaultLayer.locked;
       return;
     }
 
@@ -872,11 +872,11 @@ export class VirtualLayerManager {
     };
     
     // 设置动作的图层属性
+    // 📝 注意：锁定状态归属于虚拟图层，不需要在 action 中设置
     action.virtualLayerId = layer.id;
     action.layerName = layer.name;
     action.layerVisible = layer.visible;
     action.layerOpacity = layer.opacity;
-    action.layerLocked = layer.locked;
     action.layerCreated = layer.created;
     action.layerModified = layer.modified;
     
@@ -909,11 +909,11 @@ export class VirtualLayerManager {
     targetLayer.modified = action.timestamp;
     
     // 设置动作的图层属性
+    // 📝 注意：锁定状态归属于虚拟图层，不需要在 action 中设置
     action.virtualLayerId = targetLayer.id;
     action.layerName = targetLayer.name;
     action.layerVisible = targetLayer.visible;
     action.layerOpacity = targetLayer.opacity;
-    action.layerLocked = targetLayer.locked;
     action.layerCreated = targetLayer.created;
     action.layerModified = targetLayer.modified;
     
@@ -1073,10 +1073,10 @@ export class VirtualLayerManager {
 
     const layer = this.getVirtualLayer(action.virtualLayerId);
     if (layer) {
+      // 📝 注意：锁定状态归属于虚拟图层，不需要在 action 中设置
       action.layerName = layer.name;
       action.layerVisible = layer.visible;
       action.layerOpacity = layer.opacity;
-      action.layerLocked = layer.locked;
       action.layerModified = Date.now();
     }
   }
