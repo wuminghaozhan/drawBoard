@@ -99,7 +99,55 @@ export const ConfigConstants = {
     MIN_SIZE: 5,
     /** 最大尺寸 */
     MAX_SIZE: 10000
+  },
+  
+  /**
+   * 历史记录配置
+   */
+  HISTORY: {
+    /** 最大历史记录数量 */
+    MAX_HISTORY_SIZE: 100,
+    /** 最大重做栈大小 */
+    MAX_UNDONE_SIZE: 50,
+    /** 最大内存限制(MB) */
+    MAX_MEMORY_MB: 50,
+    /** 内存检查间隔（操作次数） */
+    MEMORY_CHECK_INTERVAL: 10,
+    /** 内存重新计算间隔（操作次数） */
+    MEMORY_RECALCULATE_INTERVAL: 50,
+    /** 最大批量操作数 */
+    MAX_BATCH_OPERATIONS: 50,
+    /** 最大变形历史数量 */
+    MAX_TRANSFORM_HISTORY: 50,
+    /** 内存计算：基础对象开销（字节） */
+    MEMORY_BASE_OBJECT_SIZE: 64,
+    /** 内存计算：每个点的大小（字节） */
+    MEMORY_POINT_SIZE: 40,
+    /** 内存计算：context对象开销（字节） */
+    MEMORY_CONTEXT_SIZE: 128,
+    /** 内存计算：选择项开销（字节） */
+    MEMORY_SELECTION_ITEM_SIZE: 32
   }
+} as const;
+
+/**
+ * 工具显示名称映射
+ * 统一管理工具的中文显示名称
+ */
+export const ToolDisplayNames: Record<string, string> = {
+  pen: '画笔',
+  brush: '毛笔',
+  advancedPen: '高级画笔',
+  rect: '矩形',
+  circle: '圆形',
+  line: '直线',
+  polyline: '折线',
+  polygon: '多边形',
+  text: '文字',
+  image: '图片',
+  eraser: '橡皮擦',
+  select: '选择',
+  transform: '变换'
 } as const;
 
 /**

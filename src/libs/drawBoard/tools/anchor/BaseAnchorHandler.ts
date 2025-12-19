@@ -299,7 +299,7 @@ export abstract class BaseAnchorHandler implements ShapeAnchorHandler {
     deltaX: number,
     deltaY: number
   ): Bounds | null {
-    let newBounds = { ...bounds };
+    const newBounds = { ...bounds };
     
     switch (anchorType) {
       case 'top-left':

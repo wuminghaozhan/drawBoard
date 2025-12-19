@@ -1441,45 +1441,28 @@ export class DrawBoard {
    * @param type 工具类型
    */
   public async setTool(toolType: ToolType): Promise<void> {
+    const currentTool = this.toolManager.getCurrentTool();
+    
     logger.info('DrawBoard.setTool: 切换工具', {
       toolType,
-      currentTool: this.toolManager.getCurrentTool(),
+      currentTool,
       hasEventManager: !!this.eventManager
     });
     
     // 切换工具前，先清理之前的绘制状态（包括折线工具的自动完成）
-    const currentTool = this.toolManager.getCurrentTool();
-    if (currentTool !== toolType) {
-      // 如果当前有正在进行的绘制（如折线），先完成或清理
-      if (this.drawingHandler && 'resetDrawingState' in this.drawingHandler) {
-        (this.drawingHandler as { resetDrawingState: () => void }).resetDrawingState();
-        logger.info('DrawBoard.setTool: 已清理DrawingHandler的绘制状态', {
-          fromTool: currentTool,
-          toTool: toolType
-        });
-      }
+    if (currentTool !== toolType && this.drawingHandler && 'resetDrawingState' in this.drawingHandler) {
+      (this.drawingHandler as { resetDrawingState: () => void }).resetDrawingState();
     }
     
-    // 如果切换到select工具，验证事件管理器状态
+    // 如果切换到select工具，验证事件管理器状态（仅在开发环境或调试模式下）
     if (toolType === 'select') {
-      
-      // 验证事件管理器状态
-      if (this.eventManager) {
+      if (!this.eventManager) {
+        logger.error('❌ DrawBoard.setTool: EventManager不存在！');
+      } else {
         const interactionLayer = this.canvasEngine.getLayer('interaction');
-        if (interactionLayer) {
-          logger.info('DrawBoard.setTool: 验证事件管理器绑定', {
-            eventManagerExists: !!this.eventManager,
-            interactionCanvas: interactionLayer.canvas,
-            canvasWidth: interactionLayer.canvas.width,
-            canvasHeight: interactionLayer.canvas.height,
-            pointerEvents: getComputedStyle(interactionLayer.canvas).pointerEvents,
-            zIndex: getComputedStyle(interactionLayer.canvas).zIndex
-          });
-        } else {
+        if (!interactionLayer) {
           logger.error('❌ DrawBoard.setTool: 无法获取interaction层！');
         }
-      } else {
-        logger.error('❌ DrawBoard.setTool: EventManager不存在！');
       }
     }
     
@@ -1488,10 +1471,9 @@ export class DrawBoard {
     // 确保鼠标样式正确更新
     this.updateCursor();
     
-    logger.info('DrawBoard.setTool: 工具切换完成', {
+    logger.debug('DrawBoard.setTool: 工具切换完成', {
       toolType,
-      newTool: this.toolManager?.getCurrentTool(),
-      toolInstance: !!this.toolManager?.getCurrentToolInstance()
+      newTool: this.toolManager?.getCurrentTool()
     });
     
     return result;

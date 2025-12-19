@@ -87,7 +87,7 @@ export class PenAnchorHandler extends BaseAnchorHandler {
     mouseDeltaX: number,
     mouseDeltaY: number
   ): DrawAction | null {
-    let newBounds = { ...dragStartBounds };
+    const newBounds = { ...dragStartBounds };
     
     switch (edgeType) {
       case 'top':
@@ -133,7 +133,7 @@ export class PenAnchorHandler extends BaseAnchorHandler {
     mouseDeltaX: number,
     mouseDeltaY: number
   ): DrawAction | null {
-    let newBounds = { ...dragStartBounds };
+    const newBounds = { ...dragStartBounds };
     
     switch (cornerType) {
       case 'top-left':

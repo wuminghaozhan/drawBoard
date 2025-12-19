@@ -2,6 +2,7 @@ import { ToolFactory } from './ToolFactory';
 import { DrawTool } from './DrawTool';
 import type { ToolType } from './DrawTool';
 import { logger } from '../infrastructure/logging/Logger';
+import { ToolDisplayNames } from '../config/Constants';
 
 /**
  * 工具管理器 - 管理当前工具状态和工具切换
@@ -17,7 +18,7 @@ export class ToolManager {
   private currentTool: ToolType = 'pen';
   private currentToolInstance: DrawTool | null = null;
   private toolFactory: ToolFactory;
-  private loadingState: 'idle' | 'loading' | 'ready' | 'error' = 'idle';
+  private loadingState: 'idle' | 'loading' | 'ready' | 'error' = 'idle'; // 加载状态: 空闲、加载中、准备好、错误
   // 防止工具切换竞态条件
   private toolSwitchPromise: Promise<void> | null = null;
 
@@ -106,19 +107,7 @@ export class ToolManager {
    * 获取工具显示名称
    */
   private getToolDisplayName(type: ToolType): string {
-    const nameMap: Record<ToolType, string> = {
-      pen: '画笔',
-      brush: '毛笔',
-      rect: '矩形',
-      circle: '圆形', 
-      line: '直线',
-      polygon: '多边形',
-      text: '文字',
-      eraser: '橡皮擦',
-      select: '选择',
-      transform: '变换'
-    };
-    return nameMap[type] || type;
+    return ToolDisplayNames[type] || type;
   }
 
   /**

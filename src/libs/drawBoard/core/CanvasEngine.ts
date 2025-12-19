@@ -31,11 +31,11 @@ export class CanvasEngine {
   private dynamicDrawLayers: Map<string, CanvasLayer> = new Map();
   // 当前draw层拆分状态
   private drawLayerSplitState: {
-    isSplit: boolean;
-    selectedLayerZIndex: number | null;
-    bottomLayerId: string | null;
-    selectedLayerId: string | null;
-    topLayerId: string | null;
+    isSplit: boolean; // 是否拆分
+    selectedLayerZIndex: number | null; // 选中图层的zIndex
+    bottomLayerId: string | null; // 下层draw层ID
+    selectedLayerId: string | null; // 选中图层draw层ID
+    topLayerId: string | null; // 上层draw层ID
     initialized: boolean; // 是否已初始化绘制bottom和top层
   } = {
     isSplit: false,
@@ -140,38 +140,19 @@ export class CanvasEngine {
     logger.debug('Creating layer:', name, 'with z-index:', zIndex);
     
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d');
     
     if (!ctx) {
       logger.error('Failed to get 2D context for layer:', name);
       return;
     }
     
-    canvas.style.position = 'absolute';
-    canvas.style.top = '0';
-    canvas.style.left = '0';
-    canvas.style.bottom = '0';
-    canvas.style.right = '0';
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
-    canvas.style.pointerEvents = 'none';
-    canvas.style.zIndex = zIndex.toString();
-    canvas.style.backgroundColor = 'transparent'; // 确保背景透明
-    canvas.setAttribute('layer-name', name); // 添加图层名称属性
-    
-    // 交互层需要接收事件
-    if (name === 'interaction') {
-      canvas.style.pointerEvents = 'auto';
-      logger.debug('Interaction layer created with pointer-events: auto', {
-        canvas,
-        width: canvas.width,
-        height: canvas.height,
-        zIndex: canvas.style.zIndex
-      });
-    }
+    // 交互层需要接收事件，其他层不接收
+    const pointerEvents = name === 'interaction' ? 'auto' : 'none';
+    this.setupCanvasBaseStyle(canvas, name, zIndex, pointerEvents);
+    this.setCanvasSize(canvas);
     
     this.container.appendChild(canvas);
-    logger.debug('Canvas appended to container for layer:', name);
     
     this.layers.set(name, {
       canvas,
@@ -267,16 +248,18 @@ export class CanvasEngine {
    * 清除画布
    */
   public clear(layerName?: string): void {
+    const clearRect = (ctx: CanvasRenderingContext2D) => {
+      ctx.clearRect(0, 0, this.width, this.height);
+    };
+    
     if (layerName) {
       const layer = this.layers.get(layerName);
       if (layer) {
-        layer.ctx.clearRect(0, 0, this.width, this.height);
+        clearRect(layer.ctx);
       }
     } else {
       // 清除所有层
-      this.layers.forEach(layer => {
-        layer.ctx.clearRect(0, 0, this.width, this.height);
-      });
+      this.layers.forEach(layer => clearRect(layer.ctx));
     }
   }
 
@@ -284,11 +267,8 @@ export class CanvasEngine {
    * 调整画布大小
    */
   public resize(): void {
-    const container = this.container;
-    const newWidth = container.offsetWidth;
-    const newHeight = container.offsetHeight;
-    
-    logger.debug('CanvasEngine resize:', newWidth, 'x', newHeight);
+    const newWidth = this.container.offsetWidth;
+    const newHeight = this.container.offsetHeight;
     
     // 🔒 防止0尺寸导致canvas清空
     if (newWidth <= 0 || newHeight <= 0) {
@@ -298,33 +278,31 @@ export class CanvasEngine {
     
     // 🔒 防止重复resize相同尺寸
     if (this.width === newWidth && this.height === newHeight) {
-      logger.debug('✅ Size unchanged, skipping resize');
       return;
     }
     
     this.width = newWidth;
     this.height = newHeight;
     
-    // 调整固定图层尺寸
-    this.layers.forEach((layer, name) => {
+    // 调整所有图层尺寸（统一处理）
+    const resizeLayer = (layer: CanvasLayer) => {
       layer.canvas.width = this.width;
       layer.canvas.height = this.height;
+    };
+    
+    // 调整固定图层尺寸
+    this.layers.forEach((layer, name) => {
+      resizeLayer(layer);
       // resize时需要重新设置上下文，清除缓存
       this.contextCache.delete(name);
       this.setupContext(layer.ctx, name);
     });
     
     // 调整动态图层尺寸
-    this.dynamicLayers.forEach((layer) => {
-      layer.canvas.width = this.width;
-      layer.canvas.height = this.height;
-    });
+    this.dynamicLayers.forEach(resizeLayer);
     
     // 调整动态draw层尺寸
-    this.dynamicDrawLayers.forEach((layer) => {
-      layer.canvas.width = this.width;
-      layer.canvas.height = this.height;
-    });
+    this.dynamicDrawLayers.forEach(resizeLayer);
   }
 
   public getLayer(name: string): CanvasLayer | undefined {
@@ -532,92 +510,28 @@ export class CanvasEngine {
       throw new Error(`无法创建动态图层 ${layerId} 的2D上下文`);
     }
 
-    // 设置Canvas样式
-    canvas.style.position = 'absolute';
-    canvas.style.top = '0';
-    canvas.style.left = '0';
-    canvas.style.bottom = '0';
-    canvas.style.right = '0';
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
-    // 动态图层不接收事件，事件由 interaction 层统一处理
-    // 这样可以避免动态图层遮挡 interaction 层
-    canvas.style.pointerEvents = 'none';
-    // 重要：先设置 zIndex（在设置尺寸之前）
-    // 使用分配的 zIndex 而不是原始请求的 zIndex
-    const zIndexString = allocatedZIndex.toString();
     // 保存分配的 zIndex 用于后续释放
+    const zIndexString = allocatedZIndex.toString();
     canvas.setAttribute('data-allocated-zindex', zIndexString);
-    canvas.style.setProperty('z-index', zIndexString);
-    canvas.style.zIndex = zIndexString; // 双重设置确保生效
-    canvas.style.backgroundColor = 'transparent';
-    canvas.setAttribute('layer-name', layerId); // 添加图层名称属性，便于调试
     
-    logger.info('创建动态图层', {
-      layerId,
-      zIndex,
-      zIndexString,
-      canvasStyleZIndex: canvas.style.zIndex,
-      pointerEvents: canvas.style.pointerEvents,
-      interactionLayerZIndex: 1000,
-      willBlockEvents: parseFloat(zIndexString) >= 1000,
-      canvasWidth: canvas.width,
-      canvasHeight: canvas.height
-    });
+    // 设置Canvas基础样式（动态图层不接收事件）
+    this.setupCanvasBaseStyle(canvas, layerId, allocatedZIndex, 'none');
+    this.setCanvasSize(canvas);
+    
+    // 设置尺寸后重新设置 zIndex（防止被重置）
+    this.setCanvasZIndex(canvas, allocatedZIndex);
     
     // 警告：如果zIndex >= 1000，可能会遮挡interaction层
-    if (parseFloat(zIndexString) >= 1000) {
+    if (allocatedZIndex >= 1000) {
       logger.warn('⚠️ 动态图层的zIndex >= 1000，可能会遮挡interaction层的事件！', {
         layerId,
-        zIndex,
-        interactionLayerZIndex: 1000,
-        pointerEvents: canvas.style.pointerEvents
+        zIndex: allocatedZIndex,
+        interactionLayerZIndex: 1000
       });
     }
-
-    // 设置Canvas尺寸（注意：某些浏览器在设置尺寸时可能会重置样式）
-    canvas.width = this.width || this.container.offsetWidth || 800;
-    canvas.height = this.height || this.container.offsetHeight || 600;
-    
-    // 设置尺寸后立即重新设置 zIndex（防止被重置）
-    canvas.style.setProperty('z-index', zIndexString);
-    canvas.style.zIndex = zIndexString;
-    
-    logger.info('设置尺寸后验证zIndex', {
-      layerId,
-      zIndexAfterSize: canvas.style.zIndex,
-      zIndexMatch: canvas.style.zIndex === zIndexString
-    });
 
     // 插入到容器中（需要按zIndex顺序插入）
-    // 注意：使用 allocatedZIndex 而非原始 zIndex，确保 z-index 冲突防止逻辑生效
     this.insertCanvasByZIndex(canvas, allocatedZIndex);
-    
-    // 插入后再次验证 zIndex 是否被正确设置
-    const finalZIndex = canvas.style.zIndex;
-    if (!finalZIndex || finalZIndex !== zIndex.toString()) {
-      logger.error('❌ 动态图层的zIndex设置失败！', {
-        layerId,
-        expectedZIndex: zIndex,
-        actualZIndex: finalZIndex,
-        canvasStyleZIndex: canvas.style.zIndex
-      });
-      // 强制设置
-      canvas.style.setProperty('z-index', zIndex.toString());
-      // 如果 setProperty 失败，直接设置
-      if (!canvas.style.zIndex) {
-        canvas.style.zIndex = zIndex.toString();
-      }
-      logger.info('✅ 已强制设置zIndex', {
-        layerId,
-        zIndex: canvas.style.zIndex
-      });
-    } else {
-      logger.info('✅ 动态图层的zIndex设置成功', {
-        layerId,
-        zIndex: finalZIndex
-      });
-    }
 
     const layer: CanvasLayer = {
       canvas,
@@ -626,41 +540,64 @@ export class CanvasEngine {
     };
 
     this.dynamicLayers.set(layerId, layer);
-    logger.debug('创建动态图层:', layerId, 'zIndex:', zIndex);
+    logger.debug('创建动态图层:', layerId, 'zIndex:', allocatedZIndex);
     
     return layer;
+  }
+
+  /**
+   * 设置 Canvas 的基础样式（统一方法，减少重复代码）
+   */
+  private setupCanvasBaseStyle(
+    canvas: HTMLCanvasElement, 
+    layerName: string, 
+    zIndex: number,
+    pointerEvents: 'auto' | 'none' = 'none'
+  ): void {
+    canvas.style.position = 'absolute';
+    canvas.style.top = '0';
+    canvas.style.left = '0';
+    canvas.style.bottom = '0';
+    canvas.style.right = '0';
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    canvas.style.pointerEvents = pointerEvents;
+    canvas.style.backgroundColor = 'transparent';
+    canvas.setAttribute('layer-name', layerName);
+    this.setCanvasZIndex(canvas, zIndex);
+  }
+
+  /**
+   * 设置 Canvas 的 zIndex（统一方法，减少重复代码）
+   */
+  private setCanvasZIndex(canvas: HTMLCanvasElement, zIndex: number): void {
+    const zIndexString = zIndex.toString();
+    
+    // 多重设置确保生效
+    canvas.style.setProperty('z-index', zIndexString);
+    canvas.style.zIndex = zIndexString;
+    
+    // 如果标准方法失败，使用 setAttribute 作为备选方案
+    if (!canvas.style.zIndex || canvas.style.zIndex !== zIndexString) {
+      const currentStyle = canvas.getAttribute('style') || '';
+      canvas.setAttribute('style', `${currentStyle}; z-index: ${zIndexString} !important;`.replace(/^; /, ''));
+    }
+  }
+
+  /**
+   * 设置 Canvas 尺寸（统一方法，减少重复代码）
+   */
+  private setCanvasSize(canvas: HTMLCanvasElement): void {
+    canvas.width = this.width || this.container.offsetWidth || 800;
+    canvas.height = this.height || this.container.offsetHeight || 600;
   }
 
   /**
    * 按zIndex顺序插入Canvas元素
    */
   private insertCanvasByZIndex(canvas: HTMLCanvasElement, zIndex: number): void {
-    // 确保zIndex被正确设置到canvas的style上（在插入前设置）
-    const zIndexString = zIndex.toString();
-    // 多重设置确保生效
-    canvas.style.setProperty('z-index', zIndexString);
-    canvas.style.zIndex = zIndexString;
-    
-    logger.info('insertCanvasByZIndex: 设置canvas的zIndex', {
-      layerName: canvas.getAttribute('layer-name'),
-      zIndex,
-      zIndexString,
-      canvasStyleZIndex: canvas.style.zIndex,
-      canvasComputedZIndex: canvas.parentElement ? getComputedStyle(canvas).zIndex : 'N/A (not in DOM)'
-    });
-    
-    // 如果此时 zIndex 还是空的，说明有问题
-    if (!canvas.style.zIndex || canvas.style.zIndex !== zIndexString) {
-      logger.error('❌ insertCanvasByZIndex: 插入前zIndex设置失败！', {
-        layerName: canvas.getAttribute('layer-name'),
-        expectedZIndex: zIndexString,
-        actualZIndex: canvas.style.zIndex,
-        canvasStyle: canvas.getAttribute('style')
-      });
-      // 尝试使用 setAttribute 直接设置 style
-      const currentStyle = canvas.getAttribute('style') || '';
-      canvas.setAttribute('style', `${currentStyle}; z-index: ${zIndexString} !important;`.replace(/^; /, ''));
-    }
+    // 插入前设置 zIndex
+    this.setCanvasZIndex(canvas, zIndex);
     
     const allCanvases = Array.from(this.container.querySelectorAll('canvas'));
     
@@ -680,34 +617,21 @@ export class CanvasEngine {
       this.container.appendChild(canvas);
     }
     
-    // 插入后立即再次设置zIndex（确保不被覆盖）
-    canvas.style.setProperty('z-index', zIndexString);
-    canvas.style.zIndex = zIndexString;
+    // 插入后再次设置 zIndex（确保不被覆盖）
+    this.setCanvasZIndex(canvas, zIndex);
     
-    // 使用 requestAnimationFrame 确保在下一帧验证（让浏览器有时间应用样式）
+    // 使用 requestAnimationFrame 异步验证（让浏览器有时间应用样式）
+    // 只在开发环境或调试模式下记录详细日志
     requestAnimationFrame(() => {
       const finalZIndex = canvas.style.zIndex;
-      const computedZIndex = getComputedStyle(canvas).zIndex;
+      const zIndexString = zIndex.toString();
       if (!finalZIndex || finalZIndex !== zIndexString) {
         logger.warn('⚠️ insertCanvasByZIndex: 插入后zIndex丢失，重新设置', {
           layerName: canvas.getAttribute('layer-name'),
           expectedZIndex: zIndexString,
-          actualZIndex: finalZIndex,
-          computedZIndex
+          actualZIndex: finalZIndex
         });
-        // 最后一次尝试：直接设置 style.zIndex
-        canvas.style.zIndex = zIndexString;
-        // 如果还是不行，使用 setAttribute 作为备选方案
-        if (!canvas.style.zIndex || canvas.style.zIndex !== zIndexString) {
-          const currentStyle = canvas.getAttribute('style') || '';
-          canvas.setAttribute('style', `${currentStyle}; z-index: ${zIndexString} !important;`.replace(/^; /, ''));
-        }
-      } else {
-        logger.info('✅ insertCanvasByZIndex: zIndex设置成功', {
-          layerName: canvas.getAttribute('layer-name'),
-          zIndex: finalZIndex,
-          computedZIndex
-        });
+        this.setCanvasZIndex(canvas, zIndex);
       }
     });
   }
@@ -746,47 +670,10 @@ export class CanvasEngine {
     if (!layer) {
       // 使用优化后的zIndex计算公式：BASE_ZINDEX + virtualLayerZIndex * ZINDEX_STEP
       const zIndex = CanvasEngine.calculateDynamicLayerZIndex(virtualLayerZIndex);
-      logger.info('getSelectionLayerForVirtualLayer: 创建新的动态图层', {
-        layerId,
-        virtualLayerZIndex,
-        calculatedZIndex: zIndex,
-        interactionLayerZIndex: 1000,
-        willBlockEvents: zIndex >= 1000
-      });
-      
-      // 警告：如果zIndex >= 1000，可能会遮挡interaction层
-      if (zIndex >= 1000) {
-        logger.warn('⚠️ 动态图层的zIndex >= 1000，可能会遮挡interaction层的事件！', {
-          layerId,
-          zIndex,
-          interactionLayerZIndex: 1000,
-          suggestion: '考虑调整calculateDynamicLayerZIndex的计算方式'
-        });
-      }
       
       layer = this.createDynamicLayer(layerId, zIndex);
       
-      // 创建后再次验证 zIndex
-      const finalZIndex = layer.canvas.style.zIndex;
-      logger.info('getSelectionLayerForVirtualLayer: 创建完成，验证zIndex', {
-        layerId,
-        expectedZIndex: zIndex,
-        actualZIndex: finalZIndex,
-        zIndexMatch: finalZIndex === zIndex.toString()
-      });
-      
-      if (!finalZIndex || finalZIndex !== zIndex.toString()) {
-        logger.error('❌ getSelectionLayerForVirtualLayer: zIndex设置失败，强制设置', {
-          layerId,
-          expectedZIndex: zIndex,
-          actualZIndex: finalZIndex
-        });
-        layer.canvas.style.setProperty('z-index', zIndex.toString());
-        // 如果 setProperty 失败，直接设置
-        if (!layer.canvas.style.zIndex) {
-          layer.canvas.style.zIndex = zIndex.toString();
-        }
-      }
+      // createDynamicLayer 内部已经处理了 zIndex 设置和验证，这里不需要重复验证
     } else {
       // 计算期望的 zIndex
       const expectedZIndex = CanvasEngine.calculateDynamicLayerZIndex(virtualLayerZIndex);
@@ -861,16 +748,18 @@ export class CanvasEngine {
    * @param layerId 动态图层ID，如果不提供则清除所有动态图层
    */
   public clearDynamicLayer(layerId?: string): void {
+    const clearRect = (ctx: CanvasRenderingContext2D) => {
+      ctx.clearRect(0, 0, this.width, this.height);
+    };
+    
     if (layerId) {
       const layer = this.dynamicLayers.get(layerId);
       if (layer) {
-        layer.ctx.clearRect(0, 0, this.width, this.height);
+        clearRect(layer.ctx);
       }
     } else {
       // 清除所有动态图层
-      this.dynamicLayers.forEach((layer) => {
-        layer.ctx.clearRect(0, 0, this.width, this.height);
-      });
+      this.dynamicLayers.forEach(layer => clearRect(layer.ctx));
     }
   }
 
@@ -1095,22 +984,9 @@ export class CanvasEngine {
       throw new Error(`无法创建动态draw层 ${layerId} 的2D上下文`);
     }
 
-    // 设置Canvas样式
-    canvas.style.position = 'absolute';
-    canvas.style.top = '0';
-    canvas.style.left = '0';
-    canvas.style.bottom = '0';
-    canvas.style.right = '0';
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
-    canvas.style.pointerEvents = 'none';
-    canvas.style.zIndex = zIndex.toString();
-    canvas.style.backgroundColor = 'transparent';
-    canvas.setAttribute('layer-name', layerId); // 添加图层名称属性，便于调试
-
-    // 设置Canvas尺寸
-    canvas.width = this.width || this.container.offsetWidth || 800;
-    canvas.height = this.height || this.container.offsetHeight || 600;
+    // 设置Canvas基础样式（动态draw层不接收事件）
+    this.setupCanvasBaseStyle(canvas, layerId, zIndex, 'none');
+    this.setCanvasSize(canvas);
 
     // 插入到容器中（需要按zIndex顺序插入）
     this.insertCanvasByZIndex(canvas, zIndex);
@@ -1143,15 +1019,22 @@ export class CanvasEngine {
   }
 
   /**
+   * 获取动态draw层上下文（统一方法，减少重复代码）
+   */
+  private getDynamicDrawLayerContext(layerId: string | null): CanvasRenderingContext2D | null {
+    if (!this.drawLayerSplitState.isSplit || !layerId) {
+      return null;
+    }
+    const layer = this.dynamicDrawLayers.get(layerId);
+    return layer ? layer.ctx : null;
+  }
+
+  /**
    * 获取选中图层的draw层上下文
    * @returns Canvas上下文，如果未拆分则返回null
    */
   public getSelectedLayerDrawContext(): CanvasRenderingContext2D | null {
-    if (!this.drawLayerSplitState.isSplit || !this.drawLayerSplitState.selectedLayerId) {
-      return null;
-    }
-    const layer = this.dynamicDrawLayers.get(this.drawLayerSplitState.selectedLayerId);
-    return layer ? layer.ctx : null;
+    return this.getDynamicDrawLayerContext(this.drawLayerSplitState.selectedLayerId);
   }
 
   /**
@@ -1159,11 +1042,7 @@ export class CanvasEngine {
    * @returns Canvas上下文，如果没有下层则返回null
    */
   public getBottomLayersDrawContext(): CanvasRenderingContext2D | null {
-    if (!this.drawLayerSplitState.isSplit || !this.drawLayerSplitState.bottomLayerId) {
-      return null;
-    }
-    const layer = this.dynamicDrawLayers.get(this.drawLayerSplitState.bottomLayerId);
-    return layer ? layer.ctx : null;
+    return this.getDynamicDrawLayerContext(this.drawLayerSplitState.bottomLayerId);
   }
 
   /**
@@ -1171,11 +1050,7 @@ export class CanvasEngine {
    * @returns Canvas上下文，如果没有上层则返回null
    */
   public getTopLayersDrawContext(): CanvasRenderingContext2D | null {
-    if (!this.drawLayerSplitState.isSplit || !this.drawLayerSplitState.topLayerId) {
-      return null;
-    }
-    const layer = this.dynamicDrawLayers.get(this.drawLayerSplitState.topLayerId);
-    return layer ? layer.ctx : null;
+    return this.getDynamicDrawLayerContext(this.drawLayerSplitState.topLayerId);
   }
 
   /**
@@ -1239,8 +1114,6 @@ export class CanvasEngine {
     }
 
     // 已拆分时，验证状态
-    const hasBottom = this.drawLayerSplitState.bottomLayerId !== null;
-    const hasTop = this.drawLayerSplitState.topLayerId !== null;
     const hasSelected = this.drawLayerSplitState.selectedLayerId !== null;
 
     // 必须要有selected层
@@ -1249,27 +1122,20 @@ export class CanvasEngine {
       return false;
     }
 
-    // 验证DOM元素存在
-    if (hasBottom && !this.dynamicDrawLayers.has(this.drawLayerSplitState.bottomLayerId!)) {
-      logger.warn('状态不一致: bottom层ID存在但DOM元素不存在', {
-        bottomLayerId: this.drawLayerSplitState.bottomLayerId
-      });
-      return false;
-    }
+    // 验证DOM元素存在（统一验证逻辑）
+    const validateLayerExists = (layerId: string | null, layerName: string): boolean => {
+      if (layerId && !this.dynamicDrawLayers.has(layerId)) {
+        logger.warn(`状态不一致: ${layerName}层ID存在但DOM元素不存在`, {
+          [layerName + 'LayerId']: layerId
+        });
+        return false;
+      }
+      return true;
+    };
 
-    if (hasSelected && !this.dynamicDrawLayers.has(this.drawLayerSplitState.selectedLayerId!)) {
-      logger.warn('状态不一致: selected层ID存在但DOM元素不存在', {
-        selectedLayerId: this.drawLayerSplitState.selectedLayerId
-      });
-      return false;
-    }
-
-    if (hasTop && !this.dynamicDrawLayers.has(this.drawLayerSplitState.topLayerId!)) {
-      logger.warn('状态不一致: top层ID存在但DOM元素不存在', {
-        topLayerId: this.drawLayerSplitState.topLayerId
-      });
-      return false;
-    }
+    if (!validateLayerExists(this.drawLayerSplitState.bottomLayerId, 'bottom')) return false;
+    if (!validateLayerExists(this.drawLayerSplitState.selectedLayerId, 'selected')) return false;
+    if (!validateLayerExists(this.drawLayerSplitState.topLayerId, 'top')) return false;
 
     // 验证原始draw层已隐藏
     const originalDrawLayer = this.layers.get('draw');
@@ -1279,6 +1145,16 @@ export class CanvasEngine {
     }
 
     return true;
+  }
+
+  /**
+   * 移除 Canvas 元素（统一方法，减少重复代码）
+   */
+  private removeCanvasElement(canvas: HTMLCanvasElement, layerName: string): void {
+    if (canvas.parentNode) {
+      canvas.parentNode.removeChild(canvas);
+      logger.debug(`  Removed ${layerName}`);
+    }
   }
 
   /**
@@ -1292,26 +1168,17 @@ export class CanvasEngine {
     
     // 清理所有固定canvas元素
     this.layers.forEach((layer, name) => {
-      logger.debug(`  Removing layer: ${name}`);
-      if (layer.canvas.parentNode) {
-        layer.canvas.parentNode.removeChild(layer.canvas);
-      }
+      this.removeCanvasElement(layer.canvas, `layer: ${name}`);
     });
     
     // 清理所有动态canvas元素
     this.dynamicLayers.forEach((layer, layerId) => {
-      logger.debug(`  Removing dynamic layer: ${layerId}`);
-      if (layer.canvas.parentNode) {
-        layer.canvas.parentNode.removeChild(layer.canvas);
-      }
+      this.removeCanvasElement(layer.canvas, `dynamic layer: ${layerId}`);
     });
     
     // 清理所有动态draw层
     this.dynamicDrawLayers.forEach((layer, layerId) => {
-      logger.debug(`  Removing dynamic draw layer: ${layerId}`);
-      if (layer.canvas.parentNode) {
-        layer.canvas.parentNode.removeChild(layer.canvas);
-      }
+      this.removeCanvasElement(layer.canvas, `dynamic draw layer: ${layerId}`);
     });
     
     // 清理映射

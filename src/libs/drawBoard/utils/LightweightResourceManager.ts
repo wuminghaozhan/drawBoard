@@ -117,8 +117,21 @@ export class LightweightResourceManager {
 
 /**
  * 资源自动管理装饰器
+ * 
+ * 使用示例：
+ * ```typescript
+ * @withLightweightResourceManager
+ * class MyClass {
+ *   constructor() {
+ *     this.registerResource({ name: 'resource1', destroy: () => {} });
+ *   }
+ * }
+ * ```
  */
-export function withLightweightResourceManager<T extends { new (...args: any[]): any }>(constructor: T) {
+ 
+export function withLightweightResourceManager<
+  T extends new (...args: any[]) => { destroy?(): void | Promise<void> }
+>(constructor: T) {
   return class extends constructor {
     private resources: DestroyableResource[] = [];
 

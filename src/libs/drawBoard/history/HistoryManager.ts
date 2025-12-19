@@ -1,6 +1,7 @@
 import type { DrawAction } from '../tools/DrawTool';
 import { logger } from '../infrastructure/logging/Logger';
 import type { EventBus } from '../infrastructure/events/EventBus';
+import { ConfigConstants } from '../config/Constants';
 
 /**
  * 批量操作记录
@@ -49,6 +50,18 @@ export interface ActionSnapshot {
 }
 
 /**
+ * 变形操作记录
+ * 用于支持 undo/redo 的变形操作
+ */
+export interface TransformRecord {
+  id: string;
+  type: 'transform';
+  beforeActions: DrawAction[];
+  afterActions: DrawAction[];
+  timestamp: number;
+}
+
+/**
  * 历史管理器 - 优化版本
  * 
  * 改进:
@@ -61,15 +74,17 @@ export interface ActionSnapshot {
 export class HistoryManager {
   private history: DrawAction[] = [];
   private undoneActions: DrawAction[] = [];
-  private maxHistorySize: number = 100;
-  private maxUndoneSize: number = 50;
+  private historyIndex: Map<string, number> = new Map(); // Action ID -> history 数组索引（O(1) 查找）
+  private undoneIndex: Map<string, number> = new Map(); // Action ID -> undoneActions 数组索引
+  private maxHistorySize: number = ConfigConstants.HISTORY.MAX_HISTORY_SIZE; // 最大历史记录数量
+  private maxUndoneSize: number = ConfigConstants.HISTORY.MAX_UNDONE_SIZE; // 最大重做栈大小
   
   // 内存管理相关
-  private maxMemoryMB: number = 50; // 最大内存限制50MB
+  private maxMemoryMB: number = ConfigConstants.HISTORY.MAX_MEMORY_MB; // 最大内存限制
   private currentMemoryBytes: number = 0;
-  private memoryCheckInterval: number = 10; // 每10次操作检查一次内存
-  private readonly MEMORY_RECALCULATE_INTERVAL = 50; // 每50次操作重新计算内存，防止累积误差
-  private operationCount: number = 0;
+  private memoryCheckInterval: number = ConfigConstants.HISTORY.MEMORY_CHECK_INTERVAL;
+  private readonly MEMORY_RECALCULATE_INTERVAL = ConfigConstants.HISTORY.MEMORY_RECALCULATE_INTERVAL; // 内存重新计算间隔
+  private operationCount: number = 0; // 操作计数
 
   // 性能监控相关
   private performanceMetrics = { // 性能指标
@@ -93,7 +108,7 @@ export class HistoryManager {
   // 批量操作相关
   private batchOperations: BatchOperation[] = [];
   private undoneBatchOperations: BatchOperation[] = []; // 已撤销的批量操作（用于 redo）
-  private maxBatchOperations: number = 50;
+  private maxBatchOperations: number = ConfigConstants.HISTORY.MAX_BATCH_OPERATIONS;
   private incrementalStorage: Map<string, IncrementalBatchStorage> = new Map();
   private useIncrementalStorage: boolean = true; // 默认启用增量存储
   
@@ -101,38 +116,39 @@ export class HistoryManager {
    * 添加动作到历史记录（智能内存管理）
    */
   public addAction(action: DrawAction): void {
-    // 🔧 基本验证
-    if (!action || !action.id || !action.type) {
+    // 基本验证
+    if (!action?.id || !action.type) {
       logger.warn('添加无效的 action', { action });
       return;
     }
     
-    // 🔧 检查是否已存在相同 ID 的 action
-    if (this.getActionById(action.id)) {
+    // O(1) 检查是否已存在
+    if (this.historyIndex.has(action.id) || this.undoneIndex.has(action.id)) {
       logger.warn('Action 已存在，跳过添加', { actionId: action.id });
       return;
     }
     
     logger.debug('添加动作到历史记录, ID:', action.id);
     
-    // 计算动作的内存大小
     const actionMemorySize = this.calculateActionMemorySize(action);
     
+    // 添加到历史并更新索引
     this.history.push(action);
+    this.historyIndex.set(action.id, this.history.length - 1);
     this.currentMemoryBytes += actionMemorySize;
     
-    // 清空重做栈 - 修复内存计算
+    // 清空重做栈
     if (this.undoneActions.length > 0) {
       const undoneMemorySize = this.calculateArrayMemorySize(this.undoneActions);
       this.currentMemoryBytes -= undoneMemorySize;
       this.undoneActions = [];
+      this.undoneIndex.clear();
       logger.debug('清空重做栈，释放内存:', (undoneMemorySize / 1024 / 1024).toFixed(2), 'MB');
     }
     
     // 增量检查内存使用
     this.operationCount++;
     
-    // 定期重新计算内存，防止累积误差
     if (this.operationCount % this.MEMORY_RECALCULATE_INTERVAL === 0) {
       this.recalculateMemory();
     }
@@ -140,7 +156,6 @@ export class HistoryManager {
     if (this.operationCount % this.memoryCheckInterval === 0) {
       this.enforceMemoryLimits();
     } else {
-      // 简单检查数量限制
       this.enforceCountLimits();
     }
     
@@ -169,24 +184,26 @@ export class HistoryManager {
   }
 
   /**
-   * 撤销操作（智能内存管理）
+   * 撤销操作
    */
   public undo(): DrawAction | null {
     if (this.history.length === 0) return null;
     
     const action = this.history.pop();
-    if (!action) return null; // 额外的安全检查
+    if (!action) return null;
     
-    const actionMemorySize = this.calculateActionMemorySize(action);
-    
+    // 更新索引
+    this.historyIndex.delete(action.id);
     this.undoneActions.push(action);
-    this.currentMemoryBytes -= actionMemorySize; // 从历史记录移除
-    this.currentMemoryBytes += actionMemorySize; // 添加到重做栈（内存总量不变）
+    this.undoneIndex.set(action.id, this.undoneActions.length - 1);
+    // 注意：内存总量不变，只是在两个数组间移动
     
     // 限制重做栈大小
     if (this.undoneActions.length > this.maxUndoneSize) {
       const removedAction = this.undoneActions.shift();
       if (removedAction) {
+        this.undoneIndex.delete(removedAction.id);
+        this.rebuildUndoneIndex(); // 重建索引
         this.currentMemoryBytes -= this.calculateActionMemorySize(removedAction);
       }
     }
@@ -195,44 +212,63 @@ export class HistoryManager {
   }
 
   /**
-   * 重做操作（智能内存管理）
+   * 重做操作
    */
   public redo(): DrawAction | null {
     if (this.undoneActions.length === 0) return null;
     
     const action = this.undoneActions.pop();
-    if (!action) return null; // 额外的安全检查
+    if (!action) return null;
     
+    // 更新索引
+    this.undoneIndex.delete(action.id);
     this.history.push(action);
+    this.historyIndex.set(action.id, this.history.length - 1);
     // 内存总量不变，只是在两个数组间移动
     
     return action;
   }
+  
+  /**
+   * 重建 undone 索引（shift 操作后调用）
+   */
+  private rebuildUndoneIndex(): void {
+    this.undoneIndex.clear();
+    this.undoneActions.forEach((action, idx) => {
+      this.undoneIndex.set(action.id, idx);
+    });
+  }
+  
+  /**
+   * 重建 history 索引（shift 操作后调用）
+   */
+  private rebuildHistoryIndex(): void {
+    this.historyIndex.clear();
+    this.history.forEach((action, idx) => {
+      this.historyIndex.set(action.id, idx);
+    });
+  }
 
   /**
-   * 计算单个动作的内存大小（字节）- 改进版本
+   * 计算单个动作的内存大小（字节）
    */
   private calculateActionMemorySize(action: DrawAction): number {
-    let size = 0;
+    const { MEMORY_BASE_OBJECT_SIZE, MEMORY_POINT_SIZE, MEMORY_CONTEXT_SIZE, MEMORY_SELECTION_ITEM_SIZE } = ConfigConstants.HISTORY;
+    let size = MEMORY_BASE_OBJECT_SIZE;
     
-    // 使用更精确的基础对象大小估算
-    size += 64; // 基础对象开销（更保守的估算）
-    
-    // points数组 - 更精确的计算
-    if (action.points && Array.isArray(action.points)) {
-      // 每个点对象：x(8) + y(8) + timestamp(8) + 对象开销(16) = 40字节
-      size += action.points.length * 40;
+    // points数组
+    if (action.points?.length) {
+      size += action.points.length * MEMORY_POINT_SIZE;
     }
     
-    // 字符串字段 - 使用UTF-8编码估算
+    // 字符串字段
     size += this.calculateStringSize(action.id);
     size += this.calculateStringSize(action.type);
     size += this.calculateStringSize(action.text);
     
-    // context对象 - 更精确的估算
+    // context对象
     if (action.context) {
-      size += 128; // context对象开销
-      // 如果有更多context属性，可以进一步细化
+      size += MEMORY_CONTEXT_SIZE;
     }
     
     // 预渲染缓存
@@ -241,8 +277,8 @@ export class HistoryManager {
     }
     
     // 选择相关数据
-    if (action.selectedActions && Array.isArray(action.selectedActions)) {
-      size += action.selectedActions.length * 32; // 每个选择项约32字节
+    if (action.selectedActions?.length) {
+      size += action.selectedActions.length * MEMORY_SELECTION_ITEM_SIZE;
     }
     
     return size;
@@ -266,7 +302,7 @@ export class HistoryManager {
   }
 
   /**
-   * 强制执行内存限制（完整检查）- 优化版本
+   * 强制执行内存限制（完整检查）
    */
   private enforceMemoryLimits(): void {
     // 重新计算精确的内存使用（防止累积误差）
@@ -274,39 +310,44 @@ export class HistoryManager {
     const undoneMemory = this.calculateArrayMemorySize(this.undoneActions);
     this.currentMemoryBytes = historyMemory + undoneMemory;
     
-    // 【修复】使用 let 而不是 const，因为需要在循环中更新
     let currentMemoryMB = this.currentMemoryBytes / 1024 / 1024;
     
     if (currentMemoryMB > this.maxMemoryMB) {
       logger.info(`内存使用超限 (${currentMemoryMB.toFixed(2)}MB > ${this.maxMemoryMB}MB)，开始清理`);
       
       let cleanedMemory = 0;
+      let needRebuildUndone = false;
+      let needRebuildHistory = false;
       
       // 优先清理重做栈
-      // 【修复】循环条件中需要重新计算 currentMemoryMB
       while (this.undoneActions.length > 0 && currentMemoryMB > this.maxMemoryMB * 0.9) {
         const removedAction = this.undoneActions.shift();
         if (removedAction) {
+          this.undoneIndex.delete(removedAction.id);
+          needRebuildUndone = true;
           const actionSize = this.calculateActionMemorySize(removedAction);
           cleanedMemory += actionSize;
           this.currentMemoryBytes -= actionSize;
-          currentMemoryMB = this.currentMemoryBytes / 1024 / 1024; // 更新循环条件变量
+          currentMemoryMB = this.currentMemoryBytes / 1024 / 1024;
         }
       }
       
       // 如果还是超限，清理历史记录
-      // 【修复】循环条件中需要重新计算 currentMemoryMB
       while (this.history.length > 10 && currentMemoryMB > this.maxMemoryMB * 0.8) {
         const removedAction = this.history.shift();
         if (removedAction) {
+          this.historyIndex.delete(removedAction.id);
+          needRebuildHistory = true;
           const actionSize = this.calculateActionMemorySize(removedAction);
           cleanedMemory += actionSize;
           this.currentMemoryBytes -= actionSize;
-          currentMemoryMB = this.currentMemoryBytes / 1024 / 1024; // 更新循环条件变量
+          currentMemoryMB = this.currentMemoryBytes / 1024 / 1024;
         }
       }
       
-      // 注意：currentMemoryBytes 已在循环中更新，这里不需要再减
+      // 批量重建索引（比循环中重建更高效）
+      if (needRebuildUndone) this.rebuildUndoneIndex();
+      if (needRebuildHistory) this.rebuildHistoryIndex();
       
       logger.info(`内存清理完成，释放: ${(cleanedMemory / 1024 / 1024).toFixed(2)}MB, 当前使用: ${(this.currentMemoryBytes / 1024 / 1024).toFixed(2)}MB`);
     }
@@ -316,9 +357,10 @@ export class HistoryManager {
    * 强制执行数量限制（快速检查）
    */
   private enforceCountLimits(): void {
-    // 快速的数量检查
     if (this.history.length > this.maxHistorySize) {
       const removedAction = this.history.shift()!;
+      this.historyIndex.delete(removedAction.id);
+      this.rebuildHistoryIndex(); // shift 后需要重建索引
       this.currentMemoryBytes -= this.calculateActionMemorySize(removedAction);
     }
   }
@@ -351,9 +393,11 @@ export class HistoryManager {
     return [...this.history];
   }
 
+  /**
+   * @deprecated 使用 getHistory() 替代
+   */
   public getAllActions(): DrawAction[] {
-    // 返回历史记录的副本，用于绘制
-    return [...this.history];
+    return this.getHistory();
   }
 
   public getHistoryCount(): number {
@@ -369,6 +413,8 @@ export class HistoryManager {
     this.currentMemoryBytes = 0;
     this.history = [];
     this.undoneActions = [];
+    this.historyIndex.clear();
+    this.undoneIndex.clear();
     this.operationCount = 0;
   }
 
@@ -380,21 +426,23 @@ export class HistoryManager {
     this.unsubscribeFromEvents();
     this.eventBus = undefined;
     
-    // 清空历史记录
+    // 清空历史记录和索引
     this.history = [];
     this.undoneActions = [];
+    this.historyIndex.clear();
+    this.undoneIndex.clear();
     
     // 重置内存统计
     this.currentMemoryBytes = 0;
     this.operationCount = 0;
     
     // 重置配置
-    this.maxHistorySize = 100;
-    this.maxUndoneSize = 50;
-    this.maxMemoryMB = 50;
-    this.memoryCheckInterval = 10;
+    this.maxHistorySize = ConfigConstants.HISTORY.MAX_HISTORY_SIZE;
+    this.maxUndoneSize = ConfigConstants.HISTORY.MAX_UNDONE_SIZE;
+    this.maxMemoryMB = ConfigConstants.HISTORY.MAX_MEMORY_MB;
+    this.memoryCheckInterval = ConfigConstants.HISTORY.MEMORY_CHECK_INTERVAL;
     
-    logger.info('🗑️ HistoryManager destroyed');
+    logger.info('HistoryManager destroyed');
   }
 
   /**
@@ -403,25 +451,28 @@ export class HistoryManager {
   public removeActionById(actionId: string): boolean {
     let removed = false;
     
-    // 从历史记录中移除
-    const historyIndex = this.history.findIndex(action => action.id === actionId);
-    if (historyIndex !== -1) {
-      const removedAction = this.history.splice(historyIndex, 1)[0];
+    // O(1) 查找历史记录索引
+    const historyIdx = this.historyIndex.get(actionId);
+    if (historyIdx !== undefined) {
+      const removedAction = this.history.splice(historyIdx, 1)[0];
+      this.historyIndex.delete(actionId);
+      this.rebuildHistoryIndex(); // splice 后需要重建索引
       this.currentMemoryBytes -= this.calculateActionMemorySize(removedAction);
       logger.debug('从历史记录中移除动作:', actionId);
       removed = true;
     }
 
-    // 从重做栈中移除
-    const undoneIndex = this.undoneActions.findIndex(action => action.id === actionId);
-    if (undoneIndex !== -1) {
-      const removedAction = this.undoneActions.splice(undoneIndex, 1)[0];
+    // O(1) 查找重做栈索引
+    const undoneIdx = this.undoneIndex.get(actionId);
+    if (undoneIdx !== undefined) {
+      const removedAction = this.undoneActions.splice(undoneIdx, 1)[0];
+      this.undoneIndex.delete(actionId);
+      this.rebuildUndoneIndex(); // splice 后需要重建索引
       this.currentMemoryBytes -= this.calculateActionMemorySize(removedAction);
       logger.debug('从重做栈中移除动作:', actionId);
       removed = true;
     }
 
-    // 🔧 触发历史变更事件
     if (removed) {
       this.emitHistoryChanged();
     }
@@ -549,15 +600,17 @@ export class HistoryManager {
    * 清理 Action 中的运行时属性，使其可序列化
    */
   private sanitizeActionForSerialization(action: DrawAction): DrawAction {
-    const sanitized = { ...action };
+    const sanitized = { ...action } as DrawAction & {
+      imageElement?: unknown;
+      loadState?: unknown;
+      loadError?: unknown;
+    };
     
     // 如果是图片 action，排除运行时属性
     if (action.type === 'image') {
-      const imageAction = sanitized as any;
-      // 排除运行时属性
-      delete imageAction.imageElement;
-      delete imageAction.loadState;
-      delete imageAction.loadError;
+      delete sanitized.imageElement;
+      delete sanitized.loadState;
+      delete sanitized.loadError;
     }
     
     return sanitized;
@@ -637,8 +690,10 @@ export class HistoryManager {
     }
     
     for (const action of restoredActions) {
-      this.history.push({ ...action });
-      this.currentMemoryBytes += this.calculateActionMemorySize(action);
+      const actionCopy = { ...action };
+      this.history.push(actionCopy);
+      this.historyIndex.set(actionCopy.id, this.history.length - 1);
+      this.currentMemoryBytes += this.calculateActionMemorySize(actionCopy);
     }
     
     // ✅ 从批量操作列表中移除，放入已撤销列表（支持 redo）
@@ -767,24 +822,10 @@ export class HistoryManager {
 
   // ==================== 可撤销的变形操作 ====================
   
-  /**
-   * 变形操作记录（用于支持 undo/redo 的变形）
-   */
-  private transformHistory: Array<{
-    id: string;
-    type: 'transform';
-    beforeActions: DrawAction[];
-    afterActions: DrawAction[];
-    timestamp: number;
-  }> = [];
-  private undoneTransformHistory: Array<{
-    id: string;
-    type: 'transform';
-    beforeActions: DrawAction[];
-    afterActions: DrawAction[];
-    timestamp: number;
-  }> = []; // 🔧 变形操作重做栈
-  private maxTransformHistory: number = 50;
+  // 变形操作历史
+  private transformHistory: TransformRecord[] = [];
+  private undoneTransformHistory: TransformRecord[] = []; // 变形操作重做栈
+  private maxTransformHistory: number = ConfigConstants.HISTORY.MAX_TRANSFORM_HISTORY;
   
   /**
    * 记录可撤销的变形操作
@@ -822,47 +863,19 @@ export class HistoryManager {
       this.transformHistory.shift();
     }
     
-    // 📝 调试日志：检查文本宽度是否正确传递到 recordTransform
-    for (const action of afterActions) {
-      if (action.type === 'text') {
-        const textAction = action as DrawAction & { width?: number; height?: number };
-        logger.info('HistoryManager.recordTransform: 准备更新文本action', {
-          actionId: action.id,
-          width: textAction.width,
-          height: textAction.height,
-          points: action.points[0]
-        });
-      }
-    }
-    
     // 应用变形（更新历史记录中的 actions）
-    // 📝 updateAction 会自动保留锁定状态，所以这里直接调用即可
+    let failedCount = 0;
     for (const action of afterActions) {
-      const updated = this.updateAction(action);
-      if (!updated) {
-        logger.warn('HistoryManager.recordTransform: 更新action失败', {
-          actionId: action.id,
-          actionType: action.type
-        });
-      } else if (action.type === 'text') {
-        // 📝 验证更新后的数据
-        const updatedAction = this.getActionById(action.id);
-        if (updatedAction && updatedAction.type === 'text') {
-          const textAction = updatedAction as DrawAction & { width?: number; height?: number };
-          logger.info('HistoryManager.recordTransform: 文本action已更新', {
-            actionId: action.id,
-            width: textAction.width,
-            height: textAction.height,
-            points: updatedAction.points[0]
-          });
-        }
+      if (!this.updateAction(action)) {
+        failedCount++;
+        logger.warn('recordTransform: 更新action失败', { actionId: action.id });
       }
     }
     
-    logger.info('变形操作已记录', {
+    logger.debug('变形操作已记录', {
       transformId,
       actionsCount: afterActions.length,
-      actionIds: afterActions.map(a => a.id)
+      failedCount
     });
     
     this.emitHistoryChanged();
@@ -984,108 +997,74 @@ export class HistoryManager {
   // ==================== 可撤销的变形操作结束 ====================
 
   /**
-   * 更新动作（用于修改已存在的action，如拖拽锚点、变换等）
-   * 注意：此方法直接更新，不记录到变形历史。如需支持 undo，请使用 recordTransform
-   * 📝 锁定状态归属于虚拟图层，不需要在这里保留
-   * @param updatedAction 更新后的action（必须包含相同的id）
-   * @returns 是否成功更新
+   * 内部更新方法（公共逻辑）
    */
-  public updateAction(updatedAction: DrawAction): boolean {
-    if (!updatedAction || !updatedAction.id) {
-      logger.warn('更新动作失败：action或id无效');
-      return false;
-    }
-
-    // 从历史记录中查找并更新
-    const historyIndex = this.history.findIndex(action => action.id === updatedAction.id);
-    if (historyIndex !== -1) {
-      const oldAction = this.history[historyIndex];
+  private doUpdateAction(updatedAction: DrawAction, silent: boolean): boolean {
+    // O(1) 查找历史记录
+    const historyIdx = this.historyIndex.get(updatedAction.id);
+    if (historyIdx !== undefined) {
+      const oldAction = this.history[historyIdx];
       const oldMemorySize = this.calculateActionMemorySize(oldAction);
-      
-      // 📝 直接使用更新后的 action（锁定状态归属于虚拟图层，不需要保留）
       const newMemorySize = this.calculateActionMemorySize(updatedAction);
       
-      // 更新action
-      this.history[historyIndex] = updatedAction;
-      
-      // 更新内存计数
+      this.history[historyIdx] = updatedAction;
       this.currentMemoryBytes = this.currentMemoryBytes - oldMemorySize + newMemorySize;
       
-      logger.debug('更新历史记录中的动作:', updatedAction.id);
+      if (!silent) {
+        logger.debug('更新历史记录中的动作:', updatedAction.id);
+      }
       return true;
     }
 
-    // 从重做栈中查找并更新
-    const undoneIndex = this.undoneActions.findIndex(action => action.id === updatedAction.id);
-    if (undoneIndex !== -1) {
-      const oldAction = this.undoneActions[undoneIndex];
+    // O(1) 查找重做栈
+    const undoneIdx = this.undoneIndex.get(updatedAction.id);
+    if (undoneIdx !== undefined) {
+      const oldAction = this.undoneActions[undoneIdx];
       const oldMemorySize = this.calculateActionMemorySize(oldAction);
-      
-      // 📝 直接使用更新后的 action（锁定状态归属于虚拟图层，不需要保留）
       const newMemorySize = this.calculateActionMemorySize(updatedAction);
       
-      // 更新action
-      this.undoneActions[undoneIndex] = updatedAction;
-      
-      // 更新内存计数
+      this.undoneActions[undoneIdx] = updatedAction;
       this.currentMemoryBytes = this.currentMemoryBytes - oldMemorySize + newMemorySize;
       
-      logger.debug('更新重做栈中的动作:', updatedAction.id);
+      if (!silent) {
+        logger.debug('更新重做栈中的动作:', updatedAction.id);
+      }
       return true;
     }
 
-    logger.warn('更新动作失败：未找到action:', updatedAction.id);
     return false;
   }
 
   /**
-   * 更新动作（不触发历史事件）
-   * 用于拖拽过程中的实时更新，避免产生大量历史记录
-   * 📝 锁定状态归属于虚拟图层，不需要在这里保留
-   * 
+   * 更新动作（用于修改已存在的action）
+   * 注意：此方法直接更新，不记录到变形历史。如需支持 undo，请使用 recordTransform
+   * @param updatedAction 更新后的action（必须包含相同的id）
+   * @returns 是否成功更新
+   */
+  public updateAction(updatedAction: DrawAction): boolean {
+    if (!updatedAction?.id) {
+      logger.warn('更新动作失败：action或id无效');
+      return false;
+    }
+
+    const result = this.doUpdateAction(updatedAction, false);
+    if (!result) {
+      logger.warn('更新动作失败：未找到action:', updatedAction.id);
+    }
+    return result;
+  }
+
+  /**
+   * 更新动作（静默模式，不记录日志）
+   * 用于拖拽过程中的实时更新
    * @param updatedAction 更新后的action
    * @returns 是否成功更新
    */
   public updateActionWithoutHistory(updatedAction: DrawAction): boolean {
-    if (!updatedAction || !updatedAction.id) {
+    if (!updatedAction?.id) {
       return false;
     }
-
-    // 从历史记录中查找并更新（静默更新，不记录日志）
-    const historyIndex = this.history.findIndex(action => action.id === updatedAction.id);
-    if (historyIndex !== -1) {
-      const oldAction = this.history[historyIndex];
-      const oldMemorySize = this.calculateActionMemorySize(oldAction);
-      
-      // 📝 直接使用更新后的 action（锁定状态归属于虚拟图层，不需要保留）
-      const newMemorySize = this.calculateActionMemorySize(updatedAction);
-      
-      // 更新action
-      this.history[historyIndex] = updatedAction;
-      
-      // 更新内存计数
-      this.currentMemoryBytes = this.currentMemoryBytes - oldMemorySize + newMemorySize;
-      return true;
-    }
-
-    // 从重做栈中查找并更新
-    const undoneIndex = this.undoneActions.findIndex(action => action.id === updatedAction.id);
-    if (undoneIndex !== -1) {
-      const oldAction = this.undoneActions[undoneIndex];
-      const oldMemorySize = this.calculateActionMemorySize(oldAction);
-      
-      // 📝 直接使用更新后的 action（锁定状态归属于虚拟图层，不需要保留）
-      const newMemorySize = this.calculateActionMemorySize(updatedAction);
-      
-      // 更新action
-      this.undoneActions[undoneIndex] = updatedAction;
-      
-      // 更新内存计数
-      this.currentMemoryBytes = this.currentMemoryBytes - oldMemorySize + newMemorySize;
-      return true;
-    }
-
-    return false;
+    return this.doUpdateAction(updatedAction, true);
   }
 
   /**
@@ -1105,21 +1084,21 @@ export class HistoryManager {
   }
 
   /**
-   * 根据ID获取action
+   * 根据ID获取action（O(1) 查找）
    * @param actionId action的ID
    * @returns 找到的action，如果不存在返回null
    */
   public getActionById(actionId: string): DrawAction | null {
-    // 从历史记录中查找
-    const historyAction = this.history.find(action => action.id === actionId);
-    if (historyAction) {
-      return historyAction;
+    // O(1) 从历史记录中查找
+    const historyIdx = this.historyIndex.get(actionId);
+    if (historyIdx !== undefined) {
+      return this.history[historyIdx];
     }
 
-    // 从重做栈中查找
-    const undoneAction = this.undoneActions.find(action => action.id === actionId);
-    if (undoneAction) {
-      return undoneAction;
+    // O(1) 从重做栈中查找
+    const undoneIdx = this.undoneIndex.get(actionId);
+    if (undoneIdx !== undefined) {
+      return this.undoneActions[undoneIdx];
     }
 
     return null;
