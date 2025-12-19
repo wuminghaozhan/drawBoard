@@ -518,6 +518,9 @@ export class DrawBoard {
     this.eventManager.on('touchend', this.boundEventHandlers.handleDrawEnd);
     this.eventManager.on('dblclick', this.boundEventHandlers.handleDoubleClick);
     
+    // 绑定键盘事件（用于折线工具）
+    this.bindKeyboardEvents();
+    
     // 验证事件绑定
     const eventManagerInternal = this.eventManager as unknown as { handlers?: Map<string, Array<unknown>> };
     const mousedownHandlers = eventManagerInternal.handlers?.get('mousedown');
@@ -613,6 +616,61 @@ export class DrawBoard {
   // ============================================
   // 配置和快捷键管理
   // ============================================
+
+  /**
+   * 绑定键盘事件（用于折线工具等）
+   */
+  private bindKeyboardEvents(): void {
+    const container = this.container instanceof HTMLCanvasElement ? this.container : this.container;
+    
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 忽略来自输入元素的键盘事件
+      const target = e.target as HTMLElement;
+      if (target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable
+      )) {
+        return;
+      }
+      
+      const currentTool = this.toolManager.getCurrentTool();
+      
+      // 折线工具的键盘事件处理
+      if (currentTool === 'polyline' && this.drawingHandler) {
+        switch (e.key) {
+          case 'Enter':
+            e.preventDefault();
+            e.stopPropagation();
+            // 使用 async/await 确保异步操作完成
+            this.drawingHandler.finishPolylineDrawing().catch(error => {
+              logger.error('折线完成绘制失败（Enter键）', error);
+            });
+            break;
+          case 'Escape':
+            e.preventDefault();
+            e.stopPropagation();
+            this.drawingHandler.cancelPolylineDrawing();
+            break;
+          case 'Backspace':
+            // 只在绘制中时处理，避免与删除选中内容的快捷键冲突
+            if (this.drawingHandler.isDrawingState) {
+              e.preventDefault();
+              e.stopPropagation();
+              this.drawingHandler.deletePolylineLastPoint();
+            }
+            break;
+        }
+      }
+    };
+    
+    container.addEventListener('keydown', handleKeyDown);
+    
+    // 保存清理函数
+    this.eventUnsubscribers.push(() => {
+      container.removeEventListener('keydown', handleKeyDown);
+    });
+  }
 
   /**
    * 启用快捷键
@@ -1189,10 +1247,32 @@ export class DrawBoard {
         return;
       }
       
+      // 如果是折线工具，完成绘制
+      if (currentTool === 'polyline') {
+        await this.handlePolylineDoubleClick(event);
+        return;
+      }
+      
       logger.debug('双击事件未处理（当前工具不支持）', { currentTool });
     } catch (error) {
       logger.error('双击事件处理失败', error);
       this.handleDoubleClickError(error);
+    }
+  }
+  
+  /**
+   * 处理折线工具双击事件（完成绘制）
+   */
+  private async handlePolylineDoubleClick(event: DrawEvent): Promise<void> {
+    try {
+      if (!this.drawingHandler) return;
+      
+      // 完成折线绘制
+      await this.drawingHandler.finishPolylineDrawing();
+      
+      logger.debug('折线绘制完成（双击）', { point: event.point });
+    } catch (error) {
+      logger.error('折线双击事件处理失败', error);
     }
   }
   
@@ -1367,13 +1447,21 @@ export class DrawBoard {
       hasEventManager: !!this.eventManager
     });
     
-    // 如果切换到select工具，先清理之前的绘制状态
-    if (toolType === 'select') {
-      // 清理DrawingHandler的绘制状态，避免isDrawing标志导致的问题
+    // 切换工具前，先清理之前的绘制状态（包括折线工具的自动完成）
+    const currentTool = this.toolManager.getCurrentTool();
+    if (currentTool !== toolType) {
+      // 如果当前有正在进行的绘制（如折线），先完成或清理
       if (this.drawingHandler && 'resetDrawingState' in this.drawingHandler) {
         (this.drawingHandler as { resetDrawingState: () => void }).resetDrawingState();
-        logger.info('DrawBoard.setTool: 已清理DrawingHandler的绘制状态');
+        logger.info('DrawBoard.setTool: 已清理DrawingHandler的绘制状态', {
+          fromTool: currentTool,
+          toTool: toolType
+        });
       }
+    }
+    
+    // 如果切换到select工具，验证事件管理器状态
+    if (toolType === 'select') {
       
       // 验证事件管理器状态
       if (this.eventManager) {

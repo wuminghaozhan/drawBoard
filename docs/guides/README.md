@@ -6,6 +6,7 @@
 |------|------|
 | [QUICK_START_TRANSFORM.md](./QUICK_START_TRANSFORM.md) | 变换工具快速入门 |
 | [SELECTION_USAGE_GUIDE.md](./SELECTION_USAGE_GUIDE.md) | 选择功能使用指南 |
+| [POLYLINE_USAGE_GUIDE.md](./POLYLINE_USAGE_GUIDE.md) | 折线工具使用指南 ⭐ NEW |
 | [CURSOR_STYLES.md](./CURSOR_STYLES.md) | 光标样式配置 |
 | [MOBILE_ADAPTATION.md](./MOBILE_ADAPTATION.md) | 移动端适配 |
 | [PLUGIN_SYSTEM_USAGE.md](./PLUGIN_SYSTEM_USAGE.md) | 插件系统使用 |

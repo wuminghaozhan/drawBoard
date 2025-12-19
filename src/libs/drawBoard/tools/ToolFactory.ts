@@ -196,6 +196,7 @@ export class ToolFactory {
       rect: () => new BasicRectTool(),
       circle: () => new BasicCircleTool(),
       line: () => new BasicLineTool(),
+      polyline: () => new BasicLineTool(), // 降级为基础直线工具
       polygon: () => new BasicPolygonTool(),
       text: () => new BasicTextTool(),
       image: () => new BasicImageTool(), // 降级为基础图片工具
@@ -353,6 +354,17 @@ export class ToolFactory {
           return new LineTool();
         } catch (importError) {
           logger.error('导入 LineTool 失败:', importError);
+          throw importError;
+        }
+      }, { isHeavy: false, estimatedLoadTime: 30 });
+
+      this.register('polyline', async () => {
+        logger.debug('注册 polyline 工具工厂');
+        try {
+          const { PolylineTool } = await import('./PolylineTool');
+          return new PolylineTool();
+        } catch (importError) {
+          logger.error('导入 PolylineTool 失败:', importError);
           throw importError;
         }
       }, { isHeavy: false, estimatedLoadTime: 30 });

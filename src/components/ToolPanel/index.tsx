@@ -33,6 +33,7 @@ const toolGroups = [
       { type: 'rect' as ToolType, name: '矩形', icon: '⬜', hotkey: 'R' },
       { type: 'circle' as ToolType, name: '圆形', icon: '⭕', hotkey: 'C' },
       { type: 'line' as ToolType, name: '直线', icon: '📏', hotkey: 'L' },
+      { type: 'polyline' as ToolType, name: '折线', icon: '📐', hotkey: 'PL' },
       { type: 'polygon' as ToolType, name: '多边形', icon: '🔷', hotkey: 'P' },
     ]
   },
@@ -233,7 +234,7 @@ const ToolPanel: React.FC<ToolPanelProps> = ({
         <h4>快捷键</h4>
         <div className="shortcuts">
           <div>B - 画笔 | R - 矩形 | C - 圆形</div>
-          <div>L - 直线 | P - 多边形</div>
+          <div>L - 直线 | PL - 折线 | P - 多边形</div>
           <div>S - 选择 | T - 文字 | E - 橡皮擦</div>
           <div>Z - 撤销 | Y - 重做</div>
           <div>Esc - 取消选择 | Del - 删除</div>

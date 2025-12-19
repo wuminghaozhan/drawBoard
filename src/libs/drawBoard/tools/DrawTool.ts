@@ -21,6 +21,7 @@ export type ToolType =
   | 'rect'
   | 'circle'
   | 'line'
+  | 'polyline'  // 折线工具
   | 'polygon'
   | 'text'
   | 'image'  // 图片工具

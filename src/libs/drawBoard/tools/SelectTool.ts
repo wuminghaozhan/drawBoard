@@ -10,6 +10,7 @@ import { TextAnchorHandler } from './anchor/TextAnchorHandler';
 import { LineAnchorHandler } from './anchor/LineAnchorHandler';
 import { PenAnchorHandler } from './anchor/PenAnchorHandler';
 import { PolygonAnchorHandler } from './anchor/PolygonAnchorHandler';
+import { PolylineAnchorHandler } from './anchor/PolylineAnchorHandler';
 import { ImageAnchorHandler } from './anchor/ImageAnchorHandler';
 import { BoundsValidator, type Bounds as BoundsType } from '../utils/BoundsValidator';
 import { ActionValidator } from '../utils/ActionValidator';
@@ -240,6 +241,7 @@ export class SelectTool extends DrawTool {
     this.shapeHandlers.set('line', new LineAnchorHandler());
     this.shapeHandlers.set('image', new ImageAnchorHandler());
     this.shapeHandlers.set('polygon', new PolygonAnchorHandler());
+    this.shapeHandlers.set('polyline', new PolylineAnchorHandler());
     
     // 初始化锚点拖拽处理器（传入 shapeHandlers）
     this.anchorDragHandler = new AnchorDragHandler(

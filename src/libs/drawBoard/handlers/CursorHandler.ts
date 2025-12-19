@@ -178,6 +178,7 @@ export class CursorHandler {
       // 画笔绘制中 - 显示动态大小的实心圆点
       'pen': () => this.getPenDrawingCursor(lineWidth),
       'brush': () => this.getBrushDrawingCursor(lineWidth),
+      'advancedPen': () => this.getPenDrawingCursor(lineWidth),
       
       // 橡皮擦绘制中 - 显示动态大小的空心圆
       'eraser': () => this.getEraserDrawingCursor(lineWidth),
@@ -189,7 +190,9 @@ export class CursorHandler {
       'rect': () => 'crosshair',
       'circle': () => 'crosshair',
       'line': () => 'crosshair',
+      'polyline': () => 'crosshair',
       'polygon': () => 'crosshair',
+      'image': () => 'crosshair',
       
       // 文字工具绘制中
       'text': () => 'text',
@@ -216,13 +219,16 @@ export class CursorHandler {
     const cursorMap: Record<ToolType, () => string> = {
       pen: () => this.getPenCursor(lineWidth),
       brush: () => this.getBrushCursor(lineWidth),
+      advancedPen: () => this.getPenCursor(lineWidth),
       eraser: () => this.getEraserCursor(lineWidth),
       select: () => 'default',
       rect: () => 'crosshair',
       circle: () => 'crosshair',
       line: () => 'crosshair',
+      polyline: () => 'crosshair',
       polygon: () => 'crosshair',
       text: () => 'text',
+      image: () => 'crosshair',
       transform: () => 'move'
     };
     
@@ -237,13 +243,16 @@ export class CursorHandler {
     const defaultCursorMap: Record<ToolType, string> = {
       pen: 'crosshair',
       brush: 'crosshair',
+      advancedPen: 'crosshair',
       eraser: 'crosshair',
       select: 'default',
       rect: 'crosshair',
       circle: 'crosshair',
       line: 'crosshair',
+      polyline: 'crosshair',
       polygon: 'crosshair',
       text: 'text',
+      image: 'crosshair',
       transform: 'move'
     };
     

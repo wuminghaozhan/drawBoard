@@ -38,6 +38,8 @@ export class HitTestManager {
           return this.isPointInPolygonAction(point, action, tolerance);
         case 'line':
           return this.isPointInLineAction(point, action, tolerance);
+        case 'polyline':
+          return this.isPointInPolylineAction(point, action, tolerance);
         case 'image':
           return this.isPointInImageAction(point, action, tolerance);
         case 'pen':
@@ -289,6 +291,32 @@ export class HitTestManager {
     
     if (distToStart <= endpointRadius || distToEnd <= endpointRadius) {
       return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * 检查点是否在折线 action 内
+   * 折线是开放的，检查点是否在任意线段附近
+   */
+  public isPointInPolylineAction(point: Point, action: DrawAction, tolerance: number): boolean {
+    // 折线至少需要 2 个点
+    if (action.points.length < 2) {
+      return false;
+    }
+    
+    const lineWidth = action.context?.lineWidth || 2;
+    const effectiveTolerance = tolerance + Math.max(lineWidth / 2, 3);
+    
+    // 检查点是否在任意线段附近
+    for (let i = 0; i < action.points.length - 1; i++) {
+      const p1 = action.points[i];
+      const p2 = action.points[i + 1];
+      const distToSegment = this.distanceToLineSegment(point, p1, p2);
+      if (distToSegment <= effectiveTolerance) {
+        return true;
+      }
     }
     
     return false;

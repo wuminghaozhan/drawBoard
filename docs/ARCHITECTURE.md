@@ -94,6 +94,7 @@ src/libs/drawBoard/              # ~35,000 行代码
 │   ├── SelectTool.ts            # 选择工具 (~2,480 行, 已优化)
 │   ├── PenToolRefactored.ts     # 画笔工具
 │   ├── RectTool.ts / CircleTool.ts / LineTool.ts
+│   ├── PolylineTool.ts          # 折线工具 ⭐ NEW
 │   ├── PolygonTool.ts
 │   ├── EraserTool.ts              # 橡皮擦（只对 pen 类型起作用）
 │   │   └── eraser/                # 橡皮擦子模块 ⭐ NEW
@@ -112,6 +113,7 @@ src/libs/drawBoard/              # ~35,000 行代码
 │   │   ├── CircleAnchorHandler.ts
 │   │   ├── RectAnchorHandler.ts
 │   │   ├── PolygonAnchorHandler.ts
+│   │   ├── PolylineAnchorHandler.ts # 折线锚点处理器 ⭐ NEW
 │   │   └── ...
 │   │
 │   ├── select/                  # 选择工具子模块 ⭐ EXPANDED

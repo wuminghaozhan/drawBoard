@@ -242,6 +242,32 @@ export class BoundsCalculator {
    * 计算多边形边界框
    * 多边形统一使用顶点列表格式，支持旋转
    */
+  private calculatePolylineBounds(action: DrawAction): Bounds {
+    if (action.points.length < 2) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
+    
+    let minX = action.points[0].x;
+    let minY = action.points[0].y;
+    let maxX = action.points[0].x;
+    let maxY = action.points[0].y;
+    
+    for (let i = 1; i < action.points.length; i++) {
+      const point = action.points[i];
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+    
+    return {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY
+    };
+  }
+
   private calculatePolygonBounds(action: DrawAction): Bounds {
     // 多边形至少需要3个顶点
     if (action.points.length < 3) {

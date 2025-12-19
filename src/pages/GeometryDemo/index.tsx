@@ -111,6 +111,16 @@ const GeometryDemo: React.FC = () => {
         <div className="toolbar">
           <div className="tool-section">
             <h3>几何工具</h3>
+            {currentTool === 'polyline' && (
+              <div className="tool-tip" style={{ marginBottom: '10px', padding: '8px', background: '#e3f2fd', borderRadius: '4px', fontSize: '12px', lineHeight: '1.5' }}>
+                💡 <strong>折线工具使用说明：</strong><br/>
+                • 点击画布添加点<br/>
+                • 双击最后一个点完成绘制<br/>
+                • 按 Enter 完成绘制<br/>
+                • 按 ESC 取消绘制<br/>
+                • 按 Backspace 删除最后一个点
+              </div>
+            )}
             <div className="tool-buttons">
               <button
                 className={`tool-btn ${currentTool === 'line' ? 'active' : ''}`}
@@ -118,6 +128,13 @@ const GeometryDemo: React.FC = () => {
                 title="直线/箭头工具"
               >
                 ➖ 直线
+              </button>
+              <button
+                className={`tool-btn ${currentTool === 'polyline' ? 'active' : ''}`}
+                onClick={() => handleToolChange('polyline')}
+                title="折线工具 - 点击添加点，双击完成"
+              >
+                📐 折线
               </button>
               <button
                 className={`tool-btn ${currentTool === 'polygon' ? 'active' : ''}`}

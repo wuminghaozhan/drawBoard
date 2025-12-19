@@ -115,7 +115,7 @@ export class DrawingHandler {
       redrawThrottleMs: 16, // 约60fps
       maxPointsPerAction: 1000, // 最大点数限制
       enableErrorRecovery: true, // 启用错误恢复
-      geometricTools: ['rect', 'circle', 'line', 'polygon', 'select', 'eraser'], // 需要全量重绘的几何图形工具（橡皮擦需要全量重绘来实现只对 pen 类型的实时擦除效果）
+      geometricTools: ['rect', 'circle', 'line', 'polyline', 'polygon', 'select', 'eraser'], // 需要全量重绘的几何图形工具（折线需要全量重绘来显示预览）
       enableGeometricOptimization: true, // 是否启用几何图形优化
       enableDirtyRect: true, // 启用脏矩形优化
       ...config
@@ -266,14 +266,48 @@ export class DrawingHandler {
         return;
       }
 
-      // 如果之前的绘制状态未正确清理，强制重置
-      // 这可以防止快速点击时状态残留导致新绘制无法开始
-      if (this.isDrawing) {
-        logger.warn('绘制已在进行中，强制结束之前的绘制并开始新绘制');
-        // 强制清理之前的状态
-        this.isDrawing = false;
-        this.currentAction = null;
-        this.polygonDrawingCenter = null;
+      const currentToolType = this.toolManager.getCurrentTool();
+      
+      logger.debug('handleDrawStart: 状态检查', {
+        currentToolType,
+        isDrawing: this.isDrawing,
+        hasCurrentAction: !!this.currentAction,
+        currentActionType: this.currentAction?.type,
+        polylinePointsCount: this.polylinePoints.length
+      });
+      
+      // 折线工具特殊处理：允许多次点击添加点，不重置状态
+      if (currentToolType === 'polyline') {
+        // 如果已经在绘制折线，继续添加点（不重置状态）
+        if (this.isDrawing && this.currentAction && this.currentAction.type === 'polyline') {
+          // 继续添加点，不重置状态
+          logger.debug('折线工具：继续绘制，不重置状态');
+        } else if (this.isDrawing && this.currentAction && this.currentAction.type !== 'polyline') {
+          // 如果之前是其他工具在绘制，强制重置
+          logger.warn('切换工具，强制结束之前的绘制并开始新绘制', {
+            previousActionType: this.currentAction.type
+          });
+          this.isDrawing = false;
+          this.currentAction = null;
+          this.polygonDrawingCenter = null;
+          this.polylinePoints = [];
+          this.polylinePreviewPoint = null;
+        }
+        // 如果 isDrawing 为 false 或 currentAction 为 null，说明是第一次点击或之前已完成，继续后续逻辑创建新 action
+      } else {
+        // 其他工具：如果之前的绘制状态未正确清理，强制重置
+        // 这可以防止快速点击时状态残留导致新绘制无法开始
+        if (this.isDrawing) {
+          logger.warn('绘制已在进行中，强制结束之前的绘制并开始新绘制', {
+            previousActionType: this.currentAction?.type
+          });
+          // 强制清理之前的状态
+          this.isDrawing = false;
+          this.currentAction = null;
+          this.polygonDrawingCenter = null;
+          this.polylinePoints = [];
+          this.polylinePreviewPoint = null;
+        }
       }
       
       // 检查事件有效性
@@ -289,15 +323,47 @@ export class DrawingHandler {
         logger.error('无法获取当前工具实例，绘制开始失败');
         return;
       }
-
-      this.isDrawing = true;
-      this.currentAction = this.createDrawAction(point);
       
-      logger.debug('开始绘制', { 
-        toolType: this.toolManager.getCurrentTool(), 
-        point,
-        actionId: this.currentAction.id 
-      });
+      // 折线工具特殊处理：点击添加点
+      if (currentToolType === 'polyline') {
+        // 如果还没有开始绘制，创建新的 action
+        if (!this.isDrawing || !this.currentAction) {
+          this.isDrawing = true;
+          this.currentAction = this.createDrawAction(point);
+          this.polylinePoints = [point]; // 初始化第一个点
+          this.polylinePreviewPoint = null;
+          logger.info('折线工具：开始新折线', { 
+            point,
+            actionId: this.currentAction.id,
+            historyCount: this.historyManager.getAllActions().length
+          });
+        } else {
+          // 如果已经在绘制中，添加新点
+          this.polylinePoints.push(point);
+          logger.info('折线工具：添加新点', { 
+            point,
+            pointsCount: this.polylinePoints.length,
+            actionId: this.currentAction.id,
+            historyCount: this.historyManager.getAllActions().length
+          });
+          // 触发重绘以显示新添加的点
+          if (this.config.enableIncrementalRedraw) {
+            this.scheduleIncrementalRedraw();
+          } else {
+            this.scheduleFullRedraw();
+          }
+        }
+      } else {
+        // 其他工具的正常处理
+        this.isDrawing = true;
+        this.currentAction = this.createDrawAction(point);
+        
+        logger.debug('开始绘制', { 
+          toolType: currentToolType, 
+          point,
+          actionId: this.currentAction.id 
+        });
+      }
       
       this.onStateChange();
     } catch (error) {
@@ -306,6 +372,8 @@ export class DrawingHandler {
       this.isDrawing = false;
       this.currentAction = null;
       this.polygonDrawingCenter = null;
+      this.polylinePoints = [];
+      this.polylinePreviewPoint = null;
       this.handleError(error);
       // 重新抛出，让上层知道处理失败
       throw error;
@@ -339,6 +407,18 @@ export class DrawingHandler {
       // 🔄 多边形特殊处理：实时更新顶点以支持预览
       if (this.currentAction.type === 'polygon') {
         this.updatePolygonVertices(point);
+        // 根据配置选择重绘策略
+        if (this.config.enableIncrementalRedraw) {
+          this.scheduleIncrementalRedraw();
+        } else {
+          this.scheduleFullRedraw();
+        }
+        return;
+      }
+      
+      // 🔄 折线特殊处理：实时更新预览点
+      if (this.currentAction.type === 'polyline') {
+        this.polylinePreviewPoint = point;
         // 根据配置选择重绘策略
         if (this.config.enableIncrementalRedraw) {
           this.scheduleIncrementalRedraw();
@@ -422,6 +502,18 @@ export class DrawingHandler {
       } else if (this.currentAction.type === 'polygon') {
         // 多边形：使用最终点重新计算顶点
         this.updatePolygonVertices(point);
+      } else if (this.currentAction.type === 'polyline') {
+        // 折线：点击添加点，不立即完成绘制
+        // 点已经在 handleDrawStart 中添加，这里只更新预览点
+        this.polylinePreviewPoint = point;
+        logger.debug('折线工具：handleDrawEnd 只更新预览点，保持绘制状态', {
+          actionId: this.currentAction.id,
+          pointsCount: this.polylinePoints.length,
+          isDrawing: this.isDrawing
+        });
+        // 不完成绘制，等待双击或 Enter
+        // 注意：不要重置状态，因为折线工具需要多次点击添加点
+        return;
       } else {
         // 其他工具：添加最后一个点
         this.currentAction.points.push(point);
@@ -461,15 +553,34 @@ export class DrawingHandler {
       this.handleError(error);
     } finally {
       // 确保状态被正确清理
-      this.isDrawing = false;
-      this.currentAction = null;
-      this.polygonDrawingCenter = null;
+      // 注意：折线工具在 handleDrawEnd 中提前 return，不会执行到这里
+      // 折线工具的状态在 finishPolylineDrawing 或 cancelPolylineDrawing 中清理
+      const currentToolType = this.toolManager.getCurrentTool();
+      if (currentToolType !== 'polyline') {
+        // 非折线工具：正常清理状态
+        this.isDrawing = false;
+        this.currentAction = null;
+        this.polygonDrawingCenter = null;
+        this.polylinePoints = [];
+        this.polylinePreviewPoint = null;
+      } else {
+        // 折线工具：不清理状态，因为需要多次点击添加点
+        logger.debug('折线工具：handleDrawEnd finally 块，保持绘制状态', {
+          isDrawing: this.isDrawing,
+          hasCurrentAction: !!this.currentAction,
+          pointsCount: this.polylinePoints.length
+        });
+      }
       this.onStateChange();
     }
   }
   
   // 存储多边形绘制时的中心点
   private polygonDrawingCenter: Point | null = null;
+  
+  // 存储折线绘制时的点列表和预览点
+  private polylinePoints: Point[] = [];
+  private polylinePreviewPoint: Point | null = null;
   
   /**
    * 更新多边形顶点（用于实时预览）
@@ -880,6 +991,10 @@ export class DrawingHandler {
       } else {
         // 路径工具只需要绘制当前动作
         await this.drawAction(ctx, this.currentAction);
+        // 🔄 折线特殊处理：绘制预览
+        if (this.currentAction.type === 'polyline') {
+          await this.drawPolylinePreview(ctx);
+        }
       }
       
       logger.debug('增量重绘完成', {
@@ -982,6 +1097,10 @@ export class DrawingHandler {
         // 绘制当前动作
         if (this.currentAction && this.currentAction.points.length > 0) {
           await this.drawAction(ctx, this.currentAction);
+          // 🔄 折线特殊处理：绘制预览
+          if (this.currentAction.type === 'polyline') {
+            await this.drawPolylinePreview(ctx);
+          }
         }
         
         logger.debug('几何图形重绘完成', {
@@ -1280,6 +1399,21 @@ export class DrawingHandler {
       // 🔧 使用覆盖数据（拖拽过程中的实时渲染）
       const allActions = this.getAllActionsWithOverrides();
       
+      // 调试：检查折线 actions
+      const polylineActions = allActions.filter(a => a.type === 'polyline');
+      const totalActions = allActions.length;
+      logger.info('全量重绘：开始绘制', {
+        totalActions,
+        polylineCount: polylineActions.length,
+        currentTool: this.toolManager.getCurrentTool(),
+        isDrawing: this.isDrawing,
+        polylineActions: polylineActions.map(a => ({
+          id: a.id,
+          pointsCount: a.points.length,
+          points: a.points.slice(0, 3) // 只显示前3个点
+        }))
+      });
+      
       // 检查是否需要更新缓存（使用历史记录数量，避免覆盖数据影响缓存判断）
       const historyCount = this.historyManager.getAllActions().length;
       if (historyCount !== this.lastCachedActionCount) {
@@ -1307,6 +1441,10 @@ export class DrawingHandler {
         // 绘制当前动作
         if (this.currentAction && this.currentAction.points.length > 0) {
           await this.drawAction(ctx, this.currentAction);
+          // 🔄 折线特殊处理：绘制预览
+          if (this.currentAction.type === 'polyline') {
+            await this.drawPolylinePreview(ctx);
+          }
         }
       }
 
@@ -2361,6 +2499,63 @@ export class DrawingHandler {
   }
 
   /**
+   * 绘制折线预览（虚线预览线 + 点）
+   */
+  private async drawPolylinePreview(ctx: CanvasRenderingContext2D): Promise<void> {
+    if (!this.currentAction || this.currentAction.type !== 'polyline') return;
+    if (this.polylinePoints.length === 0) return;
+    
+    ctx.save();
+    
+    // 绘制已确定的线段
+    if (this.polylinePoints.length >= 2) {
+      ctx.beginPath();
+      ctx.moveTo(this.polylinePoints[0].x, this.polylinePoints[0].y);
+      for (let i = 1; i < this.polylinePoints.length; i++) {
+        ctx.lineTo(this.polylinePoints[i].x, this.polylinePoints[i].y);
+      }
+      ctx.strokeStyle = this.currentAction.context.strokeStyle;
+      ctx.lineWidth = this.currentAction.context.lineWidth;
+      ctx.stroke();
+    }
+    
+    // 绘制预览线（虚线，半透明）
+    if (this.polylinePreviewPoint && this.polylinePoints.length > 0) {
+      const lastPoint = this.polylinePoints[this.polylinePoints.length - 1];
+      ctx.save();
+      ctx.setLineDash([5, 5]);
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = this.currentAction.context.strokeStyle;
+      ctx.lineWidth = this.currentAction.context.lineWidth;
+      ctx.beginPath();
+      ctx.moveTo(lastPoint.x, lastPoint.y);
+      ctx.lineTo(this.polylinePreviewPoint.x, this.polylinePreviewPoint.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+    
+    // 绘制点（实心圆）
+    const pointRadius = 4;
+    ctx.fillStyle = this.currentAction.context.strokeStyle;
+    this.polylinePoints.forEach((point) => {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, pointRadius, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    
+    // 绘制预览点（空心圆）
+    if (this.polylinePreviewPoint) {
+      ctx.strokeStyle = this.currentAction.context.strokeStyle;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(this.polylinePreviewPoint.x, this.polylinePreviewPoint.y, pointRadius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    
+    ctx.restore();
+  }
+
+  /**
    * 绘制单个动作（统一工具获取方式）
    */
   private async drawAction(ctx: CanvasRenderingContext2D, action: DrawAction): Promise<void> {
@@ -2423,6 +2618,8 @@ export class DrawingHandler {
     this.isDrawing = false;
     this.currentAction = null;
     this.polygonDrawingCenter = null;
+    this.polylinePoints = [];
+    this.polylinePreviewPoint = null;
     
     // 记录错误
     logger.error('DrawingHandler错误处理', error);
@@ -2450,6 +2647,134 @@ export class DrawingHandler {
    */
   public getIsDrawing(): boolean {
     return this.isDrawing;
+  }
+
+  /**
+   * 获取是否正在绘制（供外部查询，如键盘事件处理）
+   */
+  public get isDrawingState(): boolean {
+    return this.isDrawing;
+  }
+
+  /**
+   * 完成折线绘制（双击或 Enter 时调用）
+   */
+  public async finishPolylineDrawing(): Promise<void> {
+    logger.info('finishPolylineDrawing 被调用', {
+      isDrawing: this.isDrawing,
+      hasCurrentAction: !!this.currentAction,
+      currentActionType: this.currentAction?.type,
+      polylinePointsCount: this.polylinePoints.length,
+      currentTool: this.toolManager.getCurrentTool()
+    });
+    
+    if (!this.isDrawing || !this.currentAction || this.currentAction.type !== 'polyline') {
+      logger.warn('finishPolylineDrawing 条件不满足，直接返回', {
+        isDrawing: this.isDrawing,
+        hasCurrentAction: !!this.currentAction,
+        currentActionType: this.currentAction?.type,
+        expectedType: 'polyline'
+      });
+      return;
+    }
+    
+    // 检查最小点数
+    if (this.polylinePoints.length < 2) {
+      logger.warn('折线点数不足，取消绘制', { pointsCount: this.polylinePoints.length });
+      this.cancelPolylineDrawing();
+      return;
+    }
+    
+    // 更新 action 的点列表
+    this.currentAction.points = [...this.polylinePoints];
+    
+    logger.info('折线绘制完成，准备保存', {
+      actionId: this.currentAction.id,
+      pointsCount: this.polylinePoints.length,
+      points: this.polylinePoints,
+      actionPoints: this.currentAction.points
+    });
+    
+    // 处理虚拟图层分配
+    if (this.virtualLayerManager) {
+      this.virtualLayerManager.handleNewAction(this.currentAction);
+    }
+    
+    // 保存到历史记录
+    this.historyManager.addAction(this.currentAction);
+    
+    // 验证是否成功添加到历史记录
+    const savedAction = this.historyManager.getActionById(this.currentAction.id);
+    if (!savedAction) {
+      logger.error('折线保存失败：未在历史记录中找到', { actionId: this.currentAction.id });
+    } else {
+      logger.info('折线已成功保存到历史记录', {
+        actionId: savedAction.id,
+        pointsCount: savedAction.points.length,
+        historyTotalCount: this.historyManager.getAllActions().length
+      });
+    }
+    
+    // 将当前动作添加到缓存
+    this.cachedActions.add(this.currentAction.id);
+    
+    // 标记离屏缓存过期
+    this.offscreenCacheDirty = true;
+    
+    // 清理状态
+    this.isDrawing = false;
+    this.currentAction = null;
+    this.polylinePoints = [];
+    this.polylinePreviewPoint = null;
+    
+    // 触发全量重绘
+    await this.forceRedraw();
+    this.onStateChange();
+  }
+
+  /**
+   * 取消折线绘制（ESC 时调用）
+   */
+  public cancelPolylineDrawing(): void {
+    if (!this.isDrawing || !this.currentAction || this.currentAction.type !== 'polyline') {
+      return;
+    }
+    
+    logger.debug('取消折线绘制');
+    
+    // 清理状态
+    this.isDrawing = false;
+    this.currentAction = null;
+    this.polylinePoints = [];
+    this.polylinePreviewPoint = null;
+    
+    // 触发全量重绘
+    this.forceRedraw();
+    this.onStateChange();
+  }
+
+  /**
+   * 删除折线最后一个点（Backspace 时调用）
+   */
+  public deletePolylineLastPoint(): void {
+    if (!this.isDrawing || !this.currentAction || this.currentAction.type !== 'polyline') {
+      return;
+    }
+    
+    // 至少保留 2 个点（起点和终点）
+    if (this.polylinePoints.length > 2) {
+      this.polylinePoints.pop();
+      this.currentAction.points = [...this.polylinePoints];
+      
+      // 触发重绘
+      if (this.config.enableIncrementalRedraw) {
+        this.scheduleIncrementalRedraw();
+      } else {
+        this.scheduleFullRedraw();
+      }
+      
+      logger.debug('删除折线最后一个点', { remainingPoints: this.polylinePoints.length });
+    }
   }
 
   /**
@@ -2729,7 +3054,9 @@ export class DrawingHandler {
   /**
    * 重置绘制状态（用于工具切换时清理状态）
    * 
-   * 注意：如果当前是橡皮擦工具且正在绘制，会先执行分割处理
+   * 注意：
+   * - 如果当前是橡皮擦工具且正在绘制，会先执行分割处理
+   * - 如果当前是折线工具且已有至少2个点，会先完成绘制并保存
    */
   public resetDrawingState(): void {
     if (this.isDrawing) {
@@ -2738,6 +3065,18 @@ export class DrawingHandler {
         hadCurrentAction: !!this.currentAction,
         currentActionType: this.currentAction?.type
       });
+      
+      // 如果是折线工具且有至少2个点，先完成绘制并保存
+      if (this.currentAction?.type === 'polyline' && this.polylinePoints.length >= 2) {
+        logger.info('工具切换时检测到未完成的折线绘制，自动完成并保存', {
+          pointsCount: this.polylinePoints.length
+        });
+        // 异步完成绘制，但不等待（因为 resetDrawingState 是同步方法）
+        this.finishPolylineDrawing().catch(error => {
+          logger.error('工具切换时完成折线绘制失败', error);
+        });
+        return; // finishPolylineDrawing 会清理状态
+      }
       
       // 如果是橡皮擦工具且有有效的绘制路径，先执行分割处理
       if (this.currentAction?.type === 'eraser' && this.currentAction.points.length >= 2) {
@@ -2749,6 +3088,8 @@ export class DrawingHandler {
     this.isDrawing = false;
     this.currentAction = null;
     this.polygonDrawingCenter = null;
+    this.polylinePoints = [];
+    this.polylinePreviewPoint = null;
     this.redrawScheduled = false;
   }
 
@@ -3005,6 +3346,8 @@ export class DrawingHandler {
     this.isDrawing = false;
     this.currentAction = null;
     this.polygonDrawingCenter = null;
+    this.polylinePoints = [];
+    this.polylinePreviewPoint = null;
     this.cachedActions.clear();
     this.redrawScheduled = false;
     
