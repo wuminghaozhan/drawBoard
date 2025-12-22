@@ -13,6 +13,8 @@ import type { Bounds } from '../utils/BoundsValidator';
 import type { EventBus } from '../infrastructure/events/EventBus';
 import { EraserTool } from '../tools/EraserTool';
 import type { EraserAction } from '../tools/EraserTool';
+import { ConfigConstants } from '../config/Constants';
+import { GeometryUtils } from '../utils/GeometryUtils';
 
 /**
  * 绘制处理器配置接口
@@ -59,7 +61,7 @@ export class DrawingHandler {
   private layersInitializationPromise: Promise<void> | null = null; // 图层初始化Promise
   
   // 统一超时时间常量
-  private readonly LAYER_INITIALIZATION_TIMEOUT = 2000; // 图层初始化超时时间（毫秒）
+  private readonly LAYER_INITIALIZATION_TIMEOUT = ConfigConstants.DRAWING_HANDLER.LAYER_INITIALIZATION_TIMEOUT;
 
   // 性能优化：缓存已绘制的动作
   private cachedActions: Set<string> = new Set();
@@ -72,7 +74,7 @@ export class DrawingHandler {
   private offscreenCanvas?: HTMLCanvasElement;
   private offscreenCtx?: CanvasRenderingContext2D;
   private offscreenCacheDirty: boolean = true;
-  private readonly OFFSCREEN_CACHE_THRESHOLD = 100; // 历史动作超过100个时使用离屏缓存
+  private readonly OFFSCREEN_CACHE_THRESHOLD = ConfigConstants.DRAWING_HANDLER.OFFSCREEN_CACHE_THRESHOLD;
   
   // 橡皮擦离屏Canvas（用于只对 pen 类型应用擦除效果）
   private eraserPenCanvas?: HTMLCanvasElement;
@@ -85,7 +87,7 @@ export class DrawingHandler {
   
   // 智能内存管理
   private memoryMonitor: MemoryMonitor;
-  private readonly MAX_MEMORY_USAGE = 0.8; // 80%内存使用率阈值
+  private readonly MAX_MEMORY_USAGE = ConfigConstants.DRAWING_HANDLER.MAX_MEMORY_USAGE;
   
   // 脏矩形优化
   private dirtyRectManager?: DirtyRectManager;
@@ -112,12 +114,12 @@ export class DrawingHandler {
     // 设置默认配置
     this.config = {
       enableIncrementalRedraw: true,
-      redrawThrottleMs: 16, // 约60fps
-      maxPointsPerAction: 1000, // 最大点数限制
-      enableErrorRecovery: true, // 启用错误恢复
-      geometricTools: ['rect', 'circle', 'line', 'polyline', 'polygon', 'select', 'eraser'], // 需要全量重绘的几何图形工具（折线需要全量重绘来显示预览）
-      enableGeometricOptimization: true, // 是否启用几何图形优化
-      enableDirtyRect: true, // 启用脏矩形优化
+      redrawThrottleMs: ConfigConstants.DRAWING_HANDLER.REDRAW_THROTTLE_MS,
+      maxPointsPerAction: ConfigConstants.DRAWING_HANDLER.MAX_POINTS_PER_ACTION,
+      enableErrorRecovery: true,
+      geometricTools: ['rect', 'circle', 'line', 'polyline', 'polygon', 'select', 'eraser'],
+      enableGeometricOptimization: true,
+      enableDirtyRect: true,
       ...config
     };
 
@@ -128,14 +130,15 @@ export class DrawingHandler {
     // 初始化脏矩形管理器
     if (this.config.enableDirtyRect) {
       const canvas = this.canvasEngine.getCanvas();
+      const dirtyRectConfig = ConfigConstants.DRAWING_HANDLER.DIRTY_RECT;
       this.dirtyRectManager = new DirtyRectManager(
         canvas.width,
         canvas.height,
         {
-          mergeThreshold: 30,
-          maxDirtyRects: 40,
-          padding: 4,
-          fullRedrawThreshold: 0.4
+          mergeThreshold: dirtyRectConfig.MERGE_THRESHOLD,
+          maxDirtyRects: dirtyRectConfig.MAX_DIRTY_RECTS,
+          padding: dirtyRectConfig.PADDING,
+          fullRedrawThreshold: dirtyRectConfig.FULL_REDRAW_THRESHOLD
         }
       );
     }
@@ -869,7 +872,7 @@ export class DrawingHandler {
    */
   private createDrawAction(startPoint: Point): DrawAction {
     const timestamp = Date.now();
-    const randomSuffix = Math.random().toString(36).substr(2, 9);
+    const randomSuffix = Math.random().toString(36).slice(2, 11);
     
     const canvas = this.canvasEngine.getCanvas();
     const ctx = canvas.getContext('2d');
@@ -2061,14 +2064,14 @@ export class DrawingHandler {
   private isDrawingSelectToolUI: boolean = false;
   private lastDrawSelectToolUITime: number = 0;
   private drawingSelectToolUIStartTime: number = 0; // 开始绘制时间，用于超时检测
-  private readonly DRAW_SELECT_TOOL_UI_INTERVAL = 16; // 约60fps，防止过于频繁调用
-  private readonly DRAW_SELECT_TOOL_UI_MAX_DURATION = 1000; // 最多1秒，防止永久锁定
+  private readonly DRAW_SELECT_TOOL_UI_INTERVAL = ConfigConstants.DRAWING_HANDLER.DRAW_SELECT_TOOL_UI_INTERVAL;
+  private readonly DRAW_SELECT_TOOL_UI_MAX_DURATION = ConfigConstants.DRAWING_HANDLER.DRAW_SELECT_TOOL_UI_MAX_DURATION;
   
   // 工具切换状态跟踪（用于优化drawSelectToolUI调用）
   private previousTool: string | null = null;
   private needsClearSelectionUI: boolean = false; // 是否需要清除选择UI
   private needsClearSelectionUITime: number = 0; // 标记时间，用于超时检测
-  private readonly CLEAR_SELECTION_UI_TIMEOUT = 100; // 100ms后强制清除
+  private readonly CLEAR_SELECTION_UI_TIMEOUT = ConfigConstants.DRAWING_HANDLER.CLEAR_SELECTION_UI_TIMEOUT;
 
   /**
    * 绘制选择工具的UI（选择框、锚点等）
@@ -3217,35 +3220,18 @@ export class DrawingHandler {
   }
 
   /**
-   * 计算动作的边界框
+   * 计算动作的边界框（复用 GeometryUtils）
    */
   private calculateActionBounds(action: DrawAction): Bounds | null {
     if (!action.points || action.points.length === 0) {
       return null;
     }
 
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-
-    for (const point of action.points) {
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-    }
-
-    // 扩展线宽
+    // 扩展线宽作为 padding
     const lineWidth = action.context?.lineWidth ?? 2;
-    const halfWidth = lineWidth / 2;
+    const padding = lineWidth / 2;
 
-    return {
-      x: minX - halfWidth,
-      y: minY - halfWidth,
-      width: maxX - minX + lineWidth,
-      height: maxY - minY + lineWidth
-    };
+    return GeometryUtils.calculateBoundingBox(action.points, padding);
   }
 
   /**

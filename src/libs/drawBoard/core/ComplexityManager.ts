@@ -1,5 +1,6 @@
 import type { DrawAction } from '../tools/DrawTool';
 import { logger } from '../infrastructure/logging/Logger';
+import { ConfigConstants } from '../config/Constants';
 
 /**
  * 历史管理器接口
@@ -21,8 +22,8 @@ interface IPerformanceManager {
   getMemoryStats(): { cacheHitRate: number; underMemoryPressure: boolean };
   /** 更新性能配置 */
   updateConfig(config: { complexityThreshold: number }): void;
-  /** 性能统计信息 */
-  stats: { totalDrawCalls: number };
+  /** 获取总绘制调用次数 */
+  getTotalDrawCalls(): number;
 }
 
 /**
@@ -126,13 +127,13 @@ export class ComplexityManager {
    * 提供合理的默认值，确保系统正常运行
    */
   private static readonly DEFAULT_CONFIG: ComplexityConfig = {
-    baseThreshold: 30,           // 基础阈值30
-    enableIntelligentCalculation: true,  // 启用智能计算
-    cacheSize: 1000,             // 缓存1000个条目
+    baseThreshold: ConfigConstants.COMPLEXITY.BASE_THRESHOLD,
+    enableIntelligentCalculation: true,
+    cacheSize: ConfigConstants.COMPLEXITY.CACHE_SIZE,
     recalculationTriggers: {
-      historyCountThreshold: 20, // 每20个动作触发
-      cacheHitRateThreshold: 0.3, // 命中率低于30%触发
-      memoryPressureThreshold: 0.8 // 内存使用率超过80%触发
+      historyCountThreshold: ConfigConstants.COMPLEXITY.HISTORY_COUNT_THRESHOLD,
+      cacheHitRateThreshold: ConfigConstants.COMPLEXITY.CACHE_HIT_RATE_THRESHOLD,
+      memoryPressureThreshold: ConfigConstants.COMPLEXITY.MEMORY_PRESSURE_THRESHOLD
     }
   };
 
@@ -178,7 +179,7 @@ export class ComplexityManager {
     let complexity = 0;
 
     // 基础复杂度：点数量（点越多越复杂）
-    complexity += action.points.length * 0.5;
+    complexity += action.points.length * ConfigConstants.COMPLEXITY.POINTS_FACTOR;
 
     // 工具类型复杂度（不同工具有不同复杂度）
     complexity += this.getToolTypeComplexity(action.type);
@@ -244,8 +245,8 @@ export class ComplexityManager {
       minComplexity = Math.min(minComplexity, complexity);
 
       // 统计分布
-      if (complexity <= 20) distribution.low++;
-      else if (complexity <= 50) distribution.medium++;
+      if (complexity <= ConfigConstants.COMPLEXITY.DISTRIBUTION.LOW_MAX) distribution.low++;
+      else if (complexity <= ConfigConstants.COMPLEXITY.DISTRIBUTION.MEDIUM_MAX) distribution.medium++;
       else distribution.high++;
     });
 
@@ -301,7 +302,7 @@ export class ComplexityManager {
 
     // 条件2: 缓存命中率过低
     if (performanceStats.cacheHitRate < this.config.recalculationTriggers.cacheHitRateThreshold && 
-        this.performanceManager['stats'].totalDrawCalls > 50) {
+        this.performanceManager.getTotalDrawCalls() > ConfigConstants.COMPLEXITY.MIN_DRAW_CALLS_FOR_HIT_RATE) {
       logger.debug(`📊 缓存命中率过低(${(performanceStats.cacheHitRate * 100).toFixed(1)}%)，触发复杂度重新计算`);
       return true;
     }
@@ -385,35 +386,14 @@ export class ComplexityManager {
   /**
    * 获取工具类型复杂度
    * 
-   * 不同工具的复杂度评分：
-   * - 毛笔(brush): 50 - 最复杂，需要特殊渲染
-   * - 画笔(pen): 30 - 较复杂，支持压力感应
-   * - 文字(text): 25 - 文本渲染
-   * - 多边形(polygon): 15 - 几何计算
-   * - 直线(line): 10 - 简单几何
-   * - 矩形/圆形(rect/circle): 5 - 最简单
+   * 不同工具的复杂度评分（参见 ConfigConstants.COMPLEXITY.TOOL_COMPLEXITY）
    * 
    * @param toolType 工具类型
    * @returns 工具基础复杂度
    */
   private getToolTypeComplexity(toolType: string): number {
-    switch (toolType) {
-      case 'pen':
-        return 30;  // 画笔工具复杂度较高
-      case 'brush':
-        return 50;  // 毛笔工具最复杂
-      case 'rect':
-      case 'circle':
-        return 5;   // 简单图形
-      case 'line':
-        return 10;  // 直线工具
-      case 'polygon':
-        return 15;  // 多边形工具
-      case 'text':
-        return 25;  // 文字工具
-      default:
-        return 20;  // 默认复杂度
-    }
+    const toolComplexity = ConfigConstants.COMPLEXITY.TOOL_COMPLEXITY;
+    return toolComplexity[toolType] ?? toolComplexity.default;
   }
 
   /**
@@ -427,14 +407,15 @@ export class ComplexityManager {
    * @returns 上下文复杂度
    */
   private getContextComplexity(context: DrawAction['context']): number {
+    const contextConfig = ConfigConstants.COMPLEXITY.CONTEXT;
     let complexity = 0;
     
     // 线宽影响 - 粗线更复杂
-    complexity += context.lineWidth * 2;
+    complexity += context.lineWidth * contextConfig.LINE_WIDTH_FACTOR;
     
     // 样式影响 - 非黑色增加复杂度
     if (context.strokeStyle && context.strokeStyle !== '#000000') {
-      complexity += 5; // 非黑色增加复杂度
+      complexity += contextConfig.NON_BLACK_COLOR_BONUS;
     }
     
     return complexity;
@@ -452,12 +433,13 @@ export class ComplexityManager {
    * @returns 特殊属性复杂度
    */
   private getSpecialAttributesComplexity(action: DrawAction): number {
+    const attrConfig = ConfigConstants.COMPLEXITY.SPECIAL_ATTRIBUTES;
     let complexity = 0;
     
     // 特殊属性检查
-    if (action.text) complexity += 10;                    // 文本内容
-    if (action.selected) complexity += 5;                 // 选择状态
-    if (action.supportsCaching === false) complexity += 3; // 不支持缓存
+    if (action.text) complexity += attrConfig.TEXT_BONUS;
+    if (action.selected) complexity += attrConfig.SELECTED_BONUS;
+    if (action.supportsCaching === false) complexity += attrConfig.NO_CACHE_BONUS;
     
     return complexity;
   }

@@ -1,4 +1,6 @@
 import type { DrawAction } from '../tools/DrawTool';
+import { GeometryUtils } from '../utils/GeometryUtils';
+import { ConfigConstants } from '../config/Constants';
 
 export interface SelectionBox {
   left: number;
@@ -69,33 +71,17 @@ export class CoreSelectionManager {
     return selectedIds;
   }
 
-  // 计算动作的边界框
+  // 计算动作的边界框（复用 GeometryUtils）
   private calculateActionBounds(action: DrawAction): SelectionBox {
-    if (action.points.length === 0) {
-      return { left: 0, top: 0, width: 0, height: 0 };
-    }
-
-    let minX = action.points[0].x;
-    let maxX = action.points[0].x;
-    let minY = action.points[0].y;
-    let maxY = action.points[0].y;
-
-    action.points.forEach(point => {
-      minX = Math.min(minX, point.x);
-      maxX = Math.max(maxX, point.x);
-      minY = Math.min(minY, point.y);
-      maxY = Math.max(maxY, point.y);
-    });
-
-    // 为线条添加线宽边距
     const lineWidth = action.context.lineWidth || 2;
     const margin = lineWidth / 2;
-
+    const bounds = GeometryUtils.calculateBoundingBox(action.points, margin);
+    
     return {
-      left: minX - margin,
-      top: minY - margin,
-      width: maxX - minX + lineWidth,
-      height: maxY - minY + lineWidth
+      left: bounds.x,
+      top: bounds.y,
+      width: bounds.width,
+      height: bounds.height
     };
   }
 
@@ -204,6 +190,7 @@ export class CoreSelectionManager {
       const movedAction: DrawAction = {
         ...action,
         points: action.points.map(point => ({
+          ...point,  // 保留 timestamp 等属性
           x: point.x + offset.x,
           y: point.y + offset.y
         }))
@@ -214,7 +201,9 @@ export class CoreSelectionManager {
     return movedActions;
   }
 
-  // 获取删除选中的动作ID列表
+  /**
+   * @deprecated 使用 getSelectedActionIds() 替代
+   */
   public getSelectedActionIdsForDeletion(): string[] {
     return this.getSelectedActionIds();
   }
@@ -226,7 +215,7 @@ export class CoreSelectionManager {
     this.selectedActions.forEach(({ action }) => {
       const copiedAction: DrawAction = {
         ...action,
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+        id: Date.now().toString() + Math.random().toString(36).slice(2, 11),
         timestamp: Date.now()
       };
       copiedActions.push(copiedAction);
@@ -269,25 +258,26 @@ export class CoreSelectionManager {
     const selectionBox = this.getSelectionBox();
     if (!selectionBox) return;
 
+    const { STROKE_COLOR, STROKE_WIDTH, HANDLE_SIZE, HANDLE_FILL_COLOR, HANDLE_STROKE_COLOR } = ConfigConstants.SELECTION;
     const originalContext = this.saveContext(ctx);
     
     // 绘制选择框边框
-    ctx.strokeStyle = '#007bff';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = STROKE_COLOR;
+    ctx.lineWidth = STROKE_WIDTH;
     ctx.setLineDash([]);
     ctx.strokeRect(selectionBox.left, selectionBox.top, selectionBox.width, selectionBox.height);
     
     // 绘制手柄
-    const handleSize = 6;
-    const handles = this.getHandlePositions(selectionBox, handleSize);
+    const handles = this.getHandlePositions(selectionBox, HANDLE_SIZE);
+    const halfHandle = HANDLE_SIZE / 2;
     
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#007bff';
+    ctx.fillStyle = HANDLE_FILL_COLOR;
+    ctx.strokeStyle = HANDLE_STROKE_COLOR;
     ctx.lineWidth = 1;
     
     handles.forEach(handle => {
-      ctx.fillRect(handle.x - handleSize/2, handle.y - handleSize/2, handleSize, handleSize);
-      ctx.strokeRect(handle.x - handleSize/2, handle.y - handleSize/2, handleSize, handleSize);
+      ctx.fillRect(handle.x - halfHandle, handle.y - halfHandle, HANDLE_SIZE, HANDLE_SIZE);
+      ctx.strokeRect(handle.x - halfHandle, handle.y - halfHandle, HANDLE_SIZE, HANDLE_SIZE);
     });
     
     this.restoreContext(ctx, originalContext);

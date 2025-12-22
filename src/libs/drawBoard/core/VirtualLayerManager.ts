@@ -3,6 +3,7 @@ import { logger } from '../infrastructure/logging/Logger';
 import { CanvasEngine } from './CanvasEngine';
 import type { HistoryManager } from '../history/HistoryManager';
 import { EventBus } from '../infrastructure/events/EventBus';
+import { ConfigConstants, ToolDisplayNames } from '../config/Constants';
 
 /**
  * 虚拟图层接口
@@ -93,15 +94,15 @@ export class VirtualLayerManager {
   private mode: VirtualLayerMode = 'individual'; // 虚拟图层模式
   
   // 配置参数
-  private maxLayers: number = 50; // 最大虚拟图层数量
-  private defaultLayerName: string = '图层'; // 默认虚拟图层名称
-  private maxActionsPerLayer: number = 1000; // 每个图层最大动作数
-  private timeThreshold: number = 5000; // 时间间隔阈值（毫秒）
-  private createLayerOnToolChange: boolean = true; // 工具类型变化是否创建新图层
+  private maxLayers: number = ConfigConstants.VIRTUAL_LAYER.MAX_LAYERS;
+  private defaultLayerName: string = '图层';
+  private maxActionsPerLayer: number = ConfigConstants.VIRTUAL_LAYER.MAX_ACTIONS_PER_LAYER;
+  private timeThreshold: number = ConfigConstants.VIRTUAL_LAYER.TIME_THRESHOLD;
+  private createLayerOnToolChange: boolean = true;
   
   // 渲染优化配置
-  private enableDynamicLayerSplit: boolean = false; // 是否启用动态图层拆分（默认关闭）
-  private dynamicSplitThreshold: number = 100; // 动态拆分阈值
+  private enableDynamicLayerSplit: boolean = false; // 默认关闭
+  private dynamicSplitThreshold: number = ConfigConstants.VIRTUAL_LAYER.DYNAMIC_SPLIT_THRESHOLD;
   
   // 性能优化：缓存统计信息
   private statsCache: {
@@ -135,17 +136,17 @@ export class VirtualLayerManager {
 
   constructor(config: VirtualLayerConfig = {}, canvasEngine?: CanvasEngine, eventBus?: EventBus) {
     this.mode = config.mode || 'individual';
-    this.maxLayers = config.maxLayers || 50;
+    this.maxLayers = config.maxLayers ?? ConfigConstants.VIRTUAL_LAYER.MAX_LAYERS;
     this.defaultLayerName = config.defaultLayerName || '图层';
-    this.maxActionsPerLayer = config.maxActionsPerLayer || 1000;
-    this.timeThreshold = config.timeThreshold || 5000;
+    this.maxActionsPerLayer = config.maxActionsPerLayer ?? ConfigConstants.VIRTUAL_LAYER.MAX_ACTIONS_PER_LAYER;
+    this.timeThreshold = config.timeThreshold ?? ConfigConstants.VIRTUAL_LAYER.TIME_THRESHOLD;
     this.createLayerOnToolChange = config.createLayerOnToolChange !== false;
     this.canvasEngine = canvasEngine;
     this.eventBus = eventBus;
     
     // 渲染优化配置
-    this.enableDynamicLayerSplit = config.enableDynamicLayerSplit ?? false; // 默认关闭
-    this.dynamicSplitThreshold = config.dynamicSplitThreshold ?? 100;
+    this.enableDynamicLayerSplit = config.enableDynamicLayerSplit ?? false;
+    this.dynamicSplitThreshold = config.dynamicSplitThreshold ?? ConfigConstants.VIRTUAL_LAYER.DYNAMIC_SPLIT_THRESHOLD;
     
     // 订阅 EventBus 事件
     this.subscribeToEvents();
@@ -1006,19 +1007,7 @@ export class VirtualLayerManager {
    * 生成图层名称
    */
   private generateLayerName(action: DrawAction): string {
-    const toolNames: Record<string, string> = {
-      'pen': '画笔',
-      'line': '直线',
-      'rect': '矩形',
-      'circle': '圆形',
-      'polygon': '多边形',
-      'text': '文字',
-      'select': '选择',
-      'transform': '变换',
-      'eraser': '橡皮擦'
-    };
-    
-    const toolName = toolNames[action.type] || action.type;
+    const toolName = ToolDisplayNames[action.type] || action.type;
     const timestamp = new Date(action.timestamp).toLocaleTimeString();
     return `${toolName}_${timestamp}`;
   }
@@ -1092,7 +1081,7 @@ export class VirtualLayerManager {
   } {
     const now = Date.now();
     
-    if (this.statsCache && (now - this.statsCache.lastUpdate) < 2000) {
+    if (this.statsCache && (now - this.statsCache.lastUpdate) < ConfigConstants.VIRTUAL_LAYER.STATS_CACHE_EXPIRE_TIME) {
       return {
         totalLayers: this.statsCache.totalLayers,
         visibleLayers: this.statsCache.visibleLayers,
@@ -1135,7 +1124,7 @@ export class VirtualLayerManager {
   public getVisibleActionIds(): string[] {
     const now = Date.now();
     
-    if (this.visibleActionIdsCache && (now - this.visibleActionIdsCacheTime) < 2000) {
+    if (this.visibleActionIdsCache && (now - this.visibleActionIdsCacheTime) < ConfigConstants.VIRTUAL_LAYER.STATS_CACHE_EXPIRE_TIME) {
       return [...this.visibleActionIdsCache];
     }
 
@@ -1190,7 +1179,7 @@ export class VirtualLayerManager {
    * 生成虚拟图层ID
    */
   private generateLayerId(): string {
-    return `vlayer_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    return `vlayer_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
   }
 
   /**
@@ -1559,8 +1548,9 @@ export class VirtualLayerManager {
     };
 
     // 偏移复制的图形（避免完全重叠）
-    const offset = 20;
+    const offset = ConfigConstants.VIRTUAL_LAYER.DUPLICATE_OFFSET;
     newAction.points = newAction.points.map(p => ({
+      ...p, // 保留所有属性（包括 timestamp 等）
       x: p.x + offset,
       y: p.y + offset
     }));

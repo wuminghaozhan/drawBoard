@@ -1,5 +1,6 @@
 import type { Point } from '../../core/CanvasEngine';
 import type { StrokePoint, StrokeConfig } from './StrokeTypes';
+import { GeometryUtils } from '../../utils/GeometryUtils';
 
 /**
  * 运笔参数计算器
@@ -105,7 +106,7 @@ export class StrokeCalculator {
   public calculateImprovedVelocity(p1: Point, p2: Point, timestamp?: number): number {
     if (!this.config.enableVelocity) return 0.5;
 
-    const distance = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+    const distance = GeometryUtils.distance(p1, p2);
     
     // 如果有时间戳，计算真实速度
     let velocity: number;
@@ -132,10 +133,7 @@ export class StrokeCalculator {
     let count = 0;
     
     for (let i = startIndex; i < endIndex; i++) {
-      const p1 = points[i];
-      const p2 = points[i + 1];
-      const distance = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
-      totalDistance += distance;
+      totalDistance += GeometryUtils.distance(points[i], points[i + 1]);
       count++;
     }
     

@@ -1,5 +1,6 @@
 import type { ToolType } from '../tools/DrawTool';
 import { logger } from '../infrastructure/logging/Logger';
+import { ConfigConstants } from '../config/Constants';
 
 /**
  * 鼠标样式处理器 - 负责管理画板的鼠标样式
@@ -22,9 +23,9 @@ export class CursorHandler {
   private config = {
     enableCustomCursors: true,
     enableDynamicSizing: true,
-    minCursorSize: 16,
-    maxCursorSize: 32,
-    cacheSize: 50
+    minCursorSize: ConfigConstants.CURSOR.MIN_SIZE,
+    maxCursorSize: ConfigConstants.CURSOR.MAX_SIZE,
+    cacheSize: ConfigConstants.CURSOR.CACHE_SIZE
   };
   
   // 性能统计
@@ -381,7 +382,7 @@ export class CursorHandler {
    */
   private generatePenSVG(size: number, lineWidth: number): string {
     const strokeWidth = Math.max(1, Math.min(3, lineWidth / 2));
-    const color = '#000000';
+    const color = ConfigConstants.CURSOR.COLORS.PEN;
     
     return `
       <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
@@ -407,7 +408,7 @@ export class CursorHandler {
    */
   private generatePenDrawingSVG(size: number, lineWidth: number): string {
     const radius = Math.max(2, Math.min(8, lineWidth));
-    const color = '#000000';
+    const color = ConfigConstants.CURSOR.COLORS.PEN;
     
     return `
       <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
@@ -424,7 +425,7 @@ export class CursorHandler {
    */
   private generateBrushSVG(size: number, lineWidth: number): string {
     const strokeWidth = Math.max(2, Math.min(6, lineWidth));
-    const color = '#8B4513';
+    const color = ConfigConstants.CURSOR.COLORS.BRUSH;
     
     return `
       <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
@@ -451,7 +452,7 @@ export class CursorHandler {
    */
   private generateBrushDrawingSVG(size: number, lineWidth: number): string {
     const radius = Math.max(3, Math.min(12, lineWidth * 1.5));
-    const color = '#8B4513';
+    const color = ConfigConstants.CURSOR.COLORS.BRUSH;
     
     return `
       <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
@@ -473,7 +474,7 @@ export class CursorHandler {
    */
   private generateEraserSVG(size: number, lineWidth: number): string {
     const radius = Math.max(4, Math.min(12, lineWidth * 1.5));
-    const color = '#FF6B6B';
+    const color = ConfigConstants.CURSOR.COLORS.ERASER;
     
     return `
       <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
@@ -496,7 +497,7 @@ export class CursorHandler {
    */
   private generateEraserDrawingSVG(size: number, lineWidth: number): string {
     const radius = Math.max(4, Math.min(12, lineWidth * 1.5));
-    const color = '#FF6B6B';
+    const color = ConfigConstants.CURSOR.COLORS.ERASER;
     
     return `
       <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">

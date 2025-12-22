@@ -9,6 +9,7 @@ import type { DrawAction } from '../DrawTool';
 import type { Point } from '../../core/CanvasEngine';
 import type { TextAction } from '../../types/TextTypes';
 import { logger } from '../../infrastructure/logging/Logger';
+import { GeometryUtils } from '../../utils/GeometryUtils';
 
 /**
  * 点击检测管理器
@@ -286,8 +287,8 @@ export class HitTestManager {
     
     // 端点热区检测（更容易点击线条的两端）
     const endpointRadius = effectiveTolerance * 1.5;
-    const distToStart = Math.sqrt(Math.pow(point.x - start.x, 2) + Math.pow(point.y - start.y, 2));
-    const distToEnd = Math.sqrt(Math.pow(point.x - end.x, 2) + Math.pow(point.y - end.y, 2));
+    const distToStart = GeometryUtils.distance(point, start);
+    const distToEnd = GeometryUtils.distance(point, end);
     
     if (distToStart <= endpointRadius || distToEnd <= endpointRadius) {
       return true;

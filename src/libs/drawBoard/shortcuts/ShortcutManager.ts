@@ -47,7 +47,7 @@ export class ShortcutManager {
   private normalizationCache = new Map<string, string>();
 
   constructor() {
-    this.isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    this.isMac = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
     this.boundHandleKeyDown = this.handleKeyDown.bind(this);
     this.bindEvents();
     logger.info(`🖥️ ShortcutManager 初始化完成 (${this.isMac ? 'Mac' : '其他'} 模式)`);
@@ -244,7 +244,8 @@ export class ShortcutManager {
   public unregisterBatch(keys: string[]): number {
     let successCount = 0;
     for (const key of keys) {
-      if (this.shortcuts.delete(key)) {
+      const normalizedKey = this.normalizeShortcutKey(key);
+      if (this.shortcuts.delete(normalizedKey)) {
         successCount++;
       }
     }
@@ -275,18 +276,21 @@ export class ShortcutManager {
     return shortcut ? [shortcut] : [];
   }
 
+  // 修饰键显示名称映射
+  private static readonly MODIFIER_DISPLAY: Record<string, string> = {
+    ctrl: 'Ctrl',
+    alt: 'Alt', 
+    shift: 'Shift',
+    meta: '⌘'
+  };
+
   public formatShortcut(key: string): string {
-    const parts = key.split('+');
-    return parts.map(part => {
-      const trimmed = part.trim();
-      switch (trimmed.toLowerCase()) {
-        case 'ctrl': return 'Ctrl';
-        case 'alt': return 'Alt';
-        case 'shift': return 'Shift';
-        case 'meta': return '⌘';
-        default: return trimmed;
-      }
-    }).join(' + ');
+    return key.split('+')
+      .map(part => {
+        const trimmed = part.trim().toLowerCase();
+        return ShortcutManager.MODIFIER_DISPLAY[trimmed] || part.trim();
+      })
+      .join(' + ');
   }
 
   public getFormattedShortcuts(): Array<{key: string, formattedKey: string, description: string}> {

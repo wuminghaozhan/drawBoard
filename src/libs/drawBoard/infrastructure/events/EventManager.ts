@@ -1,6 +1,8 @@
 import type { Point } from '../../core/CanvasEngine';
 import { Throttle } from '../performance/Throttle';
 import { logger } from '../../infrastructure/logging/Logger';
+import { ConfigConstants } from '../../config/Constants';
+import { GeometryUtils } from '../../utils/GeometryUtils';
 
 export interface DrawEvent {
   type: 'mousedown' | 'mousemove' | 'mouseup' | 'touchstart' | 'touchmove' | 'touchend' | 'dblclick';
@@ -33,28 +35,19 @@ export class EventManager {
   private touchMoveThrottle: Throttle;
   
   // 防重复点击
-  private lastMouseDownTime: number = 0;
   private lastTouchStartTime: number = 0;
-  private minEventInterval: number = 10; // 最小事件间隔10ms
   
   // 事件状态跟踪
   private isPointerDown: boolean = false;
   private lastProcessedEvent: DrawEvent | null = null;
   
-  // 重复事件检测配置
-  private duplicateDistanceThreshold: number = 2; // 2像素的欧几里得距离阈值
-  
-  // 双击/双击检测（鼠标和触摸通用）
+  // 双击检测状态（鼠标）
   private lastClickTime: number = 0;
   private lastClickPoint: Point | null = null;
-  private doubleClickThreshold: number = 300; // 双击时间阈值（ms）
-  private doubleClickDistanceThreshold: number = 10; // 双击距离阈值（像素）
   
-  // 触摸双击专用（触摸设备通常需要更大的容差）
+  // 双击检测状态（触摸）
   private lastTapTime: number = 0;
   private lastTapPoint: Point | null = null;
-  private doubleTapThreshold: number = 350; // 双击时间阈值（ms），触摸略宽松
-  private doubleTapDistanceThreshold: number = 20; // 双击距离阈值（像素），触摸更宽松
   
   // 保存事件处理函数的引用，用于解绑
   private boundHandlers: {
@@ -69,9 +62,9 @@ export class EventManager {
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     
-    // 不同类型事件使用不同的节流设置
-    this.mouseMoveThrottle = new Throttle(16); // 60fps for mouse move
-    this.touchMoveThrottle = new Throttle(8);  // 120fps for touch move (更流畅)
+    const { MOUSE_MOVE_THROTTLE, TOUCH_MOVE_THROTTLE } = ConfigConstants.EVENT;
+    this.mouseMoveThrottle = new Throttle(MOUSE_MOVE_THROTTLE);
+    this.touchMoveThrottle = new Throttle(TOUCH_MOVE_THROTTLE);
     
     // 初始化事件处理函数引用
     this.boundHandlers = {
@@ -122,21 +115,15 @@ export class EventManager {
 
   /**
    * 检查是否为重复事件
-   * 修复：使用欧几里得距离替代曼哈顿距离，提高检测精度
    */
   private isDuplicateEvent(event: DrawEvent): boolean {
     if (!this.lastProcessedEvent) return false;
     
+    const { MIN_EVENT_INTERVAL, DUPLICATE_DISTANCE_THRESHOLD } = ConfigConstants.EVENT;
     const timeDiff = event.timestamp - this.lastProcessedEvent.timestamp;
+    const pointDiff = GeometryUtils.distance(event.point, this.lastProcessedEvent.point);
     
-    // 使用欧几里得距离计算坐标差异，更精确
-    const pointDiff = Math.sqrt(
-      Math.pow(event.point.x - this.lastProcessedEvent.point.x, 2) + 
-      Math.pow(event.point.y - this.lastProcessedEvent.point.y, 2)
-    );
-    
-    // 如果时间间隔很短且位置几乎没变，认为是重复事件
-    return timeDiff < this.minEventInterval && pointDiff < this.duplicateDistanceThreshold;
+    return timeDiff < MIN_EVENT_INTERVAL && pointDiff < DUPLICATE_DISTANCE_THRESHOLD;
   }
 
   /**
@@ -168,11 +155,6 @@ export class EventManager {
 
   private handleMouseDown(e: MouseEvent): void {
     const now = Date.now();
-    
-    // 注意：不再在这里做时间间隔检查，因为 safeEmitEvent 对关键事件跳过重复检测
-    // 这确保了快速点击不会被误过滤
-    
-    this.lastMouseDownTime = now;
     this.isPointerDown = true;
     
     const point = this.getMousePoint(e);
@@ -218,17 +200,13 @@ export class EventManager {
       return false;
     }
     
+    const { DOUBLE_CLICK_TIME_THRESHOLD, DOUBLE_CLICK_DISTANCE_THRESHOLD } = ConfigConstants.EVENT;
     const timeDiff = now - this.lastClickTime;
-    if (timeDiff > this.doubleClickThreshold) {
+    if (timeDiff > DOUBLE_CLICK_TIME_THRESHOLD) {
       return false;
     }
     
-    const distance = Math.sqrt(
-      Math.pow(point.x - this.lastClickPoint.x, 2) +
-      Math.pow(point.y - this.lastClickPoint.y, 2)
-    );
-    
-    return distance <= this.doubleClickDistanceThreshold;
+    return GeometryUtils.distance(point, this.lastClickPoint) <= DOUBLE_CLICK_DISTANCE_THRESHOLD;
   }
 
   private handleMouseMove(e: MouseEvent): void {
@@ -277,7 +255,7 @@ export class EventManager {
     const now = Date.now();
     
     // 防止快速重复触摸
-    if (now - this.lastTouchStartTime < this.minEventInterval) {
+    if (now - this.lastTouchStartTime < ConfigConstants.EVENT.MIN_EVENT_INTERVAL) {
       return;
     }
     this.lastTouchStartTime = now;
@@ -333,17 +311,13 @@ export class EventManager {
       return false;
     }
     
+    const { DOUBLE_TAP_TIME_THRESHOLD, DOUBLE_TAP_DISTANCE_THRESHOLD } = ConfigConstants.EVENT;
     const timeDiff = now - this.lastTapTime;
-    if (timeDiff > this.doubleTapThreshold) {
+    if (timeDiff > DOUBLE_TAP_TIME_THRESHOLD) {
       return false;
     }
     
-    const distance = Math.sqrt(
-      Math.pow(point.x - this.lastTapPoint.x, 2) +
-      Math.pow(point.y - this.lastTapPoint.y, 2)
-    );
-    
-    return distance <= this.doubleTapDistanceThreshold;
+    return GeometryUtils.distance(point, this.lastTapPoint) <= DOUBLE_TAP_DISTANCE_THRESHOLD;
   }
 
   private handleTouchMove(e: TouchEvent): void {
@@ -395,105 +369,54 @@ export class EventManager {
   }
 
   /**
-   * 获取鼠标坐标点
-   * 改进：考虑Canvas缩放比例，提供更精确的坐标
+   * 将客户端坐标转换为 Canvas 坐标（公共方法）
    */
-  private getMousePoint(e: MouseEvent): Point {
+  private getPointFromClient(clientX: number, clientY: number): Point {
     const rect = this.canvas.getBoundingClientRect();
+    const defaultPoint: Point = { x: 0, y: 0, timestamp: Date.now() };
     
-    // 检查rect有效性
-    if (rect.width <= 0 || rect.height <= 0) {
-      logger.warn('EventManager: Canvas rect无效', rect);
-      return { x: 0, y: 0, timestamp: Date.now() };
-    }
-    
-    // 检查canvas尺寸
-    if (this.canvas.width <= 0 || this.canvas.height <= 0) {
-      logger.warn('EventManager: Canvas尺寸无效', {
-        width: this.canvas.width,
-        height: this.canvas.height
-      });
-      return { x: 0, y: 0, timestamp: Date.now() };
+    // 验证 rect 和 canvas 尺寸
+    if (rect.width <= 0 || rect.height <= 0 || 
+        this.canvas.width <= 0 || this.canvas.height <= 0) {
+      logger.warn('EventManager: Canvas 尺寸无效');
+      return defaultPoint;
     }
     
     const scaleX = this.canvas.width / rect.width;
     const scaleY = this.canvas.height / rect.height;
     
-    // 检查缩放比例有效性
     if (!isFinite(scaleX) || !isFinite(scaleY)) {
-      logger.warn('EventManager: 缩放比例无效', { scaleX, scaleY, rect, canvas: { width: this.canvas.width, height: this.canvas.height } });
-      return { x: 0, y: 0, timestamp: Date.now() };
+      logger.warn('EventManager: 缩放比例无效');
+      return defaultPoint;
     }
     
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
+    const x = (clientX - rect.left) * scaleX;
+    const y = (clientY - rect.top) * scaleY;
     
-    // 检查计算结果有效性
     if (!isFinite(x) || !isFinite(y)) {
-      logger.warn('EventManager: 计算出的坐标无效', { x, y, clientX: e.clientX, clientY: e.clientY });
-      return { x: 0, y: 0, timestamp: Date.now() };
+      logger.warn('EventManager: 计算坐标无效');
+      return defaultPoint;
     }
-    
-    // 限制在画布范围内（可选，但建议限制）
-    const clampedX = Math.max(0, Math.min(this.canvas.width, x));
-    const clampedY = Math.max(0, Math.min(this.canvas.height, y));
     
     return {
-      x: clampedX,
-      y: clampedY,
+      x: Math.max(0, Math.min(this.canvas.width, x)),
+      y: Math.max(0, Math.min(this.canvas.height, y)),
       timestamp: Date.now()
     };
   }
 
   /**
+   * 获取鼠标坐标点
+   */
+  private getMousePoint(e: MouseEvent): Point {
+    return this.getPointFromClient(e.clientX, e.clientY);
+  }
+
+  /**
    * 获取触摸坐标点
-   * 改进：考虑Canvas缩放比例，提供更精确的坐标
    */
   private getTouchPoint(touch: Touch): Point {
-    const rect = this.canvas.getBoundingClientRect();
-    
-    // 检查rect有效性
-    if (rect.width <= 0 || rect.height <= 0) {
-      logger.warn('EventManager: Canvas rect无效', rect);
-      return { x: 0, y: 0, timestamp: Date.now() };
-    }
-    
-    // 检查canvas尺寸
-    if (this.canvas.width <= 0 || this.canvas.height <= 0) {
-      logger.warn('EventManager: Canvas尺寸无效', {
-        width: this.canvas.width,
-        height: this.canvas.height
-      });
-      return { x: 0, y: 0, timestamp: Date.now() };
-    }
-    
-    const scaleX = this.canvas.width / rect.width;
-    const scaleY = this.canvas.height / rect.height;
-    
-    // 检查缩放比例有效性
-    if (!isFinite(scaleX) || !isFinite(scaleY)) {
-      logger.warn('EventManager: 缩放比例无效', { scaleX, scaleY, rect, canvas: { width: this.canvas.width, height: this.canvas.height } });
-      return { x: 0, y: 0, timestamp: Date.now() };
-    }
-    
-    const x = (touch.clientX - rect.left) * scaleX;
-    const y = (touch.clientY - rect.top) * scaleY;
-    
-    // 检查计算结果有效性
-    if (!isFinite(x) || !isFinite(y)) {
-      logger.warn('EventManager: 计算出的坐标无效', { x, y, clientX: touch.clientX, clientY: touch.clientY });
-      return { x: 0, y: 0, timestamp: Date.now() };
-    }
-    
-    // 限制在画布范围内
-    const clampedX = Math.max(0, Math.min(this.canvas.width, x));
-    const clampedY = Math.max(0, Math.min(this.canvas.height, y));
-    
-    return {
-      x: clampedX,
-      y: clampedY,
-      timestamp: Date.now()
-    };
+    return this.getPointFromClient(touch.clientX, touch.clientY);
   }
 
   /**
@@ -567,20 +490,6 @@ export class EventManager {
   public setThrottleInterval(mouseInterval: number, touchInterval?: number): void {
     this.mouseMoveThrottle = new Throttle(mouseInterval);
     this.touchMoveThrottle = new Throttle(touchInterval || mouseInterval / 2);
-  }
-
-  /**
-   * 设置最小事件间隔
-   */
-  public setMinEventInterval(interval: number): void {
-    this.minEventInterval = interval;
-  }
-
-  /**
-   * 设置重复事件检测的距离阈值
-   */
-  public setDuplicateDistanceThreshold(threshold: number): void {
-    this.duplicateDistanceThreshold = threshold;
   }
 
   /**

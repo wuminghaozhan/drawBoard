@@ -1,5 +1,6 @@
 import type { Point } from '../../core/CanvasEngine';
 import type { StrokePoint, SmoothPoint, StrokeConfig } from './StrokeTypes';
+import { GeometryUtils } from '../../utils/GeometryUtils';
 
 /**
  * 贝塞尔曲线渲染器
@@ -151,8 +152,7 @@ export class BezierRenderer {
 
     // 计算分段数量
     const segmentCount = Math.max(10, Math.floor(
-      Math.sqrt(Math.pow(points[points.length - 1].x - points[0].x, 2) + 
-               Math.pow(points[points.length - 1].y - points[0].y, 2)) / 2
+      GeometryUtils.distance(points[points.length - 1], points[0]) / 2
     ));
 
     ctx.beginPath();

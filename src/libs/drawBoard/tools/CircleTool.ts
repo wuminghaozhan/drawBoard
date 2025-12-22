@@ -1,5 +1,6 @@
 import { DrawTool } from './DrawTool';
 import type { DrawAction } from './DrawTool';
+import { GeometryUtils } from '../utils/GeometryUtils';
 
 export class CircleTool extends DrawTool {
   constructor() {
@@ -22,7 +23,7 @@ export class CircleTool extends DrawTool {
 
     const start = action.points[0];
     const end = action.points[action.points.length - 1];
-    const radius = Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2));
+    const radius = GeometryUtils.distance(start, end);
 
     ctx.beginPath();
     ctx.arc(start.x, start.y, radius, 0, 2 * Math.PI);

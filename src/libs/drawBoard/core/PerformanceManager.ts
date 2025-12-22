@@ -1,6 +1,8 @@
 import type { DrawAction, PreRenderedCache } from '../tools/DrawTool';
 import { PerformanceMode } from '../tools/DrawTool';
 import { logger } from '../infrastructure/logging/Logger';
+import { GeometryUtils } from '../utils/GeometryUtils';
+import { ConfigConstants } from '../config/Constants';
 
 
 // 重新导出PerformanceMode供外部使用
@@ -78,7 +80,7 @@ export interface MemoryStats {
 export class PerformanceManager {
   private config: PerformanceConfig;
   private cacheMap: Map<string, PreRenderedCache> = new Map();
-  private accessOrder: string[] = []; // LRU访问顺序
+  private accessTimestamps: Map<string, number> = new Map(); // LRU 访问时间戳（O(1) 操作）
   private stats = {
     cacheHits: 0,
     cacheMisses: 0,
@@ -92,11 +94,11 @@ export class PerformanceManager {
    */
   private static readonly DEFAULT_CONFIG: PerformanceConfig = {
     mode: PerformanceMode.AUTO,
-    maxCacheMemoryMB: 200, // 200MB缓存限制
-    maxCacheItems: 500,    // 最多500个缓存项
-    complexityThreshold: 30, // 复杂度超过30才缓存
+    maxCacheMemoryMB: ConfigConstants.PERFORMANCE_MANAGER.DEFAULT_MAX_CACHE_MEMORY_MB,
+    maxCacheItems: ConfigConstants.PERFORMANCE_MANAGER.DEFAULT_MAX_CACHE_ITEMS,
+    complexityThreshold: ConfigConstants.PERFORMANCE_MANAGER.DEFAULT_COMPLEXITY_THRESHOLD,
     enableMemoryMonitoring: true,
-    memoryPressureThreshold: 0.8, // 80%内存使用率
+    memoryPressureThreshold: ConfigConstants.PERFORMANCE_MANAGER.DEFAULT_MEMORY_PRESSURE_THRESHOLD,
     enableCaching: true,
     enableBatching: true
   };
@@ -319,10 +321,7 @@ export class PerformanceManager {
    */
   public removeCache(actionId: string): void {
     this.cacheMap.delete(actionId);
-    const index = this.accessOrder.indexOf(actionId);
-    if (index > -1) {
-      this.accessOrder.splice(index, 1);
-    }
+    this.accessTimestamps.delete(actionId);
   }
 
   /**
@@ -330,7 +329,7 @@ export class PerformanceManager {
    */
   public clearAllCaches(): void {
     this.cacheMap.clear();
-    this.accessOrder = [];
+    this.accessTimestamps.clear();
     this.stats.cacheHits = 0;
     this.stats.cacheMisses = 0;
   }
@@ -351,6 +350,13 @@ export class PerformanceManager {
       estimatedTotalMemoryMB: currentCacheMemoryMB * 1.5, // 估算总内存使用
       underMemoryPressure: currentCacheMemoryMB >= this.config.maxCacheMemoryMB * this.config.memoryPressureThreshold
     };
+  }
+
+  /**
+   * 获取总绘制调用次数
+   */
+  public getTotalDrawCalls(): number {
+    return this.stats.totalDrawCalls;
   }
 
   /**
@@ -441,33 +447,22 @@ export class PerformanceManager {
   }
 
   /**
-   * 计算边界框
+   * 计算边界框（复用 GeometryUtils）
    */
   private calculateBoundingBox(action: DrawAction): { x: number; y: number; width: number; height: number } {
     if (action.points.length === 0) {
       return { x: 0, y: 0, width: 1, height: 1 };
     }
 
-    let minX = action.points[0].x;
-    let minY = action.points[0].y;
-    let maxX = action.points[0].x;
-    let maxY = action.points[0].y;
-
-    for (const point of action.points) {
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-    }
-
     // 添加一些边距，考虑线宽
     const margin = action.context.lineWidth * 2;
+    const box = GeometryUtils.calculateBoundingBox(action.points, margin);
     
     return {
-      x: Math.floor(minX - margin),
-      y: Math.floor(minY - margin), 
-      width: Math.ceil(maxX - minX + margin * 2),
-      height: Math.ceil(maxY - minY + margin * 2)
+      x: Math.floor(box.x),
+      y: Math.floor(box.y),
+      width: Math.ceil(box.width),
+      height: Math.ceil(box.height)
     };
   }
 
@@ -491,14 +486,27 @@ export class PerformanceManager {
   }
 
   /**
-   * 更新LRU访问顺序
+   * 更新LRU访问顺序 - O(1) 操作
    */
   private updateAccessOrder(actionId: string): void {
-    const index = this.accessOrder.indexOf(actionId);
-    if (index > -1) {
-      this.accessOrder.splice(index, 1);
+    this.accessTimestamps.set(actionId, Date.now());
+  }
+
+  /**
+   * 获取最旧的缓存项ID
+   */
+  private getOldestCacheId(): string | undefined {
+    let oldestId: string | undefined;
+    let oldestTime = Infinity;
+    
+    for (const [id, timestamp] of this.accessTimestamps) {
+      if (timestamp < oldestTime) {
+        oldestTime = timestamp;
+        oldestId = id;
+      }
     }
-    this.accessOrder.push(actionId); // 最近使用的放到末尾
+    
+    return oldestId;
   }
 
   /**
@@ -506,15 +514,19 @@ export class PerformanceManager {
    */
   private enforceMemoryLimits(): void {
     // 按内存使用量清理
-    while (this.getCurrentMemoryUsage() > this.config.maxCacheMemoryMB && this.accessOrder.length > 0) {
-      const oldestId = this.accessOrder.shift()!;
+    while (this.getCurrentMemoryUsage() > this.config.maxCacheMemoryMB && this.accessTimestamps.size > 0) {
+      const oldestId = this.getOldestCacheId();
+      if (!oldestId) break;
       this.cacheMap.delete(oldestId);
+      this.accessTimestamps.delete(oldestId);
     }
 
     // 按数量限制清理
-    while (this.cacheMap.size > this.config.maxCacheItems && this.accessOrder.length > 0) {
-      const oldestId = this.accessOrder.shift()!;
+    while (this.cacheMap.size > this.config.maxCacheItems && this.accessTimestamps.size > 0) {
+      const oldestId = this.getOldestCacheId();
+      if (!oldestId) break;
       this.cacheMap.delete(oldestId);
+      this.accessTimestamps.delete(oldestId);
     }
   }
 
@@ -562,7 +574,7 @@ export class PerformanceManager {
 
       // 定期清理过期缓存
       this.cleanupExpiredCaches();
-    }, 10000); // 每10秒检查一次
+    }, ConfigConstants.PERFORMANCE_MANAGER.MEMORY_MONITOR_INTERVAL);
   }
 
   /**
@@ -570,7 +582,7 @@ export class PerformanceManager {
    */
   private cleanupExpiredCaches(): void {
     const now = Date.now();
-    const maxAge = 5 * 60 * 1000; // 5分钟未使用则清理
+    const maxAge = ConfigConstants.PERFORMANCE_MANAGER.CACHE_EXPIRE_TIME;
 
     const expiredIds: string[] = [];
     for (const [id, cache] of this.cacheMap) {

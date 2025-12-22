@@ -11,6 +11,7 @@ import { EventBus } from '../infrastructure/events/EventBus';
 import type { TextAction } from '../types/TextTypes';
 import type { ImageAction } from '../types/ImageTypes';
 import { boundsCalculator } from '../tools/select/BoundsCalculator';
+import { ConfigConstants } from '../config/Constants';
 
 /**
  * SelectTool 协调器配置
@@ -58,7 +59,7 @@ export class SelectToolCoordinator {
   // 🔧 syncLayerDataToSelectTool 防抖优化
   private syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingSyncPreserveSelection: boolean = false;
-  private readonly SYNC_DEBOUNCE_MS = 16; // 约 60fps
+  private readonly SYNC_DEBOUNCE_MS = ConfigConstants.SELECT_TOOL_COORDINATOR.SYNC_DEBOUNCE_MS;
 
   constructor(
     canvasEngine: CanvasEngine,
@@ -73,7 +74,7 @@ export class SelectToolCoordinator {
     this.historyManager = historyManager;
     this.drawingHandler = drawingHandler;
     this.virtualLayerManager = virtualLayerManager;
-    this.redrawThrottleMs = config.redrawThrottleMs ?? 16; // ~60fps
+    this.redrawThrottleMs = config.redrawThrottleMs ?? ConfigConstants.SELECT_TOOL_COORDINATOR.REDRAW_THROTTLE_MS;
     this.eventBus = config.eventBus;
     
     logger.debug('SelectToolCoordinator 初始化完成');
@@ -458,7 +459,7 @@ export class SelectToolCoordinator {
       return true;
     }
     
-    const tolerance = 0.01;
+    const tolerance = ConfigConstants.SELECT_TOOL_COORDINATOR.POSITION_TOLERANCE;
     
     for (let i = 0; i < beforeActions.length; i++) {
       const before = beforeActions[i];
@@ -495,8 +496,9 @@ export class SelectToolCoordinator {
         }
         
         // 检查 fontSize 属性变化（虽然通常通过缩放改变，但也要检查）
-        const beforeFontSize = beforeText.fontSize ?? 16;
-        const afterFontSize = afterText.fontSize ?? 16;
+        const defaultFontSize = ConfigConstants.SELECT_TOOL_COORDINATOR.DEFAULT_FONT_SIZE;
+        const beforeFontSize = beforeText.fontSize ?? defaultFontSize;
+        const afterFontSize = afterText.fontSize ?? defaultFontSize;
         if (Math.abs(beforeFontSize - afterFontSize) > tolerance) {
           return true;
         }
@@ -515,14 +517,16 @@ export class SelectToolCoordinator {
         }
         
         // 检查图片尺寸变化（imageWidth, imageHeight）
-        const beforeWidth = beforeImage.imageWidth ?? 200;
-        const afterWidth = afterImage.imageWidth ?? 200;
+        const defaultImageWidth = ConfigConstants.SELECT_TOOL_COORDINATOR.DEFAULT_IMAGE_WIDTH;
+        const defaultImageHeight = ConfigConstants.SELECT_TOOL_COORDINATOR.DEFAULT_IMAGE_HEIGHT;
+        const beforeWidth = beforeImage.imageWidth ?? defaultImageWidth;
+        const afterWidth = afterImage.imageWidth ?? defaultImageWidth;
         if (Math.abs(beforeWidth - afterWidth) > tolerance) {
           return true;
         }
         
-        const beforeHeight = beforeImage.imageHeight ?? 200;
-        const afterHeight = afterImage.imageHeight ?? 200;
+        const beforeHeight = beforeImage.imageHeight ?? defaultImageHeight;
+        const afterHeight = afterImage.imageHeight ?? defaultImageHeight;
         if (Math.abs(beforeHeight - afterHeight) > tolerance) {
           return true;
         }
@@ -627,7 +631,7 @@ export class SelectToolCoordinator {
             // 📝 临时清除 height，强制重新计算
             const originalHeight = textAction.height;
             const text = textAction.text || '';
-            const fontSize = textAction.fontSize || 16;
+            const fontSize = textAction.fontSize || ConfigConstants.SELECT_TOOL_COORDINATOR.DEFAULT_FONT_SIZE;
             
             logger.info('syncLayerDataToSelectTool: 检查文本高度', {
               actionId: action.id,

@@ -500,7 +500,7 @@ export class HistoryManager {
     newActions: DrawAction[],
     description?: string
   ): string {
-    const batchId = `batch-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     
     // 保存被移除的 Actions
     const removedActions: DrawAction[] = [];
@@ -839,7 +839,7 @@ export class HistoryManager {
     beforeActions: DrawAction[],
     afterActions: DrawAction[]
   ): string {
-    const transformId = `transform-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const transformId = `transform-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     
     // 🔧 清理运行时属性后再深拷贝，避免序列化问题
     const cleanedBeforeActions = beforeActions.map(a => 

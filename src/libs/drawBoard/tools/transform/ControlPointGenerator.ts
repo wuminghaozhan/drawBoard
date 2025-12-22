@@ -2,6 +2,7 @@ import type { Point } from '../../core/CanvasEngine';
 import type { DrawAction } from '../DrawTool';
 import type { ControlPoint, ControlPointType, ShapeBounds, TransformConfig } from './TransformTypes';
 import { ControlPointType as CPType } from './TransformTypes';
+import { GeometryUtils } from '../../utils/GeometryUtils';
 
 /**
  * 控制点生成器
@@ -74,7 +75,7 @@ export class ControlPointGenerator {
     const end = action.points[action.points.length - 1];
     const centerX = start.x;
     const centerY = start.y;
-    const radius = Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2));
+    const radius = GeometryUtils.distance(start, end);
 
     const points: ControlPoint[] = [];
 

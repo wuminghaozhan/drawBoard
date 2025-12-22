@@ -5,6 +5,7 @@ import type { ToolManager } from '../tools/ToolManager';
 import type { CoreSelectionManager } from '../core/CoreSelectionManager';
 import type { DrawingHandler } from './DrawingHandler';
 import { logger } from '../infrastructure/logging/Logger';
+import { ConfigConstants } from '../config/Constants';
 
 /**
  * 绘制状态接口 - 包含所有绘制相关状态
@@ -107,10 +108,10 @@ export class StateHandler {
     
     // 设置默认配置
     this.config = {
-      enableValidation: true, // 启用状态验证
-      enableErrorRecovery: true, // 启用错误恢复
-      maxCallbackErrors: 3, // 最大回调错误数
-      logLevel: 'info', // 日志级别
+      enableValidation: true,
+      enableErrorRecovery: true,
+      maxCallbackErrors: ConfigConstants.STATE_HANDLER.MAX_CALLBACK_ERRORS,
+      logLevel: 'info',
       ...config
     };
   }
